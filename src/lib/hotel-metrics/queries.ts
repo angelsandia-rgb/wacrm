@@ -26,7 +26,7 @@ export async function loadHotelMetrics(db: DB, sinceIso: string): Promise<HotelM
   const [resvRes, productsRes, categoriesRes] = await Promise.all([
     db
       .from('reservation_requests')
-      .select('check_in, check_out, guests, estimated_price, status, created_at, category')
+      .select('check_in, check_out, use_date, guests, estimated_price, status, created_at, category')
       // Anything whose stay OR whose request date could touch the widest
       // window the UI offers. `sinceIso` already covers the range +
       // its comparison period; stays reach a bit further out, so we also

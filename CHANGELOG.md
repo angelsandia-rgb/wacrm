@@ -216,6 +216,22 @@ and polish.
   to its internal note. The engine already routed on this field — it was
   just not editable.
 
+### Changed
+
+- **Hotel Panel & KPIs now cover every product category, not just rooms.**
+  The headline demand numbers — reservation requests, approval rate,
+  status mix, booking lead time, requests-over-time — now count all five
+  categories (Habitaciones, Spa, Actividades al aire libre, Paquetes,
+  Eventos), where before they silently counted only room requests. Both
+  pages gain a **"Por categoría de producto"** table: one row per
+  category (shown even at zero) with its requests, approvals, approval
+  rate, estimated revenue and guests, plus a totals row. The Panel adds
+  a **"Servicios (próximos 7 días)"** card for upcoming spa / activity /
+  event bookings. Occupancy, ADR, RevPAR and room revenue stay
+  room-only by definition and are now labelled as such. Length of stay
+  covers rooms + packages; lead time runs to the check-in *or* the
+  service use-date. No migration (reads the existing `use_date` column).
+
 ### Fixed
 
 - **Invite / password links no longer die before the recipient clicks.**
