@@ -169,7 +169,7 @@ export async function dispatchInboundToAiReply(
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_handoff_transient, ai_handoff_at')
+      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_handoff_transient, ai_handoff_at, ai_flow_directive')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
@@ -353,6 +353,10 @@ export async function dispatchInboundToAiReply(
       })
     }
 
+    // One-shot instruction from a flow "handoff → AI" node (migration
+    // 118) — prepended to the prompt for this reply, then cleared below.
+    const flowDirective = (conv.ai_flow_directive as string | null)?.trim() || undefined
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -366,6 +370,7 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
       currentDate: describeNowInZone(businessTimeZone),
+      flowDirective,
     })
 
     let generation: GenerateResult
@@ -557,6 +562,17 @@ export async function dispatchInboundToAiReply(
       text: outboundText,
       aiGenerated: true,
     })
+
+    // A flow "handoff → AI" directive is one-shot: the reply that just
+    // acted on it has gone out, so clear it (guarded so a concurrent
+    // fresh directive isn't wiped).
+    if (flowDirective) {
+      await db
+        .from('conversations')
+        .update({ ai_flow_directive: null })
+        .eq('id', conversationId)
+        .eq('ai_flow_directive', conv.ai_flow_directive as string)
+    }
 
     if (sentinelLeakDetected) {
       // The customer already got the cleaned text above, but a

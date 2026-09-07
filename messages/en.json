@@ -1801,7 +1801,13 @@
         "filenamePlaceholder": "invoice.pdf",
         "advanceAfterSending": "After sending, advance to",
         "pickNextNode": "Pick a next node…",
-        "none": "— None —"
+        "none": "— None —",
+        "handoffTargetLabel": "Hand off to",
+        "handoffTargetHuman": "A person (agent)",
+        "handoffTargetAi": "The AI assistant",
+        "handoffTargetHelp": "\"The AI assistant\" ends the flow and lets the auto-reply bot continue the chat, following the instruction below.",
+        "handoffAiNoteLabel": "Instruction for the AI",
+        "handoffAiNoteHelp": "What the AI should do once the customer reaches it (e.g. \"look up the selected option in the knowledge base and offer 2–3 options\"). Variables captured earlier in the flow are substituted in. Used once, on the next reply."
       },
       "categories": {
         "messaging": "Messaging",

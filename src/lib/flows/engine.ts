@@ -570,12 +570,50 @@ async function menuSendFailedToHandoff(
   await endRun(db, run.id, "handed_off", "send_menu_failed");
 }
 
+/**
+ * Run a `handoff` node. Returns `releaseToAi: true` when the node is
+ * configured to hand the conversation to the AI auto-reply bot rather
+ * than a human — the caller then propagates `consumed: false` so the
+ * webhook runs the AI dispatch on the same inbound.
+ */
 async function executeHandoff(
   db: AdminClient,
   run: FlowRunRow,
   node: FlowNodeRow,
-): Promise<void> {
-  const cfg = node.config as { assign_to?: string; note?: string };
+): Promise<{ releaseToAi: boolean }> {
+  const cfg = node.config as {
+    assign_to?: string;
+    note?: string;
+    target?: "human" | "ai";
+  };
+
+  if (cfg.target === "ai") {
+    // Hand to the AI. Persist the node's note as a one-shot directive the
+    // next auto-reply generation prepends to its prompt (migration 118),
+    // make sure the bot isn't paused / assigned, and end the run so a
+    // later trigger can start a fresh one.
+    const directive = interpolateVars(cfg.note ?? "", run.vars).trim();
+    if (run.conversation_id) {
+      await db
+        .from("conversations")
+        .update({
+          ai_flow_directive: directive || null,
+          ai_autoreply_disabled: false,
+          ai_handoff_transient: null,
+          assigned_agent_id: null,
+          status: "open",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", run.conversation_id);
+    }
+    await logEvent(db, run.id, "handoff", node.node_key, {
+      target: "ai",
+      note: directive || null,
+    });
+    await endRun(db, run.id, "completed", "released_to_ai");
+    return { releaseToAi: true };
+  }
+
   const convUpdate: Record<string, unknown> = {
     status: "pending",
     updated_at: new Date().toISOString(),
@@ -588,10 +626,12 @@ async function executeHandoff(
       .eq("id", run.conversation_id);
   }
   await logEvent(db, run.id, "handoff", node.node_key, {
+    target: "human",
     note: cfg.note ?? null,
     assigned_to: cfg.assign_to ?? null,
   });
   await endRun(db, run.id, "handed_off", "handoff_node");
+  return { releaseToAi: false };
 }
 
 /**
@@ -689,7 +729,9 @@ async function advanceFromNodeKey(
   run: FlowRunRow,
   startNodeKey: string,
   nodes: Map<string, FlowNodeRow>,
-): Promise<{ outcome: "advanced" | "completed" | "handed_off" }> {
+): Promise<{
+  outcome: "advanced" | "completed" | "handed_off" | "released_to_ai";
+}> {
   let currentKey: string | null = startNodeKey;
   // Defensive cap — if a flow has a cycle (which the validator
   // SHOULD catch but doesn't yet in v1), we bail rather than loop.
@@ -902,8 +944,8 @@ async function advanceFromNodeKey(
       return { outcome: "advanced" };
     }
     if (node.node_type === "handoff") {
-      await executeHandoff(db, run, node);
-      return { outcome: "handed_off" };
+      const { releaseToAi } = await executeHandoff(db, run, node);
+      return { outcome: releaseToAi ? "released_to_ai" : "handed_off" };
     }
     if (node.node_type === "end") {
       await logEvent(db, run.id, "completed", node.node_key);
@@ -1126,7 +1168,9 @@ async function handleReplyForActiveRun(
     }
     const outcome = await advanceFromNodeKey(db, run, matched, nodes);
     return {
-      consumed: true,
+      // A handoff-to-AI node releases the conversation: NOT consumed, so
+      // the webhook runs the AI auto-reply on this same inbound.
+      consumed: outcome.outcome !== "released_to_ai",
       flow_run_id: run.id,
       outcome: outcome.outcome,
     };
@@ -1279,7 +1323,9 @@ async function startNewRun(
   // Run the advance loop starting from the entry node.
   const outcome = await advanceFromNodeKey(db, run, flow.entry_node_id!, nodes);
   return {
-    consumed: true,
+    // A flow that starts and walks straight into a handoff-to-AI node
+    // releases the conversation to the AI on this same inbound.
+    consumed: outcome.outcome !== "released_to_ai",
     flow_run_id: run.id,
     outcome: outcome.outcome === "advanced" ? "started" : outcome.outcome,
   };

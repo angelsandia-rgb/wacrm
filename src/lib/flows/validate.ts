@@ -785,10 +785,26 @@ function validateNode(
       break;
     }
 
-    case "handoff":
+    case "handoff": {
+      // Terminal node — no outgoing edges. Only nudge: a "hand off to
+      // AI" node with no instruction just drops the customer onto the
+      // bot's default behaviour, which the author probably didn't mean.
+      const hcfg = node.config as { target?: string; note?: string };
+      if (hcfg.target === "ai" && !hcfg.note?.trim()) {
+        issues.push({
+          severity: "warning",
+          scope: "node",
+          node_key: node.node_key,
+          field: "note",
+          message:
+            "Hand off to AI with no instruction — the bot will just continue with its default behaviour.",
+        });
+      }
+      break;
+    }
+
     case "end":
-      // Terminal nodes have no outgoing edges; nothing to validate
-      // beyond their existence.
+      // Terminal node — no outgoing edges; nothing to validate.
       break;
 
     default:

@@ -982,7 +982,13 @@
         "filenamePlaceholder": "factura.pdf",
         "advanceAfterSending": "Después de enviar, avanza a",
         "pickNextNode": "Elige un siguiente nodo…",
-        "none": "— Ninguno —"
+        "none": "— Ninguno —",
+        "handoffTargetLabel": "Transferir a",
+        "handoffTargetHuman": "Una persona (agente)",
+        "handoffTargetAi": "El asistente de IA",
+        "handoffTargetHelp": "\"El asistente de IA\" termina el flujo y deja que el bot de respuesta automática siga la conversación, cumpliendo la instrucción de abajo.",
+        "handoffAiNoteLabel": "Instrucción para la IA",
+        "handoffAiNoteHelp": "Qué debe hacer la IA cuando el cliente llegue a ella (p. ej. \"buscar la opción elegida en la base de conocimientos y ofrecer 2–3 opciones\"). Se sustituyen las variables capturadas antes en el flujo. Se usa una sola vez, en la siguiente respuesta."
       },
       "categories": {
         "messaging": "Mensajería",

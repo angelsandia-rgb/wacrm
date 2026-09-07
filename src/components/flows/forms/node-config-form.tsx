@@ -196,7 +196,7 @@ export function NodeConfigForm({
     case 'handoff':
       return (
         <HandoffForm
-          cfg={cfg as { note?: string; assign_to?: string }}
+          cfg={cfg as { note?: string; assign_to?: string; target?: 'human' | 'ai' }}
           onUpdateConfig={onUpdateConfig}
           t={t}
         />
@@ -914,51 +914,81 @@ function HandoffForm({
   onUpdateConfig,
   t,
 }: {
-  cfg: { note?: string; assign_to?: string };
+  cfg: { note?: string; assign_to?: string; target?: 'human' | 'ai' };
   onUpdateConfig: (patch: Record<string, unknown>) => void;
   t: ReturnType<typeof useTranslations>;
 }) {
   const members = useAccountMembers();
   const assignTo = cfg.assign_to ?? '';
   const known = members.some((m) => m.user_id === assignTo);
+  const target = cfg.target === 'ai' ? 'ai' : 'human';
 
   return (
     <div className="flex flex-col gap-3">
       <div>
         <label className="text-muted-foreground mb-1 block text-xs">
-          {t('handoffAssignLabel')}
+          {t('handoffTargetLabel')}
         </label>
         <Select
-          value={assignTo || 'queue'}
-          onValueChange={(v) =>
-            onUpdateConfig({ assign_to: v === 'queue' ? '' : v })
-          }
+          value={target}
+          onValueChange={(v) => onUpdateConfig({ target: v })}
         >
           <SelectTrigger className="bg-muted">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="queue">{t('handoffAssignQueue')}</SelectItem>
-            {members.map((m) => (
-              <SelectItem key={m.user_id} value={m.user_id}>
-                {m.full_name || m.email || m.user_id}
-              </SelectItem>
-            ))}
-            {assignTo && !known && (
-              <SelectItem value={assignTo}>{assignTo}</SelectItem>
-            )}
+            <SelectItem value="human">{t('handoffTargetHuman')}</SelectItem>
+            <SelectItem value="ai">{t('handoffTargetAi')}</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-muted-foreground mt-1 text-[10px]">
-          {t('handoffAssignHelp')}
+          {t('handoffTargetHelp')}
         </p>
       </div>
+
+      {target === 'human' && (
+        <div>
+          <label className="text-muted-foreground mb-1 block text-xs">
+            {t('handoffAssignLabel')}
+          </label>
+          <Select
+            value={assignTo || 'queue'}
+            onValueChange={(v) =>
+              onUpdateConfig({ assign_to: v === 'queue' ? '' : v })
+            }
+          >
+            <SelectTrigger className="bg-muted">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="queue">{t('handoffAssignQueue')}</SelectItem>
+              {members.map((m) => (
+                <SelectItem key={m.user_id} value={m.user_id}>
+                  {m.full_name || m.email || m.user_id}
+                </SelectItem>
+              ))}
+              {assignTo && !known && (
+                <SelectItem value={assignTo}>{assignTo}</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground mt-1 text-[10px]">
+            {t('handoffAssignHelp')}
+          </p>
+        </div>
+      )}
+
       <TextRow
-        label={t('internalNote')}
+        label={target === 'ai' ? t('handoffAiNoteLabel') : t('internalNote')}
         value={cfg.note ?? ''}
         onChange={(v) => onUpdateConfig({ note: v })}
-        rows={2}
+        rows={target === 'ai' ? 3 : 2}
       />
+      {target === 'ai' && (
+        <p className="text-muted-foreground -mt-1 text-[10px]">
+          {t('handoffAiNoteHelp')}
+        </p>
+      )}
     </div>
   );
 }
