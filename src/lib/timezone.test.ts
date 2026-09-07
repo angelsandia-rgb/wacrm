@@ -4,6 +4,7 @@ import {
   isValidTimeZone,
   timeInZone,
   dateKeyInZone,
+  describeNowInZone,
 } from './timezone'
 
 describe('formatWithOffset', () => {
@@ -74,5 +75,32 @@ describe('dateKeyInZone', () => {
 
   it('falls back to a valid key when no zone is passed', () => {
     expect(dateKeyInZone('2026-08-29T13:19:08.000Z')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+describe('describeNowInZone', () => {
+  it('describes an instant in Spanish, in the given zone, with the zone name', () => {
+    // 2026-09-11T02:30:00Z → 2026-09-10 20:30 in America/Guatemala (UTC-6)
+    const out = describeNowInZone('America/Guatemala', new Date('2026-09-11T02:30:00Z'))
+    expect(out).toContain('10 de septiembre de 2026')
+    expect(out).toContain('jueves')
+    expect(out).toContain('20:30')
+    expect(out).toContain('(America/Guatemala)')
+  })
+
+  it('uses the zone to pick the local calendar day (not UTC)', () => {
+    // Same instant, Madrid (UTC+2) → already 2026-09-11 04:30
+    const out = describeNowInZone('Europe/Madrid', new Date('2026-09-11T02:30:00Z'))
+    expect(out).toContain('11 de septiembre de 2026')
+  })
+
+  it('falls back to a zone-less description on a bad timezone', () => {
+    const out = describeNowInZone('Not/A/Zone', new Date('2026-09-11T02:30:00Z'))
+    expect(out).toMatch(/de 2026/)
+    expect(out).not.toContain('(')
+  })
+
+  it('falls back to a zone-less description when no timezone is given', () => {
+    expect(describeNowInZone(null, new Date('2026-09-11T02:30:00Z'))).toMatch(/de 2026/)
   })
 })

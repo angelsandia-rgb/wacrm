@@ -97,6 +97,37 @@ export function dateKeyInZone(date: Date | string, timeZone?: string | null): st
   return `${get('year')}-${get('month')}-${get('day')}`
 }
 
+/** A human, Spanish "now" for grounding an AI prompt so the model can
+ *  resolve relative dates ("el viernes", "el 11", "mañana") itself —
+ *  e.g. `"lunes, 7 de septiembre de 2026, 12:20 (America/Guatemala)"`.
+ *  Falls back to a zone-less date if `timeZone` is bad. */
+export function describeNowInZone(timeZone: string | null | undefined, at: Date = new Date()): string {
+  const tz = timeZone && isValidTimeZone(timeZone) ? timeZone : undefined
+  try {
+    const day = new Intl.DateTimeFormat('es', {
+      timeZone: tz,
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(at)
+    const time = new Intl.DateTimeFormat('es', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(at)
+    return tz ? `${day}, ${time} (${tz})` : `${day}, ${time}`
+  } catch {
+    return new Intl.DateTimeFormat('es', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(at)
+  }
+}
+
 /** Validates an IANA timezone identifier the cheap way — asks
  *  `Intl.DateTimeFormat` to use it and see if it throws. Used wherever
  *  a caller-supplied timezone string is persisted (Settings). */
