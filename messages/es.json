@@ -776,6 +776,41 @@
     },
     "emptyState": {
       "title": "Aún no hay suficientes datos"
+    },
+    "hotel": {
+      "title": "Panel del hotel",
+      "description": "Métricas en vivo de ocupación, tarifa y solicitudes de reserva de tu propiedad.",
+      "rangeDays": "{count} días",
+      "occupancy": "Ocupación",
+      "occupancyNoRooms": "Agrega un producto de habitación para calcular la ocupación",
+      "occupancySub": "{sold} de {available} noches-habitación vendidas",
+      "revenue": "Ingresos por habitación",
+      "revenueSub": "Reservas de habitación aprobadas en el rango",
+      "adr": "Tarifa promedio (ADR)",
+      "adrSub": "Tarifa diaria promedio por noche-habitación vendida",
+      "revpar": "RevPAR",
+      "revparSub": "Ingreso por noche-habitación disponible",
+      "arrivals": "Llegadas (próximos 7 días)",
+      "arrivalsSub": "{guests} huéspedes esperados",
+      "departures": "Salidas (próximos 7 días)",
+      "departuresSub": "Salidas en la próxima semana",
+      "expectedGuests": "Huéspedes en el rango",
+      "expectedGuestsSub": "En reservas aprobadas",
+      "occByDay": "Noches-habitación por día",
+      "occByDayDesc": "Noches-habitación ocupadas por día en el rango seleccionado",
+      "noReservationsYet": "Aún no hay reservas en este rango",
+      "categoryMix": "Solicitudes por categoría",
+      "categoryMixDesc": "De dónde vienen las solicitudes de reserva",
+      "noRequestsYet": "Aún no hay solicitudes de reserva",
+      "requests": "Solicitudes",
+      "cat": {
+        "habitaciones": "Habitaciones",
+        "spa": "Spa",
+        "actividades": "Actividades al aire libre",
+        "paquetes": "Paquetes",
+        "eventos": "Eventos",
+        "otros": "Otros"
+      }
     }
   },
   "Flows": {
@@ -1378,6 +1413,49 @@
       "briefStarted": "Brief iniciado",
       "briefSub": "Leads con al menos un campo de especificación capturado",
       "briefNoLeads": "Sin leads en este período"
+    },
+    "hotel": {
+      "title": "KPIs del hotel",
+      "description": "Demanda de reservas, tasa de aprobación, duración de la estadía y anticipación de reserva — con exportación completa a Excel.",
+      "rangeYear": "1 año",
+      "rangeDays": "{count} días",
+      "periodLabel": "Período: {range}",
+      "requests": "Solicitudes de reserva",
+      "vsPrev": "vs. período anterior",
+      "approvalRate": "Tasa de aprobación",
+      "approvalSub": "{approved} aprobadas · {denied} rechazadas · {pending} pendientes",
+      "avgStay": "Estadía promedio",
+      "avgStaySub": "Noches por reserva aprobada",
+      "leadTime": "Anticipación de reserva",
+      "leadTimeValue": "{days} días",
+      "leadTimeSub": "Desde la solicitud hasta el check-in",
+      "requestsOverTime": "Solicitudes en el tiempo",
+      "requestsOverTimeDesc": "Solicitudes de reserva recibidas por período",
+      "revenueOverTime": "Ingresos en el tiempo",
+      "revenueOverTimeDesc": "Valor estimado de las reservas aprobadas",
+      "occByDay": "Noches-habitación por día",
+      "occByDayDesc": "Noches-habitación ocupadas por día",
+      "noRequestsYet": "Aún no hay solicitudes de reserva",
+      "noReservationsYet": "Aún no hay reservas en este rango",
+      "statusMix": "Estado de las solicitudes",
+      "statusMixDesc": "Solicitudes aprobadas, pendientes y rechazadas",
+      "status": {
+        "approved": "Aprobadas",
+        "pending": "Pendientes",
+        "denied": "Rechazadas"
+      },
+      "categoryMix": "Solicitudes por categoría",
+      "categoryMixDesc": "Solicitudes de reserva por servicio",
+      "cat": {
+        "habitaciones": "Habitaciones",
+        "spa": "Spa",
+        "actividades": "Actividades al aire libre",
+        "paquetes": "Paquetes",
+        "eventos": "Eventos",
+        "otros": "Otros"
+      },
+      "adminOnlyTitle": "Solo administradores",
+      "adminOnlyHint": "Esta página incluye cifras de ingresos. Pídele a un administrador de la cuenta que la revise."
     }
   },
   "LoginPage": {

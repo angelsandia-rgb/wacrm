@@ -152,6 +152,41 @@
     },
     "emptyState": {
       "title": "아직 데이터가 충분하지 않습니다"
+    },
+    "hotel": {
+      "title": "호텔 개요",
+      "description": "숙소의 실시간 객실 점유율, 요금, 예약 요청 지표입니다.",
+      "rangeDays": "{count}일",
+      "occupancy": "객실 점유율",
+      "occupancyNoRooms": "점유율을 계산하려면 객실 상품을 추가하세요",
+      "occupancySub": "판매된 객실 박수 {sold}/{available}",
+      "revenue": "객실 매출",
+      "revenueSub": "기간 내 승인된 객실 예약",
+      "adr": "ADR(평균 객실 요금)",
+      "adrSub": "판매된 객실 1박당 평균 요금",
+      "revpar": "RevPAR",
+      "revparSub": "가용 객실 1박당 매출",
+      "arrivals": "도착 (향후 7일)",
+      "arrivalsSub": "예상 투숙객 {guests}명",
+      "departures": "출발 (향후 7일)",
+      "departuresSub": "다음 주 체크아웃",
+      "expectedGuests": "기간 내 투숙객",
+      "expectedGuestsSub": "승인된 예약 기준",
+      "occByDay": "일별 객실 박수",
+      "occByDayDesc": "선택한 기간의 일별 점유 객실 박수",
+      "noReservationsYet": "아직 이 기간에 예약이 없습니다",
+      "categoryMix": "카테고리별 요청",
+      "categoryMixDesc": "예약 요청의 출처",
+      "noRequestsYet": "아직 예약 요청이 없습니다",
+      "requests": "요청",
+      "cat": {
+        "habitaciones": "객실",
+        "spa": "스파",
+        "actividades": "야외 활동",
+        "paquetes": "패키지",
+        "eventos": "이벤트",
+        "otros": "기타"
+      }
     }
   },
   "Kpis": {
@@ -234,6 +269,49 @@
       "briefStarted": "브리프 시작됨",
       "briefSub": "사양 필드를 하나 이상 수집한 리드",
       "briefNoLeads": "이 기간에 리드 없음"
+    },
+    "hotel": {
+      "title": "호텔 KPI",
+      "description": "예약 수요, 승인율, 숙박 기간, 예약 리드 타임 — Excel 전체 내보내기 포함.",
+      "rangeYear": "1년",
+      "rangeDays": "{count}일",
+      "periodLabel": "기간: {range}",
+      "requests": "예약 요청",
+      "vsPrev": "이전 기간 대비",
+      "approvalRate": "승인율",
+      "approvalSub": "승인 {approved} · 거절 {denied} · 대기 {pending}",
+      "avgStay": "평균 숙박 기간",
+      "avgStaySub": "승인된 예약당 박수",
+      "leadTime": "예약 리드 타임",
+      "leadTimeValue": "{days}일",
+      "leadTimeSub": "요청부터 체크인까지",
+      "requestsOverTime": "기간별 요청",
+      "requestsOverTimeDesc": "기간별 접수된 예약 요청",
+      "revenueOverTime": "기간별 매출",
+      "revenueOverTimeDesc": "승인된 예약의 예상 금액",
+      "occByDay": "일별 객실 박수",
+      "occByDayDesc": "일별 점유 객실 박수",
+      "noRequestsYet": "아직 예약 요청이 없습니다",
+      "noReservationsYet": "아직 이 기간에 예약이 없습니다",
+      "statusMix": "요청 상태",
+      "statusMixDesc": "승인, 대기, 거절된 요청",
+      "status": {
+        "approved": "승인됨",
+        "pending": "대기 중",
+        "denied": "거절됨"
+      },
+      "categoryMix": "카테고리별 요청",
+      "categoryMixDesc": "서비스별 예약 요청",
+      "cat": {
+        "habitaciones": "객실",
+        "spa": "스파",
+        "actividades": "야외 활동",
+        "paquetes": "패키지",
+        "eventos": "이벤트",
+        "otros": "기타"
+      },
+      "adminOnlyTitle": "관리자 전용",
+      "adminOnlyHint": "이 페이지에는 매출 수치가 포함됩니다. 계정 관리자에게 검토를 요청하세요."
     }
   },
   "Inbox": {

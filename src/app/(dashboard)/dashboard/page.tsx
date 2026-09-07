@@ -37,6 +37,7 @@ import { ConversationsChart } from '@/components/dashboard/conversations-chart'
 import { PipelinesOverview } from '@/components/dashboard/pipelines-overview'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
+import { HotelDashboard } from '@/components/dashboard/hotel-dashboard'
 
 import { useTranslations } from 'next-intl'
 
@@ -44,7 +45,8 @@ type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
   const t = useTranslations('Dashboard.page')
-  const { defaultCurrency } = useAuth()
+  const { defaultCurrency, account } = useAuth()
+  const isHotel = account?.industry_vertical === 'hotel'
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
 
@@ -132,6 +134,16 @@ export default function DashboardPage() {
     },
     [series],
   )
+
+  if (isHotel) {
+    return (
+      <div className="space-y-5">
+        <HotelDashboard />
+        <ResponseTimeChart data={responseTime} loading={responseTimeLoading} />
+        <ActivityFeed items={activity} loading={activityLoading} />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-5">

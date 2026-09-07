@@ -41,6 +41,18 @@ and polish.
 
 ### Added
 
+- **Hotel: the Panel and the KPIs page show hospitality metrics.** For a
+  `hotel` account, `/dashboard` and `/kpis` swap their generic
+  conversation/pipeline widgets for a revenue-management view built from
+  `reservation_requests` + the room-product count: occupancy, room
+  revenue, ADR and RevPAR; arrivals / departures / expected guests for
+  the next 7 days; room-nights and request volume over time; a
+  requests-by-category donut; and, on KPIs, approval rate, average length
+  of stay, booking lead time and a request-status breakdown with
+  period-over-period deltas. Numbers are estimates (they use each
+  reservation's `estimated_price`, since there is no folio table) but use
+  the standard formulas. Non-hotel accounts see the existing dashboards
+  unchanged. No migration.
 - **Hotel: a CRM quote logs its room lines as reservation requests.** When
   a `hotel` account's quote builder adds a room/package stay line, the
   quote submit now also files a `reservation_requests` row per line
