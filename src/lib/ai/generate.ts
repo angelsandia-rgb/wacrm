@@ -235,18 +235,54 @@ export function parseGeneration(
     .replace(reservationMatch ? reservationMatch[0] : '', '')
     .trim()
 
-  // Defense in depth: every marker above is stripped by name, but a
-  // real incident (2026-08-25) had a `[[ACTION:create_quote_chat:...]]`
-  // marker reach a real customer verbatim over WhatsApp regardless —
-  // root cause never conclusively pinned down (possibly a deploy-
-  // transition race). Whatever the cause, no `[[...]]`-shaped sentinel
-  // must ever be customer-facing, so catch and strip any leftover one
-  // as a final safety net, independent of which specific marker it is.
-  const leftoverSentinel = /\[\[[^\n[\]]{1,300}\]\]/g
-  const sentinelLeakDetected = leftoverSentinel.test(text)
+  // --- second-pass cleanup, in order of increasing severity ---
+  //
+  // The named extraction above only pulls the FIRST occurrence of each
+  // payload marker and only its exact shape. The model can still leave
+  // behind: a duplicate marker, one whose payload the named parser
+  // couldn't read (a stray "]" mid-value, a rogue line break), or one
+  // it wrote on its own line. On the hotel vertical — which stacks the
+  // most trailing markers of any config — that used to be common and
+  // *every* leftover forced a sticky handoff. Split by how much a
+  // missed marker actually matters:
+  //
+  //  (a) a leftover from a LOW-STAKES family — one that self-heals
+  //      (re-emitted next turn: `record_reservation`, `set_temperature`)
+  //      or just sends something that already exists (`send_catalog`,
+  //      `send_restaurant_menu`) or is control-flow the model can
+  //      re-trigger (`HANDOFF`, `mark_deal_won`, `move_deal`,
+  //      `QUICK_REPLY`). Strip it SILENTLY — never a reason to park the
+  //      conversation on a human.
+  const SAFE_KNOWN_MARKER_RE =
+    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_restaurant_menu|set_temperature|record_reservation)(?::[^\]]{0,600})?)\s*\]\]/gi
+  const straySafe = text.match(SAFE_KNOWN_MARKER_RE)
+  if (straySafe) {
+    console.warn('[ai generate] stripped stray/duplicate low-stakes marker(s) from reply text:', straySafe)
+    text = text.replace(SAFE_KNOWN_MARKER_RE, '').trim()
+  }
+
+  //  (b) an OPEN "[[" with no close before end-of-string → the classic
+  //      signature of the completion hitting the output-token ceiling
+  //      mid-marker. The prose before it is complete; drop the dangling
+  //      fragment SILENTLY.
+  const truncatedFragment = /\[\[[^[\]]{0,600}$/
+  if (truncatedFragment.test(text)) {
+    console.warn('[ai generate] dropped a truncated trailing marker fragment from reply text')
+    text = text.replace(truncatedFragment, '').trim()
+  }
+
+  //  (c) anything `[[...]]`-shaped that is STILL here: a malformed
+  //      `create_quote_chat` / `schedule_appointment` (the model
+  //      promised the customer a quote or a booking and the marker
+  //      didn't parse, so that action never ran and nothing else will
+  //      catch it), or a genuinely unknown token (the 2026-08-25
+  //      incident's signature). Strip it AND flag it so auto-reply hands
+  //      the conversation to a human.
+  const unknownSentinel = /\[\[[\s\S]{1,300}?\]\]/
+  const sentinelLeakDetected = unknownSentinel.test(text)
   if (sentinelLeakDetected) {
-    console.error('[ai generate] a sentinel-shaped marker survived normal stripping, force-removing it:', text)
-    text = text.replace(leftoverSentinel, '').trim()
+    console.error('[ai generate] a high-stakes/unrecognised sentinel-shaped token survived stripping, force-removing it:', text)
+    text = text.replace(new RegExp(unknownSentinel.source, 'g'), '').trim()
   }
 
   return {

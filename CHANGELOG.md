@@ -42,6 +42,10 @@ and polish.
 > **Migration required:** apply `supabase/migrations/114_account_restaurant_menu_url.sql`
 > (adds a nullable `accounts.restaurant_menu_url`). No effect until a
 > hotel account sets a menu PDF.
+>
+> **Migration required:** apply `supabase/migrations/115_conversation_ai_handoff_transient.sql`
+> (adds a nullable `conversations.ai_handoff_transient` flag used by the
+> AI auto-recovery below). Legacy handoffs read as non-transient.
 
 ### Added
 
@@ -231,6 +235,40 @@ and polish.
   room-only by definition and are now labelled as such. Length of stay
   covers rooms + packages; lead time runs to the check-in *or* the
   service use-date. No migration (reads the existing `use_date` column).
+
+- **AI auto-reply: far harder to knock offline.** A batch of resilience
+  changes so a transient blip no longer leaves a working conversation
+  parked on a human, and a real outage is always visible:
+  - **Auto-recovery after a transient handoff.** When the bot pauses a
+    thread because of a fault it can't control — a provider timeout, a
+    stray/duplicate internal marker, a Google Calendar hiccup, the
+    per-conversation reply cap — that handoff is now tagged transient
+    (`conversations.ai_handoff_transient`, migration 115). If a grace
+    period passes (default 30 min, `AI_TRANSIENT_HANDOFF_RECOVERY_MIN`)
+    with no human actually replying, the next customer message re-enables
+    the bot for one more try. An **explicit** "I want a person" handoff
+    is never auto-recovered.
+  - **Marker cleanup no longer over-reacts.** A leftover low-stakes
+    marker (`record_reservation`, `set_temperature`, `send_catalog`,
+    `send_restaurant_menu`, a duplicate, one on its own line) is now
+    stripped silently instead of forcing a handoff — it self-heals next
+    turn. A half-written marker from hitting the output-token ceiling is
+    dropped as a fragment. Only a mis-formatted *high-stakes* marker
+    (`create_quote_chat` / `schedule_appointment`, where the model
+    promised the customer something) or a genuinely unknown `[[…]]`
+    token still hands off.
+  - **Bigger reply budget + longer patience.** Max output tokens 1024 →
+    2048 (a hotel reply plus several trailing markers no longer
+    truncates), provider timeout 30 s → 40 s, and transient provider
+    errors are retried twice (was once) with growing backoff.
+  - **The silent-death paths now alert.** A stored AI key that won't
+    decrypt (rotated `ENCRYPTION_KEY`) raises a critical ops alert +
+    owner notification instead of a bare log line; a failed
+    `claim_ai_reply_slot` RPC sends the reply anyway (fail-open) and
+    alerts; a failure loading config / building context / reading the
+    conversation degrades or alerts instead of dropping the message; the
+    debounce store being unreachable no longer swallows the reply; the
+    last-resort catch raises an alert.
 
 ### Fixed
 

@@ -394,6 +394,56 @@ describe('parseGeneration', () => {
   it('returns null quickReplyId when the marker is absent', () => {
     expect(parseGeneration('Just a normal reply.').quickReplyId).toBeNull()
   })
+
+  // --- second-pass cleanup robustness (2026-09 hardening) ---
+
+  it('silently strips a DUPLICATE low-stakes marker — no handoff', () => {
+    const res = parseGeneration(
+      'Listo. [[ACTION:record_reservation:spa|personas=2]] [[ACTION:record_reservation:habitaciones|personas=2;entrada=2026-05-01]]',
+    )
+    // the first marker is the one captured
+    expect(res.reservationProposal?.category).toBe('spa')
+    expect(res.text).toBe('Listo.')
+    expect(res.text).not.toContain('[[')
+    expect(res.sentinelLeakDetected).toBe(false)
+  })
+
+  it('silently strips a MALFORMED record_reservation marker (stray "]" mid-value) — no handoff', () => {
+    const res = parseGeneration(
+      'Perfecto. [[ACTION:record_reservation:eventos|servicio=Boda [jardín];personas=80]]',
+    )
+    expect(res.text).not.toContain('[[')
+    expect(res.text).not.toContain(']]')
+    expect(res.sentinelLeakDetected).toBe(false)
+  })
+
+  it('silently drops a TRUNCATED trailing marker fragment (output-token ceiling) — no handoff', () => {
+    const res = parseGeneration(
+      'Con gusto te ayudo con la Suite Deluxe para 2 personas del 1 al 4 de mayo. [[ACTION:record_reservation:habitaciones|servicio=Suite Del',
+    )
+    expect(res.text).toBe(
+      'Con gusto te ayudo con la Suite Deluxe para 2 personas del 1 al 4 de mayo.',
+    )
+    expect(res.sentinelLeakDetected).toBe(false)
+  })
+
+  it('still flags a mis-formatted high-stakes marker (create_quote_chat the named parser missed) as a leak → handoff', () => {
+    // extra spaces inside the brackets → the exact-prefix parser above
+    // doesn't recognise it, so no quoteProposal is built and nothing
+    // else would catch that the promised quote never happened.
+    const res = parseGeneration(
+      'Te preparo la cotización enseguida. [[ ACTION:create_quote_chat:pdf|Silla:1|CF|a@b.com|Dir ]]',
+    )
+    expect(res.quoteProposal).toBeNull()
+    expect(res.sentinelLeakDetected).toBe(true)
+    expect(res.text).not.toContain('[[')
+  })
+
+  it('still flags a genuinely unknown [[...]] token as a leak → handoff', () => {
+    const res = parseGeneration('Un momento. [[ACTION:some_future_marker:foo|bar]]')
+    expect(res.sentinelLeakDetected).toBe(true)
+    expect(res.text).toBe('Un momento.')
+  })
 })
 
 describe('isRetryableAiError', () => {
