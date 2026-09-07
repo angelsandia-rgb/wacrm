@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import type { AiConfig } from './types'
+import { AiError, type AiConfig } from './types'
 
 interface AiConfigRow {
   provider: 'openai' | 'anthropic'
@@ -71,10 +71,31 @@ export async function loadAiConfig(
     }
   }
 
+  // A decrypt failure on the CHAT key means the account's AI is
+  // genuinely down (almost always a rotated / mismatched `ENCRYPTION_KEY`
+  // in the environment, or a truncated ciphertext from a bad write). It
+  // used to throw a bare Error that propagated to `dispatchInboundToAiReply`'s
+  // outer catch — logged to the server console and nothing else, so the
+  // bot went silently, account-wide dead with no alert and no owner
+  // notification. Raise it as an `invalid_key` `AiError` instead: that is
+  // exactly what `handleAiGenerationFailure` already knows how to
+  // surface (owner notification + ops alert).
+  let apiKey: string
+  try {
+    apiKey = decrypt(row.api_key)
+  } catch (err) {
+    throw new AiError(
+      `stored AI API key for account ${accountId} could not be decrypted — check ENCRYPTION_KEY: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      { code: 'invalid_key' },
+    )
+  }
+
   return {
     provider: row.provider,
     model: row.model,
-    apiKey: decrypt(row.api_key),
+    apiKey,
     systemPrompt: row.system_prompt,
     isActive: row.is_active,
     autoReplyEnabled: row.auto_reply_enabled,

@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   engineSendText: vi.fn(),
   moveDeal: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
+  dispatchSystemAlert: vi.fn().mockResolvedValue({ opened: false, notified: false, alertId: null }),
+  resolveSystemAlert: vi.fn().mockResolvedValue(undefined),
   sendCatalogToConversation: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
@@ -45,6 +47,11 @@ const h = vi.hoisted(() => ({
     products: [] as { id: string; name: string }[],
     /** Rows inserted via `db.from('messages').insert(...)` — currently only handOffToHuman's internal note. */
     messageInserts: [] as Record<string, unknown>[],
+    /** `messages` read for `tryRecoverTransientHandoff` — a human's own
+     *  reply after the handoff, or null (nobody engaged → recover). */
+    humanMsgAfterHandoff: null as { id: string } | null,
+    /** Rows `tryRecoverTransientHandoff`'s guarded UPDATE ... .select('id') returns. */
+    recoveryUpdateRows: [{ id: 'conv-1' }] as { id: string }[],
   },
 }))
 
@@ -69,6 +76,10 @@ vi.mock('./generate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./generate')>()
   return { ...actual, generateReply: h.generateReply }
 })
+vi.mock('@/lib/observability/alerts', () => ({
+  dispatchSystemAlert: h.dispatchSystemAlert,
+  resolveSystemAlert: h.resolveSystemAlert,
+}))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 vi.mock('@/lib/webhooks/deliver', () => ({ dispatchWebhookEvent: h.dispatchWebhookEvent }))
 vi.mock('@/lib/quotes/create-quote', () => ({
@@ -268,8 +279,19 @@ vi.mock('./admin-client', () => ({
         return chain
       }
       if (table === 'messages') {
-        // handOffToHuman's best-effort internal-note insert.
+        // handOffToHuman's best-effort internal-note insert +
+        // tryRecoverTransientHandoff's "did a human reply?" read.
+        const readChain = {
+          select: () => readChain,
+          eq: () => readChain,
+          neq: () => readChain,
+          gt: () => readChain,
+          limit: () => readChain,
+          maybeSingle: () =>
+            Promise.resolve({ data: h.state.humanMsgAfterHandoff, error: null }),
+        }
         return {
+          ...readChain,
           insert: (payload: Record<string, unknown>) => {
             h.state.messageInserts.push(payload)
             return Promise.resolve({ error: null })
@@ -286,7 +308,17 @@ vi.mock('./admin-client', () => ({
         }),
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
-          return { eq: () => Promise.resolve({ error: null }) }
+          // Chainable + thenable: `handOffToHuman` awaits `.update().eq()`
+          // (→ { error }); `tryRecoverTransientHandoff` does
+          // `.update().eq().eq().select('id')` (→ { data: rows }).
+          const chain: Record<string, unknown> = {
+            eq: () => chain,
+            select: () =>
+              Promise.resolve({ data: h.state.recoveryUpdateRows, error: null }),
+            then: (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
+              Promise.resolve({ error: null }).then(onF, onR),
+          }
+          return chain
         },
       }
     },
@@ -329,7 +361,11 @@ beforeEach(() => {
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
     ai_reply_count: 0,
+    ai_handoff_transient: null,
+    ai_handoff_at: null,
   }
+  h.state.humanMsgAfterHandoff = null
+  h.state.recoveryUpdateRows = [{ id: 'conv-1' }]
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
@@ -534,18 +570,111 @@ describe('dispatchInboundToAiReply — handoff', () => {
       }),
     ])
   })
+
+  it('an EXPLICIT handoff is not transient — the flag is cleared, no auto-recovery', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload?.ai_handoff_transient).toBeNull()
+  })
+
+  it('the reply-cap handoff IS marked transient', async () => {
+    h.state.conv = { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
+  })
+})
+
+describe('dispatchInboundToAiReply — transient-handoff auto-recovery', () => {
+  const OLD = new Date(Date.now() - 60 * 60_000).toISOString() // 60 min ago
+  const RECENT = new Date(Date.now() - 5 * 60_000).toISOString() // 5 min ago
+
+  it('re-enables the bot and replies when the grace period passed and no human engaged', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 0,
+      ai_handoff_transient: true,
+      ai_handoff_at: OLD,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    // first update = the recovery (re-enable + consume the flag)
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: false,
+      ai_handoff_transient: null,
+    })
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('does NOT recover before the grace period', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 0,
+      ai_handoff_transient: true,
+      ai_handoff_at: RECENT,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does NOT recover when a human already replied after the handoff', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 0,
+      ai_handoff_transient: true,
+      ai_handoff_at: OLD,
+    }
+    h.state.humanMsgAfterHandoff = { id: 'msg-agent-1' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does NOT recover a non-transient (explicit) handoff', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 0,
+      ai_handoff_transient: null,
+      ai_handoff_at: OLD,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does NOT recover if the guarded UPDATE matched no row (a concurrent explicit handoff won)', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 0,
+      ai_handoff_transient: true,
+      ai_handoff_at: OLD,
+    }
+    h.state.recoveryUpdateRows = [] // update matched nothing
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
 })
 
 describe('dispatchInboundToAiReply — provider failure handling', () => {
-  // Keep the retry instant so these cases don't each sleep the real backoff.
+  // Keep the retry instant so these cases don't each sleep the real
+  // backoff, and pin the retry count so the assertions are exact.
   beforeEach(() => {
     process.env.AI_AUTOREPLY_RETRY_DELAY_MS = '0'
+    process.env.AI_AUTOREPLY_MAX_RETRIES = '2'
   })
   afterEach(() => {
     delete process.env.AI_AUTOREPLY_RETRY_DELAY_MS
+    delete process.env.AI_AUTOREPLY_MAX_RETRIES
   })
 
-  it('retries once on a transient provider error, then sends the recovered reply', async () => {
+  it('retries a transient provider error, then sends the recovered reply', async () => {
     h.generateReply
       .mockRejectedValueOnce(new AiError('overloaded', { code: 'provider_error' }))
       .mockResolvedValueOnce({
@@ -566,12 +695,12 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
     expect(h.state.updatePayload).toBeNull()
   })
 
-  it('hands off to a human when a transient provider error outlives the retry', async () => {
+  it('hands off to a human when a transient provider error outlives every retry', async () => {
     h.generateReply.mockRejectedValue(new AiError('529 overloaded', { code: 'provider_error' }))
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.generateReply).toHaveBeenCalledTimes(3) // 1 initial + 2 retries
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.rpcCalls).toHaveLength(0) // never claimed a reply slot
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })

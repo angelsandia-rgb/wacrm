@@ -9,7 +9,7 @@ import { loadCatalogContext } from './catalog-context'
 import { loadQuickReplyContext } from './quick-reply-context'
 import { generateReply, isRetryableAiError, type GenerateArgs } from './generate'
 import { buildSystemPrompt, aiAutoReplyRetryDelayMs, type AutoReplyCalendarContext } from './defaults'
-import { AiError, type AiConfig } from './types'
+import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -120,27 +120,77 @@ export async function dispatchInboundToAiReply(
 
   // Debounce: coalesce a burst of rapid-fire inbound messages into one
   // reply (see debounce.ts) — stand down silently if a newer inbound on
-  // this conversation superseded this call while it waited. Kept
-  // outside the try/catch below on purpose: it does no I/O beyond a
-  // timer, so it has nothing to fail on, and standing down is a normal
-  // outcome, not an error to log.
-  const isLatest = await waitForQuietPeriod(conversationId)
+  // this conversation superseded this call while it waited. Fail OPEN:
+  // if the debounce store itself is unreachable, reply now rather than
+  // drop the customer's message (worst case a duplicate, far better
+  // than silence).
+  let isLatest: boolean
+  try {
+    isLatest = await waitForQuietPeriod(conversationId)
+  } catch (err) {
+    console.error('[ai auto-reply] debounce check failed, proceeding without it:', err)
+    isLatest = true
+  }
   if (!isLatest) return
 
   try {
     const db = supabaseAdmin()
 
-    const config = await loadAiConfig(db, accountId)
+    // A decrypt failure on the stored key throws `AiError('invalid_key')`
+    // (see config.ts) — route it to the same owner-notification + ops
+    // alert path a rejected key uses, instead of letting it fall into the
+    // silent outer catch below (the bot went account-wide dead with zero
+    // signal, 2026-08-21 style, before this).
+    let config: AiConfig | null
+    try {
+      config = await loadAiConfig(db, accountId)
+    } catch (err) {
+      if (err instanceof AiError && err.code === 'invalid_key') {
+        await surfaceInvalidKey(db, accountId, err.message)
+      } else {
+        console.error('[ai auto-reply] loadAiConfig failed:', err)
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI auto-reply could not load its config',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+          },
+          dedupKey: `ai_dispatch_error:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
+      }
+      return
+    }
     if (!config || !config.autoReplyEnabled) return
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_handoff_transient, ai_handoff_at')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
-    if (conv.ai_autoreply_disabled) return // handed off / turned off here
+    if (conv.ai_autoreply_disabled) {
+      // The bot is paused here. If it was paused by a TRANSIENT fault
+      // (migration 115) and a grace period has passed with no human
+      // actually replying, give it one more shot rather than parking a
+      // working conversation on a person forever.
+      if (conv.ai_handoff_transient === true) {
+        const recovered = await tryRecoverTransientHandoff({
+          db,
+          conversationId,
+          handoffAt: (conv.ai_handoff_at as string | null) ?? null,
+        })
+        if (!recovered) return
+        // fall through: the bot is re-enabled, handle this inbound normally.
+      } else {
+        return // explicit handoff / manual pause — leave it to a human.
+      }
+    }
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound). Reaching the cap
     // used to just go silent forever on this thread — the customer got
@@ -155,6 +205,7 @@ export async function dispatchInboundToAiReply(
         handoffAgentId: config.handoffAgentId,
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: `🤖 La IA alcanzó su límite de ${config.autoReplyMaxPerConversation} respuestas automáticas en esta conversación y se pausó — necesita seguimiento de un humano.`,
+        transient: true,
       })
       return
     }
@@ -166,12 +217,35 @@ export async function dispatchInboundToAiReply(
     const imageResolver = providerSupportsVision(config.provider, config.model)
       ? makeInboundImageResolver(db, accountId)
       : null
-    const messages = await buildConversationContext(
-      db,
-      conversationId,
-      undefined,
-      imageResolver,
-    )
+    let messages: ChatMessage[]
+    try {
+      messages = await buildConversationContext(db, conversationId, undefined, imageResolver)
+    } catch (err) {
+      // Reading the thread failed. A single oversized / corrupt inbound
+      // image feeding the vision resolver is the usual culprit and the
+      // resolver is the only new failure surface here — retry text-only
+      // once, then give up loudly (alert), never silently.
+      console.error('[ai auto-reply] buildConversationContext failed, retrying text-only:', err)
+      try {
+        messages = await buildConversationContext(db, conversationId, undefined, null)
+      } catch (err2) {
+        console.error('[ai auto-reply] buildConversationContext failed again (text-only):', err2)
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI auto-reply could not read the conversation',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: err2 instanceof Error ? err2.message.slice(0, 300) : String(err2).slice(0, 300),
+          },
+          dedupKey: `ai_dispatch_error:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
+        return
+      }
+    }
     if (messages.length === 0) return
     // The debounce above (waitForQuietPeriod) should guarantee this
     // dispatch is the only one running for this burst, but the two
@@ -216,54 +290,66 @@ export async function dispatchInboundToAiReply(
       return
     }
 
-    // Ground the reply in the account's knowledge base (best-effort).
-    const knowledge = await retrieveKnowledge(
-      db,
-      accountId,
-      config,
-      latestUserMessage(messages),
-    )
+    // Everything below this point up to `buildSystemPrompt` is prompt
+    // ENRICHMENT — the model can still write a useful reply from the
+    // conversation alone. A failure in any of it (a slow query, an RLS
+    // hiccup, a malformed KB row, a Google outage) must never drop the
+    // customer's message: degrade to a bare prompt, alert, and carry on.
+    let knowledge: string[] = []
+    let dealStageOptions: Awaited<ReturnType<typeof loadDealStageOptions>> = null
+    let catalog: string[] | null = null
+    let quickReplies: Awaited<ReturnType<typeof loadQuickReplyContext>> = null
+    let catalogDeliveryMode: 'digital' | 'pdf' | 'photos' = 'digital'
+    let isHotel = false
+    let hasRestaurantMenu = false
+    let calendarContext: AutoReplyCalendarContext | null = null
+    try {
+      // Ground the reply in the account's knowledge base.
+      knowledge = await retrieveKnowledge(db, accountId, config, latestUserMessage(messages))
 
-    // Business context for autonomous stage progression: the contact's
-    // currently open deal (if any) and its pipeline's non-won stages,
-    // shown to the model so it can only ever pick a real option — never
-    // invent one. Deliberately excludes the "won" stage: closing a deal
-    // always goes through the separate, stricter purchase-confirmation
-    // marker below, handled by a person, never this one.
-    const dealStageOptions = await loadDealStageOptions({ db, accountId, contactId })
+      // The contact's open deal (if any) + its pipeline's non-won stages,
+      // so the model can only ever pick a real stage, never invent one.
+      dealStageOptions = await loadDealStageOptions({ db, accountId, contactId })
 
-    // The account's active catalog, if any — lets the model recommend
-    // real products/prices and offer to send the full PDF instead of
-    // guessing or staying silent about what the business sells.
-    const catalog = await loadCatalogContext(db, accountId)
+      // The account's active catalog — real products/prices to recommend.
+      catalog = await loadCatalogContext(db, accountId)
 
-    // The account's saved 'text' quick replies, if any — lets the model
-    // answer a routine question with the exact human-approved wording
-    // instead of writing its own paraphrase every time.
-    const quickReplies = await loadQuickReplyContext(db, accountId)
+      // The account's saved 'text' quick replies — human-approved wording.
+      quickReplies = await loadQuickReplyContext(db, accountId)
 
-    // How the catalog actually gets delivered (migration 068) — also
-    // gates whether the model is taught CREATE_QUOTE_SENTINEL_PREFIX
-    // (see buildSystemPrompt below): the digital page already has its
-    // own self-service quote cart, so this only turns on for pdf/photos.
-    const { data: catalogModeRow } = await db
-      .from('accounts')
-      .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url')
-      .eq('id', accountId)
-      .maybeSingle()
-    const catalogDeliveryMode = (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
-    const isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
-    // Only teach the send-restaurant-menu marker when there's actually a
-    // menu PDF on file for it to send (migration 114).
-    const hasRestaurantMenu = Boolean((catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim())
+      // How the catalog is delivered (migration 068) + the vertical +
+      // whether a restaurant menu PDF is on file (migration 114).
+      const { data: catalogModeRow } = await db
+        .from('accounts')
+        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url')
+        .eq('id', accountId)
+        .maybeSingle()
+      catalogDeliveryMode =
+        (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
+      isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
+      hasRestaurantMenu = Boolean(
+        (catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim(),
+      )
 
-    // Autonomous appointment scheduling — only ever offered to the
-    // model when the account explicitly opted in AND has a connected
-    // Google Calendar. A failed freebusy check (expired connection,
-    // Google outage) just drops the capability for this reply, same
-    // "degrade, never fail the reply" contract as the other autonomous
-    // lookups above.
-    const calendarContext = await loadCalendarContext({ db, accountId, contactId, config })
+      // Autonomous scheduling context — only non-null when the account
+      // opted in AND has a connected Google Calendar.
+      calendarContext = await loadCalendarContext({ db, accountId, contactId, config })
+    } catch (err) {
+      console.error('[ai auto-reply] context enrichment failed, replying with a minimal prompt:', err)
+      void dispatchSystemAlert({
+        severity: 'warning',
+        source: 'ai_dispatch_error',
+        title: 'AI auto-reply context enrichment failed',
+        detail: {
+          account_id: accountId,
+          conversation_id: conversationId,
+          message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+        },
+        dedupKey: `ai_dispatch_error:${accountId}`,
+        accountId,
+        throttleMinutes: 60,
+      })
+    }
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -362,9 +448,14 @@ export async function dispatchInboundToAiReply(
         conversation_id: conversationId,
         max_replies: config.autoReplyMaxPerConversation,
       })
+      // A real RPC error (not "lost the cap race") is a deploy problem —
+      // fail OPEN so the customer still gets the safe holding message
+      // rather than silence, and alert.
       if (claimErr) {
-        console.error('[ai auto-reply] claim_ai_reply_slot failed:', claimErr)
-      } else if (claimed === true) {
+        console.error('[ai auto-reply] claim_ai_reply_slot failed — sending the holding message anyway:', claimErr)
+        void alertClaimSlotFailed(accountId, conversationId, claimErr)
+      }
+      if (claimErr || claimed === true) {
         await engineSendText({
           accountId,
           userId: configOwnerUserId,
@@ -381,6 +472,7 @@ export async function dispatchInboundToAiReply(
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary:
           '🤖 La IA le dijo a este cliente que su cita/demo ya estaba confirmada, pero nunca ejecutó el agendamiento real en Google Calendar — no se envió esa confirmación falsa. Necesita que un humano agende la cita de verdad.',
+        transient: true,
       })
       return
     }
@@ -423,6 +515,7 @@ export async function dispatchInboundToAiReply(
         handoffAgentId: config.handoffAgentId,
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary,
+        transient: false, // the customer really asked for a person — no auto-recovery
       })
       return
     }
@@ -442,12 +535,16 @@ export async function dispatchInboundToAiReply(
     if (claimErr) {
       // A real error here (vs. losing the cap race) is almost always a
       // deploy issue — e.g. `claim_ai_reply_slot` not EXECUTE-able by the
-      // service role, or the migration not applied. Log it loudly: a
-      // silent return makes "auto-reply never fires" undiagnosable.
-      console.error('[ai auto-reply] claim_ai_reply_slot failed:', claimErr)
-      return
+      // service role, or the migration not applied. That used to `return`
+      // silently → the customer got nothing, on every inbound, until
+      // someone noticed. Fail OPEN instead: the per-conversation cap only
+      // bounds cost, it is not a correctness guarantee, so send this one
+      // reply anyway and raise an alert so the RPC gets fixed.
+      console.error('[ai auto-reply] claim_ai_reply_slot failed — sending anyway (fail-open):', claimErr)
+      void alertClaimSlotFailed(accountId, conversationId, claimErr)
+    } else if (claimed !== true) {
+      return // genuinely lost the per-conversation cap race
     }
-    if (claimed !== true) return // lost the per-conversation cap race
 
     await engineSendText({
       accountId,
@@ -472,6 +569,7 @@ export async function dispatchInboundToAiReply(
         handoffAgentId: config.handoffAgentId,
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: `🤖 La respuesta de la IA contenía un marcador interno no reconocido que tuvo que eliminarse antes de enviarse — lo que sea que estaba intentando hacer (p. ej. armar una cotización) probablemente no se completó. Necesita que un humano revise esta conversación.`,
+        transient: true,
       })
       return
     }
@@ -604,35 +702,172 @@ export async function dispatchInboundToAiReply(
       }
     }
   } catch (err) {
-    // Safety net for the post-generation path only (the send + the
-    // autonomous actions above). A provider/generation failure is
-    // caught at the `generateReplyWithOneRetry` call site and handled
-    // by `handleAiGenerationFailure` — it never reaches here.
+    // Last-resort safety net. A provider/generation failure is caught at
+    // the `generateReplyWithOneRetry` call site; a config/context/read
+    // failure is caught above — so anything reaching here is unexpected
+    // (a null deref, an un-guarded DB timeout, a bug). It used to be
+    // logged to the server console and NOTHING else, so systemic
+    // breakage (a bad deploy, a Supabase incident) looked like "the bot
+    // is just quiet". Raise a throttled ops alert too.
     console.error('[ai auto-reply] dispatch failed:', err)
+    void dispatchSystemAlert({
+      severity: 'warning',
+      source: 'ai_dispatch_error',
+      title: 'AI auto-reply dispatch threw unexpectedly',
+      detail: {
+        account_id: accountId,
+        conversation_id: conversationId,
+        message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+      },
+      dedupKey: `ai_dispatch_error:${accountId}`,
+      accountId,
+      throttleMinutes: 60,
+    })
   }
 }
 
+/** Grace period before the dispatcher will auto-recover a bot that a
+ *  transient fault paused (migration 115). Long enough that a human on
+ *  shift normally picks the thread up first; short enough that an
+ *  after-hours blip doesn't strand the guest overnight. Override with
+ *  `AI_TRANSIENT_HANDOFF_RECOVERY_MIN`. */
+function transientHandoffRecoveryMs(): number {
+  const raw = Number(process.env.AI_TRANSIENT_HANDOFF_RECOVERY_MIN)
+  return (Number.isFinite(raw) && raw > 0 ? raw : 30) * 60_000
+}
+
 /**
- * The account's configured provider call, with ONE retry on a transient
- * failure. A single 429/529/timeout right as a restored key resumes
- * traffic (real incident, 2026-08-30) must not drop the customer's
- * message on the floor. A non-retryable error (`invalid_key`,
- * `unsupported_provider`) rethrows immediately with no wait.
+ * A bot that was paused by a TRANSIENT fault (provider timeout, a stray
+ * marker, a calendar hiccup, the reply cap — see `handOffToHuman`'s
+ * `transient` flag) should not stay off forever. If the grace period has
+ * passed and no human has actually replied to the customer since the
+ * handoff, re-enable the bot and CONSUME the one-shot recovery (clears
+ * `ai_handoff_transient`), so a second transient handoff still waits for
+ * a person. Returns true when the bot was re-enabled.
  */
-async function generateReplyWithOneRetry(args: GenerateArgs): Promise<GenerateResult> {
-  try {
-    return await generateReply(args)
-  } catch (err) {
-    if (!isRetryableAiError(err)) throw err
-    const code = err instanceof AiError ? err.code : 'unknown'
-    console.warn(
-      `[ai auto-reply] provider call failed transiently (${code}), retrying once:`,
-      err instanceof Error ? err.message : err,
-    )
-    const delayMs = aiAutoReplyRetryDelayMs()
-    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
-    return await generateReply(args)
+async function tryRecoverTransientHandoff(args: {
+  db: SupabaseClient
+  conversationId: string
+  handoffAt: string | null
+}): Promise<boolean> {
+  const { db, conversationId, handoffAt } = args
+  const since = handoffAt ? Date.parse(handoffAt) : NaN
+  if (!Number.isFinite(since)) return false
+  if (Date.now() - since < transientHandoffRecoveryMs()) return false
+
+  // Did a person actually engage? Any agent-authored, non-note message
+  // after the handoff means a human is on it — leave it to them.
+  const { data: humanMsg } = await db
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('sender_type', 'agent')
+    .neq('content_type', 'internal_note')
+    .gt('created_at', handoffAt as string)
+    .limit(1)
+    .maybeSingle()
+  if (humanMsg) return false
+
+  // Re-enable + consume the recovery. The `ai_handoff_transient = true`
+  // guard makes this a no-op if a concurrent explicit handoff already
+  // cleared the flag.
+  const { data: updated, error } = await db
+    .from('conversations')
+    .update({ ai_autoreply_disabled: false, ai_handoff_transient: null })
+    .eq('id', conversationId)
+    .eq('ai_handoff_transient', true)
+    .select('id')
+  if (error) {
+    console.error('[ai auto-reply] transient-handoff recovery update failed:', error)
+    return false
   }
+  if (!updated || updated.length === 0) return false
+  console.warn(
+    `[ai auto-reply] auto-recovered the bot on conversation ${conversationId} after a transient handoff at ${handoffAt}`,
+  )
+  return true
+}
+
+/** Owner notification + throttled ops alert for a chat key the provider
+ *  rejected OR a stored key that won't decrypt — both mean the account's
+ *  AI is down until a human re-enters the key. */
+async function surfaceInvalidKey(
+  db: SupabaseClient,
+  accountId: string,
+  detail: string,
+): Promise<void> {
+  console.error('[ai auto-reply] AI provider key unusable:', detail)
+  await notifyAiKeyInvalid(db, accountId).catch((notifyErr) => {
+    console.error('[ai auto-reply] failed to send invalid-key notification:', notifyErr)
+  })
+  void dispatchSystemAlert({
+    severity: 'critical',
+    source: 'ai_key_invalid',
+    title: 'AI provider key is unusable — the bot is down for this account',
+    detail: { account_id: accountId, message: detail.slice(0, 300) },
+    dedupKey: `ai_key_invalid:${accountId}`,
+    accountId,
+    throttleMinutes: 360,
+  })
+}
+
+/** Throttled ops alert for a broken `claim_ai_reply_slot` RPC (missing
+ *  migration / not EXECUTE-able). The reply is sent fail-open, but this
+ *  needs fixing. */
+function alertClaimSlotFailed(accountId: string, conversationId: string, err: unknown): void {
+  void dispatchSystemAlert({
+    severity: 'warning',
+    source: 'ai_dispatch_error',
+    title: 'claim_ai_reply_slot RPC failed (replies sent fail-open)',
+    detail: {
+      account_id: accountId,
+      conversation_id: conversationId,
+      message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+    },
+    dedupKey: `ai_claim_slot:${accountId}`,
+    accountId,
+    throttleMinutes: 60,
+  })
+}
+
+/**
+ * The account's configured provider call, retried on a transient failure
+ * (429/529/timeout/network/empty). A blip right as a restored key
+ * resumes traffic (real incident, 2026-08-30) must not drop the
+ * customer's message. A non-retryable error (`invalid_key`,
+ * `unsupported_provider`) rethrows immediately with no wait. Retry count
+ * is `AI_AUTOREPLY_MAX_RETRIES` (default 2) with a growing backoff — the
+ * difference between a customer getting a slightly-late reply and
+ * getting a sticky handoff over a 3-second provider hiccup.
+ */
+function aiAutoReplyMaxRetries(): number {
+  const raw = Number(process.env.AI_AUTOREPLY_MAX_RETRIES)
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2
+}
+
+async function generateReplyWithOneRetry(args: GenerateArgs): Promise<GenerateResult> {
+  const maxRetries = aiAutoReplyMaxRetries()
+  const baseDelayMs = aiAutoReplyRetryDelayMs()
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await generateReply(args)
+    } catch (err) {
+      lastErr = err
+      if (!isRetryableAiError(err) || attempt === maxRetries) throw err
+      const code = err instanceof AiError ? err.code : 'unknown'
+      console.warn(
+        `[ai auto-reply] provider call failed transiently (${code}), retry ${attempt + 1}/${maxRetries}:`,
+        err instanceof Error ? err.message : err,
+      )
+      // Linear-ish backoff: 1×, 2×, 3× the base delay.
+      const delayMs = baseDelayMs * (attempt + 1)
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+  // Unreachable (the loop either returns or throws), but satisfies the
+  // compiler's "not all code paths return".
+  throw lastErr
 }
 
 /**
@@ -668,11 +903,11 @@ async function handleAiGenerationFailure(args: {
     // logged to the server console only, customer gets no reply, and
     // nothing in the product itself ever surfaced it (confirmed live
     // 2026-08-21: an account's bot went silently dead for hours,
-    // discovered only because a customer complained).
-    console.error('[ai auto-reply] AI provider rejected the API key:', err.message)
-    await notifyAiKeyInvalid(db, accountId).catch((notifyErr) => {
-      console.error('[ai auto-reply] failed to send invalid-key notification:', notifyErr)
-    })
+    // discovered only because a customer complained). Now: owner
+    // notification + a critical ops alert (see `surfaceInvalidKey`). No
+    // per-conversation handoff — the whole account is down, fixing the
+    // key is the one real remedy.
+    await surfaceInvalidKey(db, accountId, err.message)
     return
   }
 
@@ -702,6 +937,7 @@ async function handleAiGenerationFailure(args: {
     alreadyAssigned,
     summary:
       '🤖 La IA tuvo un error temporal con el proveedor y no pudo generar una respuesta (se reintentó una vez). La conversación se pasó a un humano para darle seguimiento.',
+    transient: true,
   })
 }
 
@@ -774,17 +1010,39 @@ async function handOffToHuman(args: {
   handoffAgentId: string | null
   alreadyAssigned: boolean
   summary: string
+  /** True when a TRANSIENT fault caused this (provider timeout, a stray
+   *  marker, a calendar hiccup, the reply cap) — the dispatcher may
+   *  auto-recover the bot once after a grace period (migration 115).
+   *  False (default) for an explicit customer request / manual pause,
+   *  which never auto-recovers. Always written, so a later explicit
+   *  handoff clears a stale `true` from an earlier recovered one. */
+  transient?: boolean
 }): Promise<void> {
-  const { db, conversationId, handoffAgentId, alreadyAssigned, summary } = args
+  const { db, conversationId, handoffAgentId, alreadyAssigned, summary, transient = false } = args
   const update: Record<string, unknown> = {
     ai_autoreply_disabled: true,
     ai_handoff_summary: summary,
     ai_handoff_at: new Date().toISOString(),
+    ai_handoff_transient: transient ? true : null,
   }
   if (handoffAgentId && !alreadyAssigned) {
     update.assigned_agent_id = handoffAgentId
   }
-  await db.from('conversations').update(update).eq('id', conversationId)
+  const { error: updError } = await db.from('conversations').update(update).eq('id', conversationId)
+  if (updError) {
+    // The one thing this function MUST do is pause the bot + record the
+    // reason. If even that failed, the bot may keep replying into a
+    // thread a human was supposed to take — make it loud.
+    console.error('[ai auto-reply] handoff conversations.update failed:', updError)
+    void dispatchSystemAlert({
+      severity: 'warning',
+      source: 'ai_dispatch_error',
+      title: 'AI handoff could not pause the bot',
+      detail: { conversation_id: conversationId, message: updError.message.slice(0, 300) },
+      dedupKey: `ai_handoff_fail:${conversationId}`,
+      throttleMinutes: 60,
+    })
+  }
 
   // Best-effort — a failed insert here must never block the handoff
   // itself (the conversation update above already paused the bot and
@@ -1304,6 +1562,7 @@ async function autoScheduleAppointment(args: {
       handoffAgentId,
       alreadyAssigned,
       summary: `🤖 La IA le confirmó una cita a este cliente pero no se logró agendar de verdad en Google Calendar (${reason}). Necesita que un humano la agende o le avise al cliente.`,
+      transient: true,
     })
 
   const start = new Date(proposal.start)
@@ -1448,6 +1707,7 @@ async function autoCreateQuoteFromChat(args: {
       handoffAgentId,
       alreadyAssigned,
       summary: `🤖 La IA le dijo a este cliente que le prepararía una cotización (${proposal.items.map((i) => `${i.name} x${i.qty}`).join(', ')}): ${reason}. Necesita que un humano la complete.`,
+      transient: true,
     })
 
   const { data: products } = await db

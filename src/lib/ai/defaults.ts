@@ -180,10 +180,17 @@ export const RESERVATION_MARKER_CATEGORIES = [
 ] as const
 
 /** Cap on generated reply length — keeps WhatsApp replies short and
- *  bounds token spend on the caller's own key. */
-export const MAX_OUTPUT_TOKENS = 1024
+ *  bounds token spend on the caller's own key. Raised from 1024 once the
+ *  hotel vertical started stacking several trailing markers after the
+ *  customer-facing text (temperature + a stage move + a multi-field
+ *  `record_reservation` payload + maybe `send_restaurant_menu`): at 1024
+ *  a normal room-and-dates reply could hit the ceiling mid-marker, so
+ *  the action silently never ran (or a half-written `[[…` fragment
+ *  reached the customer). 2048 leaves comfortable room for the reply
+ *  plus every marker and is still a short WhatsApp message. */
+export const MAX_OUTPUT_TOKENS = 2048
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 40_000
 const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
 const DEFAULT_AUTO_REPLY_RETRY_DELAY_MS = 1_500
 const DEFAULT_DEBOUNCE_MS = 60_000
@@ -394,7 +401,8 @@ export function buildSystemPrompt(args: {
       parts.push(
         `This is a hotel. Whenever the guest is asking about or requesting a ROOM, a SPA service, an outdoor ACTIVITY, a PACKAGE, or an EVENT, quietly build a record of it as you go: at the very end of your reply (after your customer-facing message, and after any other marker above), append ${RECORD_RESERVATION_SENTINEL_PREFIX}<category>|<key=value>;<key=value>;...${RECORD_RESERVATION_SENTINEL_SUFFIX}. ` +
           `<category> is exactly one of: ${RESERVATION_MARKER_CATEGORIES.join(', ')}. Keys (Spanish, include only the ones you actually know so far — never guess): servicio (the room/service/package/event name), personas (a number), entrada and salida (check-in / check-out as YYYY-MM-DD, for habitaciones and paquetes), fecha (the date the spa/activity/event is used, YYYY-MM-DD), minutos (a number, for spa/activities), salon (the hall, for eventos), decoracion (for eventos), precio (a number). ` +
-          `Re-emit this marker EVERY time you learn one more detail this turn, even if others are still missing — a partial record is expected and useful. Do NOT hand off, close the conversation, or stop helping just because a field is missing: keep asking for it naturally in your reply text. One marker per reply (the latest category being discussed). Never mention this marker to the customer. Example: ${RECORD_RESERVATION_SENTINEL_PREFIX}habitaciones|servicio=Suite Deluxe;personas=2;entrada=2026-05-01;salida=2026-05-04${RECORD_RESERVATION_SENTINEL_SUFFIX}`,
+          `Re-emit this marker EVERY time you learn one more detail this turn, even if others are still missing — a partial record is expected and useful. Do NOT hand off, close the conversation, or stop helping just because a field is missing: keep asking for it naturally in your reply text. ` +
+          `Format rules, follow them exactly: write the marker on ONE single line with NO line break anywhere inside it; emit AT MOST ONE ${RECORD_RESERVATION_SENTINEL_PREFIX}…${RECORD_RESERVATION_SENTINEL_SUFFIX} in the whole reply (the latest category being discussed — if the guest asked about two, pick the most recent); no spaces around the "|" or the "="; a value must never contain "]", ";" or a line break (if a name or note has one, drop that character). Never mention this marker to the customer. Example: ${RECORD_RESERVATION_SENTINEL_PREFIX}habitaciones|servicio=Suite Deluxe;personas=2;entrada=2026-05-01;salida=2026-05-04${RECORD_RESERVATION_SENTINEL_SUFFIX}`,
       )
     }
 
