@@ -11,7 +11,13 @@ interface DbMessage {
   content_type: string
   content_text: string | null
   media_url: string | null
-  media_type: string | null
+  // NOTE: `messages` has NO `media_type` column (see
+  // api/whatsapp/webhook/route.ts — "the schema has no media_type").
+  // Selecting it here made every buildConversationContext call throw a
+  // PostgREST 42703, which silently killed AI auto-reply for every
+  // account from the 2026-09-06 deploy until this fix. The image
+  // resolver derives the real MIME from the media download's
+  // Content-Type header instead of a DB hint.
 }
 
 /**
@@ -41,7 +47,7 @@ export async function buildConversationContext(
 
   const { data, error } = await db
     .from('messages')
-    .select('sender_type, content_type, content_text, media_url, media_type')
+    .select('sender_type, content_type, content_text, media_url')
     .eq('conversation_id', conversationId)
     // Automation templates persist the rendered/substituted body in
     // content_text. Treat them as assistant turns just like bot text so
@@ -64,7 +70,9 @@ export async function buildConversationContext(
       if (m.sender_type !== 'customer' || m.content_type !== 'image' || !m.media_url) {
         continue
       }
-      const img = await imageResolver(m.media_url, m.media_type)
+      // No DB MIME hint (see DbMessage note) — the resolver reads the
+      // real Content-Type from the download.
+      const img = await imageResolver(m.media_url, null)
       if (img) {
         imageByRow.set(i, [img])
         attached += 1

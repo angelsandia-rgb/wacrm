@@ -272,6 +272,19 @@ and polish.
 
 ### Fixed
 
+- **AI auto-reply was completely dead for every account (2026-09-06 →
+  2026-09-07).** The multimodal-vision change added `media_type` to the
+  `messages` SELECT in `buildConversationContext`, but that column does
+  not exist on the table — so every call threw a PostgREST `42703` and
+  the dispatcher bailed before ever reaching the model. No customer got
+  an automatic reply for ~1.5 days. The mocked unit test didn't catch it
+  (fake DB, no column validation); tsc/eslint/build don't check
+  `.select()` strings. Fix: drop the column; the image resolver already
+  derives the real MIME from the media download's `Content-Type`. Added
+  a test that validates the SELECT against the real `messages` schema.
+  (The `ai_dispatch_error` alert added the day before is what surfaced
+  it.)
+
 - **Invite / password links no longer die before the recipient clicks.**
   A new owner (or anyone resetting a password) often landed on _"That
   link has expired or was already used"_ because link-preview and
