@@ -82,6 +82,9 @@ vi.mock("./admin-client", () => {
 });
 
 const engineSendText = vi.fn(async () => ({ whatsapp_message_id: "wamid.1" }));
+const engineSendInteractiveList = vi.fn(async () => ({
+  whatsapp_message_id: "wamid.4",
+}));
 
 vi.mock("./meta-send", () => ({
   engineSendText: (...a: unknown[]) =>
@@ -90,9 +93,8 @@ vi.mock("./meta-send", () => ({
   engineSendInteractiveButtons: vi.fn(async () => ({
     whatsapp_message_id: "wamid.3",
   })),
-  engineSendInteractiveList: vi.fn(async () => ({
-    whatsapp_message_id: "wamid.4",
-  })),
+  engineSendInteractiveList: (...a: unknown[]) =>
+    (engineSendInteractiveList as unknown as (...x: unknown[]) => unknown)(...a),
 }));
 
 import { dispatchInboundToFlows, entryTriggerTexts } from "./engine";
@@ -158,6 +160,8 @@ beforeEach(() => {
   h.state.insertedRun = null;
   h.state.rpcCalls = [];
   engineSendText.mockClear();
+  engineSendInteractiveList.mockClear();
+  engineSendInteractiveList.mockResolvedValue({ whatsapp_message_id: "wamid.4" });
 });
 
 describe("entryTriggerTexts", () => {
@@ -315,5 +319,64 @@ describe("dispatchInboundToFlows — entry triggers (#490)", () => {
     expect(result.consumed).toBe(true);
     expect(result.flow_run_id).toBe("run-1");
     expect(startedRuns()).toHaveLength(1);
+  });
+});
+
+describe("dispatchInboundToFlows — a menu that fails to send hands off, not silence", () => {
+  const MENU_NODES = [
+    {
+      id: "n1",
+      flow_id: "flow-1",
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "menu" },
+    },
+    {
+      id: "n2",
+      flow_id: "flow-1",
+      node_key: "menu",
+      node_type: "send_list",
+      config: {
+        text: "Pick",
+        button_label: "Options",
+        sections: [
+          { title: "S", rows: [{ reply_id: "r1", title: "One", next_node_key: "done" }] },
+        ],
+      },
+    },
+    { id: "n3", flow_id: "flow-1", node_key: "done", node_type: "end", config: {} },
+  ];
+
+  it("logs an error + handoff event and ends handed_off when the list send throws", async () => {
+    h.state.flows = [KEYWORD_FLOW];
+    h.state.nodes = MENU_NODES;
+    engineSendInteractiveList.mockRejectedValueOnce(
+      new Error('Interactive list section title "..." exceeds 24 chars.'),
+    );
+
+    const result = await dispatch({
+      kind: "text",
+      text: "order status",
+      meta_message_id: "m1",
+    });
+
+    const events = h.state.inserted
+      .filter((i) => i.table === "flow_run_events")
+      .map((i) => i.row);
+    expect(
+      events.some(
+        (e) =>
+          e.event_type === "error" &&
+          (e.payload as { reason?: string })?.reason === "send_menu_failed",
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (e) =>
+          e.event_type === "handoff" &&
+          (e.payload as { reason?: string })?.reason === "send_menu_failed",
+      ),
+    ).toBe(true);
+    expect(result.outcome).toBe("handed_off");
   });
 });
