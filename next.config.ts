@@ -141,6 +141,18 @@ const nextConfig: NextConfig = {
    * they apply to every response regardless of which cache rule
    * matched.
    */
+  /**
+   * Short public-catalog URL. The catalog page lives at
+   * /catalog/[accountId] (the segment is a UUID or the account's
+   * `catalog_slug`, migration 116). `/c/<slug>` is a same-URL alias so
+   * a company can share `chatsandia.com/c/mi-empresa` instead of a
+   * 36-char UUID. Query strings (e.g. the signed `?c=` conversation
+   * token) pass straight through a rewrite.
+   */
+  async rewrites() {
+    return [{ source: '/c/:slug', destination: '/catalog/:slug' }]
+  },
+
   async headers() {
     return [
       {

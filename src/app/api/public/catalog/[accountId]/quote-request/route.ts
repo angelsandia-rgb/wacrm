@@ -43,6 +43,7 @@ import {
 } from '@/lib/quotes/send-quote'
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 import { verifyCatalogConversation } from '@/lib/products/catalog-link-token'
+import { resolveCatalogAccountId } from '@/lib/catalog/resolve-account'
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get('x-forwarded-for')
@@ -76,8 +77,8 @@ export async function POST(
   const limit = await checkSharedRateLimit(`public-catalog-quote:${ip}`, RATE_LIMITS.publicCatalogQuote)
   if (!limit.success) return rateLimitResponse(limit)
 
-  const { accountId } = await params
-  if (!accountId) {
+  const { accountId: segment } = await params
+  if (!segment) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
@@ -109,12 +110,9 @@ export async function POST(
 
   const db = supabaseAdmin()
 
-  const { data: account } = await db
-    .from('accounts')
-    .select('id')
-    .eq('id', accountId)
-    .maybeSingle()
-  if (!account) {
+  // `segment` is the account UUID or its `catalog_slug` (/c/<slug>).
+  const accountId = await resolveCatalogAccountId(db, segment)
+  if (!accountId) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 

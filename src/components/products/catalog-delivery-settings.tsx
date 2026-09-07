@@ -15,11 +15,16 @@ import {
   ExternalLink,
   MessageSquareText,
   UtensilsCrossed,
+  Link as LinkIcon,
+  Copy,
+  Check,
 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { uploadAccountMedia, MEDIA_MAX_BYTES_BY_KIND } from "@/lib/storage/upload-media";
+import { slugifyCatalog, isValidCatalogSlug } from "@/lib/catalog/slug";
+import { readResponseJson } from "@/lib/http/response-json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -54,9 +59,33 @@ interface CatalogRow {
  */
 export function CatalogDeliverySettings() {
   const t = useTranslations("Products.catalog");
-  const { accountId, account, canEditSettings, profileLoading } = useAuth();
+  const { accountId, account, canEditSettings, profileLoading, refreshProfile } = useAuth();
   const isHotel = account?.industry_vertical === "hotel";
   const supabase = createClient();
+
+  // Public link (`catalog_slug`) + banner (`catalog_banner_url`) — both
+  // live on `account` already, saved via PATCH /api/account (slug needs
+  // uniqueness + format validation the direct client update can't give).
+  const [slug, setSlug] = useState("");
+  const [bannerUrl, setBannerUrl] = useState("");
+  const [bannerUploading, setBannerUploading] = useState(false);
+  const [brandingSaving, setBrandingSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setSlug(account?.catalog_slug ?? "");
+    setBannerUrl(account?.catalog_banner_url ?? "");
+  }, [account?.catalog_slug, account?.catalog_banner_url]);
+
+  const publicBase =
+    (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
+      (typeof window !== "undefined" ? window.location.origin : "")) ?? "";
+  const publicCatalogUrl = slug.trim()
+    ? `${publicBase}/c/${slug.trim()}`
+    : `${publicBase}/catalog/${accountId ?? ""}`;
+  const brandingDirty =
+    slug.trim() !== (account?.catalog_slug ?? "") ||
+    bannerUrl.trim() !== (account?.catalog_banner_url ?? "");
 
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<CatalogMode>("digital");
@@ -228,6 +257,68 @@ export function CatalogDeliverySettings() {
     }
   }
 
+  async function handleBannerFile(file: File) {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      toast.error(t("invalidImage"));
+      return;
+    }
+    if (file.size > MEDIA_MAX_BYTES_BY_KIND.image) {
+      toast.error(t("fileTooLarge"));
+      return;
+    }
+    setBannerUploading(true);
+    try {
+      const { publicUrl } = await uploadAccountMedia("catalog-media", file);
+      setBannerUrl(publicUrl);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("uploadFailed"));
+    } finally {
+      setBannerUploading(false);
+    }
+  }
+
+  async function handleSaveBranding() {
+    if (!brandingDirty) return;
+    const cleanSlug = slug.trim() ? slugifyCatalog(slug) : "";
+    if (cleanSlug && !isValidCatalogSlug(cleanSlug)) {
+      toast.error(t("publicLinkHint"));
+      return;
+    }
+    setBrandingSaving(true);
+    try {
+      const res = await fetch("/api/account", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          catalog_slug: cleanSlug,
+          catalog_banner_url: bannerUrl.trim(),
+        }),
+      });
+      const data = await readResponseJson<{ error?: string }>(res).catch(() => ({}) as { error?: string });
+      if (!res.ok) {
+        toast.error(data?.error || t("saveFailed"));
+        return;
+      }
+      setSlug(cleanSlug);
+      await refreshProfile();
+      toast.success(t("saveSuccess"));
+    } catch {
+      toast.error(t("saveFailed"));
+    } finally {
+      setBrandingSaving(false);
+    }
+  }
+
+  async function copyPublicLink() {
+    try {
+      await navigator.clipboard.writeText(publicCatalogUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error(t("uploadFailed"));
+    }
+  }
+
   const disabled = !canEditSettings || profileLoading || loading;
 
   const MODES: { value: CatalogMode; label: string; icon: typeof Globe }[] = [
@@ -254,6 +345,113 @@ export function CatalogDeliverySettings() {
   return (
     <section className="max-w-2xl animate-in fade-in-50 duration-200 space-y-6">
       <SettingsPanelHead title={t("title")} description={t("description")} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-foreground">
+            <LinkIcon className="size-4 text-primary shrink-0" />
+            {t("publicLinkTitle")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">{t("publicLinkDesc")}</p>
+
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm">
+            <span className="flex-1 truncate text-foreground">{publicCatalogUrl}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={copyPublicLink}
+              title={copied ? t("copied") : t("copy")}
+            >
+              {copied ? <Check className="size-3.5 text-primary" /> : <Copy className="size-3.5" />}
+            </Button>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-muted-foreground">{t("publicLinkLabel")}</Label>
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-sm text-muted-foreground">/c/</span>
+              <Input
+                value={slug}
+                disabled={disabled}
+                placeholder="mi-empresa"
+                onChange={(e) => setSlug(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">{t("publicLinkHint")}</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">{t("bannerLabel")}</Label>
+            <p className="text-xs text-muted-foreground">{t("bannerHint")}</p>
+            {bannerUrl.trim() ? (
+              <div className="overflow-hidden rounded-md border border-border">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={bannerUrl.trim()} alt="" className="h-28 w-full object-cover" />
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("bannerNone")}</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={disabled || bannerUploading}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleBannerFile(file);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled || bannerUploading}
+                  onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement)?.click()}
+                >
+                  {bannerUploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  {bannerUrl.trim() ? t("bannerReplaceBtn") : t("bannerUploadBtn")}
+                </Button>
+              </label>
+              {bannerUrl.trim() && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={disabled || bannerUploading}
+                  onClick={() => setBannerUrl("")}
+                >
+                  <X className="size-4" />
+                  {t("remove")}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {canEditSettings && (
+            <Button
+              onClick={handleSaveBranding}
+              disabled={brandingSaving || !brandingDirty || disabled}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {brandingSaving ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("saving")}
+                </>
+              ) : (
+                t("save")
+              )}
+            </Button>
+          )}
+          {!canEditSettings && <p className="text-xs text-muted-foreground">{t("adminOnlyHint")}</p>}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

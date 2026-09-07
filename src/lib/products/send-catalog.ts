@@ -28,6 +28,7 @@ interface CatalogDeliveryRow {
   catalog_delivery_mode: 'digital' | 'pdf' | 'photos'
   catalog_pdf_url: string | null
   catalog_photo_urls: string[] | null
+  catalog_slug: string | null
 }
 
 /**
@@ -57,7 +58,7 @@ export async function sendCatalogToConversation(
 ): Promise<{ catalogUrl: string | null }> {
   const { data: account, error: accountError } = await db
     .from('accounts')
-    .select('catalog_delivery_mode, catalog_pdf_url, catalog_photo_urls')
+    .select('catalog_delivery_mode, catalog_pdf_url, catalog_photo_urls, catalog_slug')
     .eq('id', accountId)
     .maybeSingle<CatalogDeliveryRow>()
   if (accountError) throw new SendCatalogError(accountError.message, 500)
@@ -125,7 +126,11 @@ export async function sendCatalogToConversation(
   // possibly on a different channel — to deliver the quote into. The id
   // is HMAC-signed (see catalog-link-token.ts) so a visitor can't swap
   // in another conversation's id.
-  const catalogUrl = `${siteBaseUrl()}/catalog/${accountId}?c=${signCatalogConversation(conversationId)}`
+  // Prefer the short /c/<slug> alias (migration 116) when the account
+  // has a slug; fall back to /catalog/<uuid>. Both resolve to the same
+  // page and the signed `?c=` token works through the rewrite.
+  const catalogPath = account?.catalog_slug ? `/c/${account.catalog_slug}` : `/catalog/${accountId}`
+  const catalogUrl = `${siteBaseUrl()}${catalogPath}?c=${signCatalogConversation(conversationId)}`
 
   try {
     await sendMessageToConversation(db, accountId, {

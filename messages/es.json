@@ -1712,7 +1712,18 @@
       "menuHint": "El PDF del menú de tu restaurante (ya publicado en línea). Se envía cuando un huésped pide el menú — automáticamente por la IA, o desde el menú + del cuadro de mensajes.",
       "menuUrlLabel": "Enlace del PDF del menú",
       "menuUploadBtn": "Subir PDF",
-      "menuReplaceBtn": "Reemplazar PDF"
+      "menuReplaceBtn": "Reemplazar PDF",
+      "publicLinkTitle": "Enlace público del catálogo",
+      "publicLinkDesc": "Comparte este enlace por WhatsApp, Instagram o Facebook para que tus clientes vean tu catálogo. Funciona con o sin nombre corto.",
+      "publicLinkLabel": "Nombre corto",
+      "publicLinkHint": "De 3 a 40 caracteres: solo letras, números y guiones.",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "bannerLabel": "Portada / banner",
+      "bannerHint": "Se muestra a lo ancho en la parte superior de tu catálogo público.",
+      "bannerNone": "Aún no hay imagen de portada.",
+      "bannerUploadBtn": "Subir portada",
+      "bannerReplaceBtn": "Reemplazar portada"
     },
     "import": {
       "title": "Importar productos",

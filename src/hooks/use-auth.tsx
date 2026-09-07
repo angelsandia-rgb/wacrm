@@ -70,6 +70,12 @@ interface AccountSummary {
    *  non-null array (even empty) is an explicit per-company choice set
    *  in /admin. */
   hidden_nav_keys: string[] | null;
+  /** Short public-catalog handle (migration 116). `null` = the catalog
+   *  is only reachable at /catalog/<uuid>. When set, /c/<slug> works. */
+  catalog_slug: string | null;
+  /** Company banner image shown at the top of the public catalog
+   *  (migration 116). `null` = no banner. */
+  catalog_banner_url: string | null;
 }
 
 /**
@@ -273,7 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // USD fallback below for older schemas where it reads null);
             // enforce_single_session added in migration 067.
             .select(
-              'id, name, default_currency, suspended_at, suspended_reason, enforce_single_session, timezone, industry_vertical, hidden_nav_keys'
+              'id, name, default_currency, suspended_at, suspended_reason, enforce_single_session, timezone, industry_vertical, hidden_nav_keys, catalog_slug, catalog_banner_url'
             )
             .eq('id', data.account_id)
             .maybeSingle();
@@ -297,6 +303,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               hidden_nav_keys: Array.isArray(account.hidden_nav_keys)
                 ? (account.hidden_nav_keys as string[])
                 : null,
+              catalog_slug: (account.catalog_slug as string | null) ?? null,
+              catalog_banner_url: (account.catalog_banner_url as string | null) ?? null,
             };
           }
         }
