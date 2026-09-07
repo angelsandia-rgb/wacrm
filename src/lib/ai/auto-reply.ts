@@ -389,7 +389,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, usage,
     } = generation
 
     // The provider call succeeded, so the key is valid again — clear any
@@ -650,6 +650,14 @@ export async function dispatchInboundToAiReply(
         await autoSetLeadTemperature({ db, accountId, contactId, configOwnerUserId, temperature: leadTemperature })
       } catch (err) {
         console.error('[ai auto-reply] autonomous set_temperature failed:', err)
+      }
+    }
+
+    if (contactName) {
+      try {
+        await autoSetContactName({ db, accountId, contactId, configOwnerUserId, name: contactName })
+      } catch (err) {
+        console.error('[ai auto-reply] autonomous set_contact_name failed:', err)
       }
     }
 
@@ -1463,6 +1471,80 @@ async function autoSetLeadTemperature(args: {
     contact_id: contactId,
     lead_temperature: temperature,
   })
+}
+
+/**
+ * Replace the contact's name with the one the customer stated in the
+ * chat (`SET_CONTACT_NAME_SENTINEL_PREFIX`). Contacts are created with
+ * the WhatsApp profile name, which is often a nickname / "Sarah iPhone"
+ * / blank; once the person says who they are, that's what should show
+ * in the CRM and — crucially — in the reservations Google Sheet, whose
+ * "Cliente" column is read straight off `contacts.name`.
+ *
+ * Guards hard because the value is model output: trims, collapses
+ * whitespace, requires 2–80 chars with at least one letter, and refuses
+ * the contact's own phone number. No-ops when the name already matches
+ * (case-insensitive). After updating, re-fires `reservation.updated`
+ * for every one of this contact's reservations that already has a sheet
+ * row, so the sheet's name cell is rewritten in place.
+ */
+async function autoSetContactName(args: {
+  db: SupabaseClient
+  accountId: string
+  contactId: string
+  configOwnerUserId: string
+  name: string
+}): Promise<void> {
+  const { db, accountId, contactId, configOwnerUserId, name } = args
+
+  const clean = name.trim().replace(/\s+/g, ' ').slice(0, 80)
+  if (clean.length < 2 || !/\p{L}/u.test(clean)) return
+
+  const { data: contact } = await db
+    .from('contacts')
+    .select('name, phone')
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+    .maybeSingle<{ name: string | null; phone: string | null }>()
+  if (!contact) return
+
+  const digits = (s: string) => s.replace(/\D/g, '')
+  if (contact.phone && digits(clean) && digits(clean) === digits(contact.phone)) return
+  if ((contact.name ?? '').trim().toLowerCase() === clean.toLowerCase()) return
+
+  const { error } = await db
+    .from('contacts')
+    .update({ name: clean, updated_at: new Date().toISOString() })
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+  if (error) {
+    console.error('[ai auto-reply] autonomous set_contact_name update failed:', error)
+    return
+  }
+
+  await db.from('ai_action_log').insert({
+    account_id: accountId,
+    actor_user_id: configOwnerUserId,
+    action: 'set_contact_name',
+    target_id: contactId,
+    input: { name: clean, previous: contact.name ?? null, source: 'auto_reply_autonomous' },
+    result: { contact_id: contactId, name: clean },
+  })
+
+  // Rewrite the name into any Google Sheet reservation rows already
+  // written for this contact (row-builder reads `contacts.name`).
+  const { data: rows } = await db
+    .from('reservation_requests')
+    .select('id')
+    .eq('account_id', accountId)
+    .eq('contact_id', contactId)
+    .not('sheet_row', 'is', null)
+  for (const r of (rows ?? []) as { id: string }[]) {
+    void dispatchWebhookEvent(db, accountId, 'reservation.updated', {
+      reservation_id: r.id,
+      source: 'ai_chat',
+    })
+  }
 }
 
 /**

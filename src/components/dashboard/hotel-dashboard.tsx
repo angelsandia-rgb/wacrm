@@ -18,7 +18,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
 import {
   daysAgoStart,
-  startOfLocalDay,
+  startOfNextLocalDay,
   granularityForRangeDays,
 } from '@/lib/dashboard/date-utils'
 import { loadHotelMetrics, type HotelMetricsData } from '@/lib/hotel-metrics/queries'
@@ -71,7 +71,9 @@ export function HotelDashboard() {
   }, [load])
 
   const window: DateWindow = useMemo(
-    () => ({ start: daysAgoStart(range - 1), end: startOfLocalDay() }),
+    // `end` is exclusive in hotel-metrics — use start-of-tomorrow so
+    // everything that happened today is inside the window.
+    () => ({ start: daysAgoStart(range - 1), end: startOfNextLocalDay() }),
     [range],
   )
 
@@ -189,7 +191,7 @@ export function HotelDashboard() {
             />
             <MetricCard
               title={t('expectedGuests')}
-              value={view.k.guests.toLocaleString()}
+              value={(view.next7.arrivalGuests + view.next7.serviceGuests).toLocaleString()}
               icon={Users}
               subtitle={t('expectedGuestsSub')}
             />

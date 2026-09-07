@@ -9,7 +9,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
 import {
   daysAgoStart,
-  startOfLocalDay,
+  startOfNextLocalDay,
   granularityForRangeDays,
   formatDateRangeLabel,
 } from '@/lib/dashboard/date-utils'
@@ -64,7 +64,10 @@ export function HotelKpis() {
 
   const view = useMemo(() => {
     if (!data) return null
-    const window: DateWindow = { start: daysAgoStart(range - 1), end: startOfLocalDay() }
+    // `end` is exclusive in hotel-metrics — start-of-tomorrow keeps
+    // today inside the current window; the previous period still ends
+    // at the start of the current one.
+    const window: DateWindow = { start: daysAgoStart(range - 1), end: startOfNextLocalDay() }
     const prevWindow: DateWindow = {
       start: daysAgoStart(range * 2 - 1),
       end: daysAgoStart(range),

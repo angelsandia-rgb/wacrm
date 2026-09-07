@@ -50,6 +50,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -68,6 +69,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -83,6 +85,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -101,6 +104,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -126,6 +130,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -159,6 +164,7 @@ describe('parseGeneration', () => {
       sendCatalog: true,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -186,6 +192,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: 'hot',
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -215,6 +222,29 @@ describe('parseGeneration', () => {
     expect(res.text).toBe('Perfecto.')
   })
 
+  it('extracts + strips the set-contact-name sentinel', () => {
+    const res = parseGeneration(
+      'Mucho gusto, Ana. [[ACTION:set_contact_name:Ana María Pérez]] [[ACTION:set_temperature:warm]]',
+    )
+    expect(res.contactName).toBe('Ana María Pérez')
+    expect(res.leadTemperature).toBe('warm')
+    expect(res.text).toBe('Mucho gusto, Ana.')
+  })
+
+  it('null contactName when the marker is absent; whitespace collapsed when present', () => {
+    expect(parseGeneration('Just a reply.').contactName).toBeNull()
+    expect(parseGeneration('ok [[ACTION:set_contact_name:  Juan   Díaz ]]').contactName).toBe('Juan Díaz')
+  })
+
+  it('strips a stray duplicate set-contact-name marker without a handoff', () => {
+    const res = parseGeneration(
+      'Listo. [[ACTION:set_contact_name:Juan]] extra [[ACTION:set_contact_name:Juan]]',
+    )
+    expect(res.contactName).toBe('Juan')
+    expect(res.sentinelLeakDetected).toBe(false)
+    expect(res.text).toBe('Listo.  extra')
+  })
+
   it('passes usage straight through', () => {
     const usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
     expect(parseGeneration('Hi', usage)).toEqual({
@@ -225,6 +255,7 @@ describe('parseGeneration', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -489,6 +520,7 @@ describe('generateReply — OpenAI', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,
@@ -558,6 +590,7 @@ describe('generateReply — Anthropic', () => {
       sendCatalog: false,
       sendRestaurantMenu: false,
       leadTemperature: null,
+      contactName: null,
       appointmentProposal: null,
       quoteProposal: null,
       sentinelLeakDetected: false,

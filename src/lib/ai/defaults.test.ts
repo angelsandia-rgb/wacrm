@@ -3,6 +3,7 @@ import {
   buildSystemPrompt,
   RECORD_RESERVATION_SENTINEL_PREFIX,
   SEND_RESTAURANT_MENU_SENTINEL,
+  SET_CONTACT_NAME_SENTINEL_PREFIX,
 } from './defaults'
 
 describe('buildSystemPrompt — hotel reservation marker gate', () => {
@@ -37,6 +38,18 @@ describe('buildSystemPrompt — current-date grounding', () => {
   it('says nothing about dates when currentDate is omitted', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
     expect(p).not.toContain("business's own timezone")
+  })
+})
+
+describe('buildSystemPrompt — set-contact-name marker gate', () => {
+  it('teaches SET_CONTACT_NAME in auto_reply mode', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(p).toContain(SET_CONTACT_NAME_SENTINEL_PREFIX)
+  })
+
+  it('never mentions it in draft mode', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'draft' })
+    expect(p).not.toContain(SET_CONTACT_NAME_SENTINEL_PREFIX)
   })
 })
 
