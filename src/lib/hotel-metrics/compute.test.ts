@@ -5,7 +5,7 @@ import {
   windowDays,
   computeHotelKpis,
   hotelDaySeries,
-  hotelCategoryMix,
+  hotelCategoryBreakdown,
   upcomingArrivalsDepartures,
   type HotelReservation,
   type DateWindow,
@@ -15,6 +15,7 @@ function res(overrides: Partial<HotelReservation>): HotelReservation {
   return {
     check_in: null,
     check_out: null,
+    use_date: null,
     guests: null,
     estimated_price: null,
     status: 'approved',
@@ -70,29 +71,30 @@ describe('computeHotelKpis', () => {
     res({ check_in: '2026-03-25', check_out: '2026-03-27', estimated_price: 1500, status: 'denied', created_at: '2026-03-19T10:00:00Z' }),
     // pending
     res({ check_in: '2026-04-02', check_out: '2026-04-05', status: 'pending', created_at: '2026-03-28T10:00:00Z' }),
-    // a spa request — ignored by the room KPIs
-    res({ category: 'spa', estimated_price: 300, created_at: '2026-03-10T10:00:00Z' }),
+    // a spa request — counts toward demand, ignored by the ROOM KPIs
+    res({ category: 'spa', estimated_price: 300, guests: 1, created_at: '2026-03-10T10:00:00Z' }),
   ]
 
-  it('rooms = 10 → occupancy, ADR, RevPAR from confirmed room-nights', () => {
+  it('rooms only feed occupancy, ADR, RevPAR, room revenue', () => {
     const k = computeHotelKpis(reservations, 10, WINDOW)
     expect(k.roomNights).toBe(5) // 3 + 2
     expect(k.availableRoomNights).toBe(310) // 10 × 31
-    expect(k.revenue).toBeCloseTo(4700) // 2700 + 2000, both fully in window
+    expect(k.revenue).toBeCloseTo(4700) // 2700 + 2000, both fully in window (rooms only)
     expect(k.adr).toBeCloseTo(940) // 4700 / 5
     expect(k.occupancy).toBeCloseTo(5 / 310)
     expect(k.revpar).toBeCloseTo(4700 / 310)
-    expect(k.guests).toBe(5) // 2 + 3 (both check in inside March)
+    expect(k.guests).toBe(5) // 2 + 3 rooms (spa has no service date → not counted)
   })
 
-  it('requests + approval rate + LOS + lead time (created-in-window)', () => {
+  it('requests / approval / est. revenue span EVERY category', () => {
     const k = computeHotelKpis(reservations, 10, WINDOW)
-    expect(k.requests).toBe(4) // 4 room requests created in March (spa excluded)
-    expect(k.requestsApproved).toBe(2)
+    expect(k.requests).toBe(5) // 4 room requests + 1 spa, all created in March
+    expect(k.requestsApproved).toBe(3) // 2 rooms + spa
     expect(k.requestsDenied).toBe(1)
     expect(k.requestsPending).toBe(1)
-    expect(k.approvalRate).toBeCloseTo(2 / 3) // 2 approved / 3 decided
-    expect(k.avgLengthOfStay).toBeCloseTo(2.5) // (3 + 2) / 2
+    expect(k.approvalRate).toBeCloseTo(3 / 4) // 3 approved / 4 decided
+    expect(k.estRevenue).toBeCloseTo(5000) // 2700 + 2000 + 300 (approved, all cats)
+    expect(k.avgLengthOfStay).toBeCloseTo(2.5) // (3 + 2) / 2 — rooms only have a stay
     expect(k.avgLeadTimeDays).toBeCloseTo((8 + 2) / 2) // 03-05→03-13=8, 03-18→03-20=2
   })
 
@@ -115,9 +117,13 @@ describe('computeHotelKpis', () => {
 })
 
 describe('hotelDaySeries', () => {
-  it('spreads a stay across its nights and buckets requests by creation day', () => {
+  it('spreads a room stay across its nights and buckets EVERY-category requests by creation day', () => {
     const s = hotelDaySeries(
-      [res({ check_in: '2026-03-02', check_out: '2026-03-05', estimated_price: 300, created_at: '2026-03-01T09:00:00Z' })],
+      [
+        res({ check_in: '2026-03-02', check_out: '2026-03-05', estimated_price: 300, created_at: '2026-03-01T09:00:00Z' }),
+        res({ category: 'spa', created_at: '2026-03-01T18:00:00Z' }),
+        res({ category: 'eventos', created_at: '2026-03-06T10:00:00Z' }),
+      ],
       WINDOW,
     )
     expect(s).toHaveLength(31)
@@ -128,25 +134,52 @@ describe('hotelDaySeries', () => {
     expect(d2.revenue).toBeCloseTo(100)
     expect(d4.roomNights).toBe(1) // check-out day is NOT a night
     expect(d5.roomNights).toBe(0)
-    expect(s.find((p) => p.day === '2026-03-01')!.requests).toBe(1)
+    // room request + spa request both created on 03-01
+    expect(s.find((p) => p.day === '2026-03-01')!.requests).toBe(2)
+    expect(s.find((p) => p.day === '2026-03-06')!.requests).toBe(1) // eventos
   })
 })
 
-describe('hotelCategoryMix', () => {
-  it('groups created-in-window requests + revenue by category, ordered', () => {
-    const mix = hotelCategoryMix(
+describe('hotelCategoryBreakdown', () => {
+  it('always returns the five categories in order, even at zero', () => {
+    const b = hotelCategoryBreakdown([], WINDOW)
+    expect(b.map((r) => r.category)).toEqual([
+      'habitaciones',
+      'spa',
+      'actividades',
+      'paquetes',
+      'eventos',
+    ])
+    expect(b.every((r) => r.requests === 0 && r.approvalRate === null)).toBe(true)
+  })
+
+  it('tallies requests, status, approval rate, est. revenue and guests per category', () => {
+    const b = hotelCategoryBreakdown(
       [
-        res({ category: 'habitaciones', estimated_price: 900 }),
-        res({ category: 'habitaciones', estimated_price: 900 }),
-        res({ category: 'spa', estimated_price: 300 }),
-        res({ category: 'eventos', estimated_price: 5000, created_at: '2026-01-01T00:00:00Z' }), // out of window
+        res({ category: 'habitaciones', status: 'approved', estimated_price: 900, guests: 2 }),
+        res({ category: 'habitaciones', status: 'denied', estimated_price: 900 }),
+        res({ category: 'spa', status: 'approved', estimated_price: 300, guests: 1 }),
+        res({ category: 'spa', status: 'pending', estimated_price: 300 }),
+        res({ category: 'eventos', status: 'approved', estimated_price: 5000, created_at: '2026-01-01T00:00:00Z' }), // out of window
       ],
       WINDOW,
     )
-    expect(mix).toEqual([
-      { category: 'habitaciones', requests: 2, revenue: 1800 },
-      { category: 'spa', requests: 1, revenue: 300 },
-    ])
+    const rooms = b.find((r) => r.category === 'habitaciones')!
+    expect(rooms).toMatchObject({ requests: 2, approved: 1, denied: 1, estRevenue: 900, guests: 2 })
+    expect(rooms.approvalRate).toBeCloseTo(0.5)
+
+    const spa = b.find((r) => r.category === 'spa')!
+    expect(spa).toMatchObject({ requests: 2, approved: 1, pending: 1, estRevenue: 300, guests: 1 })
+    expect(spa.approvalRate).toBe(1) // 1 approved / 1 decided (pending is not "decided")
+
+    const eventos = b.find((r) => r.category === 'eventos')!
+    expect(eventos).toMatchObject({ requests: 0, estRevenue: 0 }) // out-of-window row excluded
+  })
+
+  it('folds an unknown category into "otros" only when present', () => {
+    const withOther = hotelCategoryBreakdown([res({ category: 'transporte', status: 'approved' })], WINDOW)
+    expect(withOther.map((r) => r.category)).toContain('otros')
+    expect(withOther.find((r) => r.category === 'otros')!.requests).toBe(1)
   })
 })
 
@@ -159,6 +192,9 @@ describe('upcomingArrivalsDepartures', () => {
         res({ check_in: '2026-03-09', check_out: '2026-03-14', guests: 4 }), // departure in range, arrival not
         res({ check_in: '2026-03-20', check_out: '2026-03-25' }), // both out of range
         res({ check_in: '2026-03-13', check_out: '2026-03-14', status: 'pending' }), // pending → ignored
+        res({ category: 'spa', use_date: '2026-03-12' }), // service in range
+        res({ category: 'eventos', use_date: '2026-03-30' }), // service out of range
+        res({ category: 'actividades', use_date: '2026-03-15', status: 'pending' }), // pending → ignored
       ],
       from,
       7,
@@ -166,5 +202,6 @@ describe('upcomingArrivalsDepartures', () => {
     expect(r.arrivals).toBe(1)
     expect(r.departures).toBe(2) // 2026-03-15 and 2026-03-14 both fall in [03-10, 03-17)
     expect(r.arrivalGuests).toBe(2)
+    expect(r.services).toBe(1) // only the approved spa on 03-12
   })
 })

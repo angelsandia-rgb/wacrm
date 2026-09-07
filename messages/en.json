@@ -186,7 +186,11 @@
         "paquetes": "Packages",
         "eventos": "Events",
         "otros": "Other"
-      }
+      },
+      "upcomingServices": "Services (next 7 days)",
+      "upcomingServicesSub": "Spa, activities & events booked",
+      "byCategory": "By product category",
+      "byCategoryDesc": "Requests, approvals and estimated revenue for every category you offer"
     }
   },
   "Kpis": {
@@ -281,14 +285,14 @@
       "approvalRate": "Approval rate",
       "approvalSub": "{approved} approved · {denied} denied · {pending} pending",
       "avgStay": "Avg. length of stay",
-      "avgStaySub": "Nights per approved reservation",
+      "avgStaySub": "Nights per approved room / package stay",
       "leadTime": "Booking lead time",
       "leadTimeValue": "{days} days",
-      "leadTimeSub": "From request to check-in",
+      "leadTimeSub": "From request to the service date",
       "requestsOverTime": "Requests over time",
       "requestsOverTimeDesc": "Reservation requests received per period",
       "revenueOverTime": "Revenue over time",
-      "revenueOverTimeDesc": "Estimated value of approved reservations",
+      "revenueOverTimeDesc": "Estimated value of approved room reservations",
       "occByDay": "Room-nights by day",
       "occByDayDesc": "Occupied room-nights per day",
       "noRequestsYet": "No reservation requests yet",
@@ -311,7 +315,10 @@
         "otros": "Other"
       },
       "adminOnlyTitle": "Admins only",
-      "adminOnlyHint": "This page includes revenue figures. Ask an account admin to review it."
+      "adminOnlyHint": "This page includes revenue figures. Ask an account admin to review it.",
+      "requestsSub": "Across every product category",
+      "byCategory": "By product category",
+      "byCategoryDesc": "Requests, approvals and estimated revenue per category"
     }
   },
   "Inbox": {
@@ -2728,5 +2735,24 @@
     "rsvpDeclined": "declined",
     "rsvpTentative": "maybe",
     "rsvpPending": "no reply"
+  },
+  "HotelMetrics": {
+    "cat": {
+      "habitaciones": "Rooms",
+      "spa": "Spa",
+      "actividades": "Outdoor activities",
+      "paquetes": "Packages",
+      "eventos": "Events",
+      "otros": "Other"
+    },
+    "col": {
+      "category": "Category",
+      "requests": "Requests",
+      "approved": "Approved",
+      "approvalRate": "Approval",
+      "revenue": "Est. revenue",
+      "guests": "Guests",
+      "total": "Total"
+    }
   }
 }

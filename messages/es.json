@@ -810,7 +810,11 @@
         "paquetes": "Paquetes",
         "eventos": "Eventos",
         "otros": "Otros"
-      }
+      },
+      "upcomingServices": "Servicios (próximos 7 días)",
+      "upcomingServicesSub": "Spa, actividades y eventos reservados",
+      "byCategory": "Por categoría de producto",
+      "byCategoryDesc": "Solicitudes, aprobaciones e ingreso estimado de cada categoría que ofreces"
     }
   },
   "Flows": {
@@ -1428,14 +1432,14 @@
       "approvalRate": "Tasa de aprobación",
       "approvalSub": "{approved} aprobadas · {denied} rechazadas · {pending} pendientes",
       "avgStay": "Estadía promedio",
-      "avgStaySub": "Noches por reserva aprobada",
+      "avgStaySub": "Noches por estadía aprobada (habitación / paquete)",
       "leadTime": "Anticipación de reserva",
       "leadTimeValue": "{days} días",
-      "leadTimeSub": "Desde la solicitud hasta el check-in",
+      "leadTimeSub": "Desde la solicitud hasta la fecha del servicio",
       "requestsOverTime": "Solicitudes en el tiempo",
       "requestsOverTimeDesc": "Solicitudes de reserva recibidas por período",
       "revenueOverTime": "Ingresos en el tiempo",
-      "revenueOverTimeDesc": "Valor estimado de las reservas aprobadas",
+      "revenueOverTimeDesc": "Valor estimado de las reservas de habitación aprobadas",
       "occByDay": "Noches-habitación por día",
       "occByDayDesc": "Noches-habitación ocupadas por día",
       "noRequestsYet": "Aún no hay solicitudes de reserva",
@@ -1458,7 +1462,10 @@
         "otros": "Otros"
       },
       "adminOnlyTitle": "Solo administradores",
-      "adminOnlyHint": "Esta página incluye cifras de ingresos. Pídele a un administrador de la cuenta que la revise."
+      "adminOnlyHint": "Esta página incluye cifras de ingresos. Pídele a un administrador de la cuenta que la revise.",
+      "requestsSub": "De todas las categorías de producto",
+      "byCategory": "Por categoría de producto",
+      "byCategoryDesc": "Solicitudes, aprobaciones e ingreso estimado por categoría"
     }
   },
   "LoginPage": {
@@ -2728,5 +2735,24 @@
     "rsvpDeclined": "rechazó",
     "rsvpTentative": "quizás",
     "rsvpPending": "sin responder"
+  },
+  "HotelMetrics": {
+    "cat": {
+      "habitaciones": "Habitaciones",
+      "spa": "Spa",
+      "actividades": "Actividades al aire libre",
+      "paquetes": "Paquetes",
+      "eventos": "Eventos",
+      "otros": "Otros"
+    },
+    "col": {
+      "category": "Categoría",
+      "requests": "Solicitudes",
+      "approved": "Aprobadas",
+      "approvalRate": "Aprobación",
+      "revenue": "Ingreso est.",
+      "guests": "Huéspedes",
+      "total": "Total"
+    }
   }
 }

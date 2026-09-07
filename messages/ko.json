@@ -186,7 +186,11 @@
         "paquetes": "패키지",
         "eventos": "이벤트",
         "otros": "기타"
-      }
+      },
+      "upcomingServices": "서비스 (향후 7일)",
+      "upcomingServicesSub": "예약된 스파·활동·이벤트",
+      "byCategory": "제품 카테고리별",
+      "byCategoryDesc": "제공하는 모든 카테고리의 요청, 승인, 예상 매출"
     }
   },
   "Kpis": {
@@ -281,14 +285,14 @@
       "approvalRate": "승인율",
       "approvalSub": "승인 {approved} · 거절 {denied} · 대기 {pending}",
       "avgStay": "평균 숙박 기간",
-      "avgStaySub": "승인된 예약당 박수",
+      "avgStaySub": "승인된 객실/패키지 숙박당 박수",
       "leadTime": "예약 리드 타임",
       "leadTimeValue": "{days}일",
-      "leadTimeSub": "요청부터 체크인까지",
+      "leadTimeSub": "요청부터 서비스 날짜까지",
       "requestsOverTime": "기간별 요청",
       "requestsOverTimeDesc": "기간별 접수된 예약 요청",
       "revenueOverTime": "기간별 매출",
-      "revenueOverTimeDesc": "승인된 예약의 예상 금액",
+      "revenueOverTimeDesc": "승인된 객실 예약의 예상 금액",
       "occByDay": "일별 객실 박수",
       "occByDayDesc": "일별 점유 객실 박수",
       "noRequestsYet": "아직 예약 요청이 없습니다",
@@ -311,7 +315,10 @@
         "otros": "기타"
       },
       "adminOnlyTitle": "관리자 전용",
-      "adminOnlyHint": "이 페이지에는 매출 수치가 포함됩니다. 계정 관리자에게 검토를 요청하세요."
+      "adminOnlyHint": "이 페이지에는 매출 수치가 포함됩니다. 계정 관리자에게 검토를 요청하세요.",
+      "requestsSub": "모든 제품 카테고리 합계",
+      "byCategory": "제품 카테고리별",
+      "byCategoryDesc": "카테고리별 요청, 승인, 예상 매출"
     }
   },
   "Inbox": {
@@ -2728,5 +2735,24 @@
     "rsvpDeclined": "거절함",
     "rsvpTentative": "미정",
     "rsvpPending": "응답 없음"
+  },
+  "HotelMetrics": {
+    "cat": {
+      "habitaciones": "객실",
+      "spa": "스파",
+      "actividades": "야외 활동",
+      "paquetes": "패키지",
+      "eventos": "이벤트",
+      "otros": "기타"
+    },
+    "col": {
+      "category": "카테고리",
+      "requests": "요청",
+      "approved": "승인",
+      "approvalRate": "승인율",
+      "revenue": "예상 매출",
+      "guests": "투숙객",
+      "total": "합계"
+    }
   }
 }

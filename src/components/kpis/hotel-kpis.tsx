@@ -17,7 +17,7 @@ import { loadHotelMetrics, type HotelMetricsData } from '@/lib/hotel-metrics/que
 import {
   computeHotelKpis,
   hotelDaySeries,
-  hotelCategoryMix,
+  hotelCategoryBreakdown,
   type DateWindow,
 } from '@/lib/hotel-metrics/compute'
 import { periodDelta } from '@/lib/kpis/compute'
@@ -27,19 +27,11 @@ import { SkeletonCard } from '@/components/dashboard/skeleton'
 import { ChartSection } from '@/components/kpis/chart-section'
 import { KpiLineChart } from '@/components/kpis/kpi-line-chart'
 import { KpiDonutChart } from '@/components/kpis/kpi-donut-chart'
+import { HotelCategoryTable, CATEGORY_COLORS } from '@/components/hotel-metrics/category-table'
 import { cn } from '@/lib/utils'
 
 type RangeDays = 7 | 30 | 90 | 365
 const RANGES: RangeDays[] = [7, 30, 90, 365]
-
-const CATEGORY_COLORS: Record<string, string> = {
-  habitaciones: '#3b82f6',
-  spa: '#a855f7',
-  actividades: '#10b981',
-  paquetes: '#f59e0b',
-  eventos: '#ef4444',
-  otros: '#6b7280',
-}
 
 function nights(v: number | null): string {
   return v == null ? '—' : v.toFixed(1)
@@ -80,9 +72,18 @@ export function HotelKpis() {
     const k = computeHotelKpis(data.reservations, data.roomCount, window)
     const prev = computeHotelKpis(data.reservations, data.roomCount, prevWindow)
     const series = hotelDaySeries(data.reservations, window)
-    const mix = hotelCategoryMix(data.reservations, window)
-    return { k, prev, series, mix, window }
+    const breakdown = hotelCategoryBreakdown(data.reservations, window)
+    return { k, prev, series, breakdown, window }
   }, [data, range])
+
+  const donutData =
+    view?.breakdown
+      .filter((b) => b.requests > 0)
+      .map((b) => ({
+        name: t(`cat.${b.category}` as never),
+        value: b.requests,
+        color: CATEGORY_COLORS[b.category] ?? CATEGORY_COLORS.otros,
+      })) ?? []
 
   if (profileLoading) {
     return (
@@ -144,6 +145,7 @@ export function HotelKpis() {
               value={view.k.requests.toLocaleString()}
               icon={ClipboardList}
               delta={periodDelta(view.k.requests, view.prev.requests, t('vsPrev'))}
+              subtitle={t('requestsSub')}
             />
             <MetricCard
               title={t('approvalRate')}
@@ -178,6 +180,17 @@ export function HotelKpis() {
           </>
         )}
       </div>
+
+      {/* Every product category the hotel offers */}
+      <ChartSection
+        title={t('byCategory')}
+        description={t('byCategoryDesc')}
+        loading={loading}
+        empty={!!view && view.breakdown.every((b) => b.requests === 0)}
+        emptyHint={t('noRequestsYet')}
+      >
+        {view && <HotelCategoryTable rows={view.breakdown} currency={defaultCurrency} />}
+      </ChartSection>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartSection
@@ -255,18 +268,14 @@ export function HotelKpis() {
         title={t('categoryMix')}
         description={t('categoryMixDesc')}
         loading={loading}
-        empty={!!view && view.mix.length === 0}
+        empty={!!view && donutData.length === 0}
         emptyHint={t('noRequestsYet')}
         bodyClassName="p-5 pb-2"
       >
         {view && (
           <KpiDonutChart
-            data={view.mix.map((m) => ({
-              name: t(`cat.${m.category}` as never),
-              value: m.requests,
-              color: CATEGORY_COLORS[m.category] ?? CATEGORY_COLORS.otros,
-            }))}
-            centerValue={view.mix.reduce((s, m) => s + m.requests, 0)}
+            data={donutData}
+            centerValue={donutData.reduce((s, d) => s + d.value, 0)}
             centerLabel={t('requests')}
           />
         )}

@@ -8,6 +8,7 @@ import {
   CalendarClock,
   DollarSign,
   Percent,
+  Sparkles,
   TrendingUp,
   Users,
 } from 'lucide-react'
@@ -24,7 +25,7 @@ import { loadHotelMetrics, type HotelMetricsData } from '@/lib/hotel-metrics/que
 import {
   computeHotelKpis,
   hotelDaySeries,
-  hotelCategoryMix,
+  hotelCategoryBreakdown,
   upcomingArrivalsDepartures,
   type DateWindow,
 } from '@/lib/hotel-metrics/compute'
@@ -35,19 +36,11 @@ import { QuickActions } from '@/components/dashboard/quick-actions'
 import { ChartSection } from '@/components/kpis/chart-section'
 import { KpiLineChart } from '@/components/kpis/kpi-line-chart'
 import { KpiDonutChart } from '@/components/kpis/kpi-donut-chart'
+import { HotelCategoryTable, CATEGORY_COLORS } from '@/components/hotel-metrics/category-table'
 import { cn } from '@/lib/utils'
 
 type RangeDays = 7 | 30 | 90
 const RANGES: RangeDays[] = [7, 30, 90]
-
-const CATEGORY_COLORS: Record<string, string> = {
-  habitaciones: '#3b82f6',
-  spa: '#a855f7',
-  actividades: '#10b981',
-  paquetes: '#f59e0b',
-  eventos: '#ef4444',
-  otros: '#6b7280',
-}
 
 function pct(v: number | null): string {
   return v == null ? '—' : `${Math.round(v * 100)}%`
@@ -86,12 +79,20 @@ export function HotelDashboard() {
     if (!data) return null
     const k = computeHotelKpis(data.reservations, data.roomCount, window)
     const series = hotelDaySeries(data.reservations, window)
-    const mix = hotelCategoryMix(data.reservations, window)
+    const breakdown = hotelCategoryBreakdown(data.reservations, window)
     const next7 = upcomingArrivalsDepartures(data.reservations, new Date())
-    return { k, series, mix, next7 }
+    return { k, series, breakdown, next7 }
   }, [data, window])
 
   const granularity = granularityForRangeDays(range)
+  const donutData =
+    view?.breakdown
+      .filter((b) => b.requests > 0)
+      .map((b) => ({
+        name: t(`cat.${b.category}` as never),
+        value: b.requests,
+        color: CATEGORY_COLORS[b.category] ?? CATEGORY_COLORS.otros,
+      })) ?? []
 
   return (
     <section className="space-y-5">
@@ -119,7 +120,7 @@ export function HotelDashboard() {
         </div>
       </div>
 
-      {/* Revenue-management cards */}
+      {/* Room revenue-management cards (category "Habitaciones") */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {loading || !view ? (
           Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
@@ -163,9 +164,9 @@ export function HotelDashboard() {
       </div>
 
       {/* Next 7 days */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {loading || !view ? (
-          Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)
+          Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
         ) : (
           <>
             <MetricCard
@@ -181,6 +182,12 @@ export function HotelDashboard() {
               subtitle={t('departuresSub')}
             />
             <MetricCard
+              title={t('upcomingServices')}
+              value={view.next7.services.toLocaleString()}
+              icon={Sparkles}
+              subtitle={t('upcomingServicesSub')}
+            />
+            <MetricCard
               title={t('expectedGuests')}
               value={view.k.guests.toLocaleString()}
               icon={Users}
@@ -191,6 +198,19 @@ export function HotelDashboard() {
       </div>
 
       <QuickActions />
+
+      {/* Every category the hotel offers, at a glance */}
+      <ChartSection
+        title={t('byCategory')}
+        description={t('byCategoryDesc')}
+        loading={loading}
+        empty={!!view && view.breakdown.every((b) => b.requests === 0)}
+        emptyHint={t('noRequestsYet')}
+      >
+        {view && (
+          <HotelCategoryTable rows={view.breakdown} currency={defaultCurrency} compact />
+        )}
+      </ChartSection>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartSection
@@ -212,18 +232,14 @@ export function HotelDashboard() {
           title={t('categoryMix')}
           description={t('categoryMixDesc')}
           loading={loading}
-          empty={!!view && view.mix.length === 0}
+          empty={!!view && donutData.length === 0}
           emptyHint={t('noRequestsYet')}
           bodyClassName="p-5 pb-2"
         >
           {view && (
             <KpiDonutChart
-              data={view.mix.map((m) => ({
-                name: t(`cat.${m.category}` as never),
-                value: m.requests,
-                color: CATEGORY_COLORS[m.category] ?? CATEGORY_COLORS.otros,
-              }))}
-              centerValue={view.mix.reduce((s, m) => s + m.requests, 0)}
+              data={donutData}
+              centerValue={donutData.reduce((s, d) => s + d.value, 0)}
               centerLabel={t('requests')}
             />
           )}
