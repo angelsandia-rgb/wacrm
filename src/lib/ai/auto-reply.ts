@@ -18,6 +18,7 @@ import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { sendCatalogToConversation, SendCatalogError } from '@/lib/products/send-catalog'
+import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
 import { formatWithOffset } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
@@ -247,11 +248,14 @@ export async function dispatchInboundToAiReply(
     // own self-service quote cart, so this only turns on for pdf/photos.
     const { data: catalogModeRow } = await db
       .from('accounts')
-      .select('catalog_delivery_mode, industry_vertical')
+      .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url')
       .eq('id', accountId)
       .maybeSingle()
     const catalogDeliveryMode = (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
     const isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
+    // Only teach the send-restaurant-menu marker when there's actually a
+    // menu PDF on file for it to send (migration 114).
+    const hasRestaurantMenu = Boolean((catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim())
 
     // Autonomous appointment scheduling — only ever offered to the
     // model when the account explicitly opted in AND has a connected
@@ -272,6 +276,7 @@ export async function dispatchInboundToAiReply(
       quickReplies,
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
+      restaurantMenu: hasRestaurantMenu,
     })
 
     let generation: GenerateResult
@@ -295,7 +300,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog, leadTemperature, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, usage,
     } = generation
 
     // The provider call succeeded, so the key is valid again — clear any
@@ -517,6 +522,22 @@ export async function dispatchInboundToAiReply(
       } catch (err) {
         if (err instanceof SendCatalogError) {
           console.error('[ai auto-reply] autonomous send_catalog failed:', err.message)
+        } else {
+          throw err
+        }
+      }
+    }
+
+    // Defense in depth, same reasoning as the checks below: the marker
+    // is only ever taught when `hasRestaurantMenu`, but re-check the URL
+    // is really there rather than trusting a marker in the raw output —
+    // a hallucination or an injection attempt must not fire a send.
+    if (sendRestaurantMenu && hasRestaurantMenu) {
+      try {
+        await sendRestaurantMenuToConversation(db, accountId, conversationId)
+      } catch (err) {
+        if (err instanceof SendRestaurantMenuError) {
+          console.error('[ai auto-reply] autonomous send_restaurant_menu failed:', err.message)
         } else {
           throw err
         }

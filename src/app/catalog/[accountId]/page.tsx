@@ -1026,7 +1026,7 @@ function PublicCatalogPageInner() {
                               />
                             </label>
                           )}
-                          <label className="flex flex-col gap-1 text-xs text-[#284d53]/75">
+                          <label className="col-span-2 flex flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
                             Tu nombre
                             <input
                               type="text"
@@ -1036,7 +1036,7 @@ function PublicCatalogPageInner() {
                               className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                             />
                           </label>
-                          <label className="flex flex-col gap-1 text-xs text-[#284d53]/75">
+                          <label className="col-span-2 flex flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
                             Tu teléfono
                             <input
                               type="tel"

@@ -100,6 +100,10 @@ export interface GenerateResult {
   /** True when the model asked to send the product catalog (auto-reply
    *  mode only) — see `SEND_CATALOG_SENTINEL`. */
   sendCatalog: boolean
+  /** True when the model asked to send the restaurant menu PDF
+   *  (auto-reply mode, `hotel` vertical with `restaurant_menu_url` set)
+   *  — see `SEND_RESTAURANT_MENU_SENTINEL`. */
+  sendRestaurantMenu: boolean
   /** The contact's assessed buying-interest temperature (auto-reply
    *  mode only), or null when the model didn't emit a (valid) marker —
    *  see `SET_TEMPERATURE_SENTINEL_PREFIX`. */

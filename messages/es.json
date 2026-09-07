@@ -1202,7 +1202,10 @@
       "suggestionAppointmentEmailRequired": "Ingresa el correo del cliente antes de confirmar.",
       "sendCatalog": "Enviar catálogo",
       "sendCatalogSuccess": "Catálogo enviado.",
-      "sendCatalogFailed": "No se pudo enviar el catálogo."
+      "sendCatalogFailed": "No se pudo enviar el catálogo.",
+      "sendMenu": "Enviar menú del restaurante",
+      "sendMenuSuccess": "Menú enviado.",
+      "sendMenuFailed": "No se pudo enviar el menú."
     },
     "bubble": {
       "photo": "Foto",
@@ -1697,7 +1700,12 @@
       "quoteModePdf": "Como PDF",
       "quoteModePdfHint": "Se genera y se envía un documento PDF con el detalle y el total.",
       "quoteModeMessage": "Como mensaje",
-      "quoteModeMessageHint": "Se envía el detalle y el total como un mensaje de texto, sin archivo adjunto."
+      "quoteModeMessageHint": "Se envía el detalle y el total como un mensaje de texto, sin archivo adjunto.",
+      "menuLabel": "Menú del restaurante",
+      "menuHint": "El PDF del menú de tu restaurante (ya publicado en línea). Se envía cuando un huésped pide el menú — automáticamente por la IA, o desde el menú + del cuadro de mensajes.",
+      "menuUrlLabel": "Enlace del PDF del menú",
+      "menuUploadBtn": "Subir PDF",
+      "menuReplaceBtn": "Reemplazar PDF"
     },
     "import": {
       "title": "Importar productos",

@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   moveDeal: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
   sendCatalogToConversation: vi.fn(),
+  sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
   createEvent: vi.fn(),
   waitForQuietPeriod: vi.fn(),
@@ -32,7 +33,7 @@ const h = vi.hoisted(() => ({
     priorScheduleBookings: [] as { input: Record<string, unknown> }[],
     pipeline: null as { id: string } | null,
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
-    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string },
+    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null },
     dealInserts: [] as Record<string, unknown>[],
     createdDeal: { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' } as Record<string, unknown>,
     contactUpdates: [] as Record<string, unknown>[],
@@ -105,6 +106,16 @@ vi.mock('@/lib/pipelines/move-deal', () => ({
 vi.mock('@/lib/products/send-catalog', () => ({
   sendCatalogToConversation: h.sendCatalogToConversation,
   SendCatalogError: class SendCatalogError extends Error {
+    status: number
+    constructor(message: string, status = 400) {
+      super(message)
+      this.status = status
+    }
+  },
+}))
+vi.mock('@/lib/products/send-restaurant-menu', () => ({
+  sendRestaurantMenuToConversation: h.sendRestaurantMenuToConversation,
+  SendRestaurantMenuError: class SendRestaurantMenuError extends Error {
     status: number
     constructor(message: string, status = 400) {
       super(message)
@@ -354,6 +365,7 @@ beforeEach(() => {
     markDealWon: false,
     moveToStageName: null,
     sendCatalog: false,
+    sendRestaurantMenu: false,
   })
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
   h.moveDeal.mockResolvedValue({
@@ -362,6 +374,7 @@ beforeEach(() => {
   })
   h.dispatchWebhookEvent.mockResolvedValue(undefined)
   h.sendCatalogToConversation.mockResolvedValue({ catalogUrl: 'https://example.com/catalog/acct-1' })
+  h.sendRestaurantMenuToConversation.mockReset().mockResolvedValue(undefined)
 })
 
 describe('dispatchInboundToAiReply — debounce', () => {
@@ -1251,6 +1264,42 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
 
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
     expect(h.engineSendText).toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
+  it('sends the menu when the model asks for it and a menu URL is configured', async () => {
+    h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, aquí tienes el menú.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendRestaurantMenu: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+  })
+
+  it('does not send the menu when no menu URL is configured, even if the model asks', async () => {
+    h.state.account = { default_currency: 'USD' } // no restaurant_menu_url
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tienes el menú.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendRestaurantMenu: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendRestaurantMenuToConversation).not.toHaveBeenCalled()
+  })
+
+  it('does not send the menu when the model does not ask for it', async () => {
+    h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
+    await dispatchInboundToAiReply(ARGS) // default mock: sendRestaurantMenu false
+    expect(h.sendRestaurantMenuToConversation).not.toHaveBeenCalled()
   })
 })
 

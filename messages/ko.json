@@ -426,7 +426,10 @@
       "suggestionAppointmentEmailRequired": "확인하기 전에 고객의 이메일을 입력하세요.",
       "sendCatalog": "카탈로그 보내기",
       "sendCatalogSuccess": "카탈로그를 보냈습니다.",
-      "sendCatalogFailed": "카탈로그를 보내지 못했습니다."
+      "sendCatalogFailed": "카탈로그를 보내지 못했습니다.",
+      "sendMenu": "레스토랑 메뉴 보내기",
+      "sendMenuSuccess": "메뉴를 보냈습니다.",
+      "sendMenuFailed": "메뉴를 보내지 못했습니다."
     },
     "bubble": {
       "photo": "사진",
@@ -1048,7 +1051,12 @@
       "quoteModePdf": "PDF로",
       "quoteModePdfHint": "항목과 합계가 포함된 PDF 문서를 생성하여 전송합니다.",
       "quoteModeMessage": "메시지로",
-      "quoteModeMessageHint": "항목과 합계를 첨부 파일 없이 일반 텍스트 메시지로 전송합니다."
+      "quoteModeMessageHint": "항목과 합계를 첨부 파일 없이 일반 텍스트 메시지로 전송합니다.",
+      "menuLabel": "레스토랑 메뉴",
+      "menuHint": "온라인에 이미 게시된 레스토랑 메뉴 PDF입니다. 고객이 메뉴를 요청하면 AI가 자동으로, 또는 받은편지함 작성창의 + 메뉴에서 전송합니다.",
+      "menuUrlLabel": "메뉴 PDF 링크",
+      "menuUploadBtn": "PDF 업로드",
+      "menuReplaceBtn": "PDF 교체"
     },
     "import": {
       "title": "제품 가져오기",

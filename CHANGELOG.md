@@ -38,9 +38,24 @@ and polish.
 >
 > **Migration required:** apply `supabase/migrations/113_ai_record_reservation.sql`
 > (widens the `ai_action_log` action CHECK to allow `record_reservation`).
+>
+> **Migration required:** apply `supabase/migrations/114_account_restaurant_menu_url.sql`
+> (adds a nullable `accounts.restaurant_menu_url`). No effect until a
+> hotel account sets a menu PDF.
 
 ### Added
 
+- **Hotel: send the restaurant's menu PDF on request.** A `hotel`
+  account can save its restaurant's own online menu PDF in Products →
+  "Entrega del catálogo" (paste a link or upload the file). Once set, the
+  auto-reply AI sends it whenever a guest asks for "el menú del
+  restaurante" / "la carta" — it keeps chatting normally, this is just an
+  extra attachment — and an agent can send it by hand from the inbox
+  composer's **+** menu ("Enviar menú del restaurante"). Works on
+  WhatsApp, Instagram and Facebook. New `accounts.restaurant_menu_url`
+  (migration 114), `SEND_RESTAURANT_MENU` AI marker (taught only when a
+  menu is on file), `POST /api/products/send-restaurant-menu`. Separate
+  from the rooms/services catalog; non-hotel accounts are unaffected.
 - **Hotel: the Panel and the KPIs page show hospitality metrics.** For a
   `hotel` account, `/dashboard` and `/kpis` swap their generic
   conversation/pipeline widgets for a revenue-management view built from
