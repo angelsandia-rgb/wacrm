@@ -14,7 +14,7 @@ vi.mock('./tools', () => ({
   isWriteTool: (name: string) => name === 'move_deal',
 }))
 
-import { runAssistantTurn } from './anthropic-tools'
+import { runAssistantTurnAnthropic as runAssistantTurn } from './anthropic-tools'
 
 function okResponse(json: unknown): Response {
   return { ok: true, status: 200, json: async () => json } as unknown as Response
