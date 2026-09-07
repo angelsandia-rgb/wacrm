@@ -17,6 +17,7 @@ interface AccountRow {
   catalog_delivery_mode: 'digital' | 'pdf' | 'photos'
   catalog_pdf_url: string | null
   catalog_photo_urls: string[]
+  catalog_slug: string | null
 }
 
 function makeDb(args: { account?: Partial<AccountRow>; activeProductCount?: number | null }) {
@@ -24,6 +25,7 @@ function makeDb(args: { account?: Partial<AccountRow>; activeProductCount?: numb
     catalog_delivery_mode: 'digital',
     catalog_pdf_url: null,
     catalog_photo_urls: [],
+    catalog_slug: null,
     ...args.account,
   }
   const db = {
@@ -98,6 +100,14 @@ describe('sendCatalogToConversation — digital mode (default)', () => {
     )
     // token is `<id>.<hmac>`, not the bare id
     expect(result.catalogUrl).toContain('?c=conv-ig-1.')
+  })
+
+  it('uses the short /c/<slug> alias when the account has a catalog_slug', async () => {
+    const db = makeDb({ activeProductCount: 2, account: { catalog_slug: 'mi-empresa' } })
+    const result = await sendCatalogToConversation(db, 'acct-1', 'conv-1')
+    expect(result.catalogUrl).toBe(
+      `https://crm.example.com/c/mi-empresa?c=${cParam('conv-1')}`,
+    )
   })
 
   it('throws without sending when the account has no active products', async () => {

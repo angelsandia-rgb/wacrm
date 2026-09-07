@@ -19,6 +19,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { checkSharedRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
+import { resolveCatalogAccountId } from '@/lib/catalog/resolve-account'
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get('x-forwarded-for')
@@ -36,12 +37,18 @@ export async function GET(
   const limit = await checkSharedRateLimit(`public-catalog-view:${ip}`, RATE_LIMITS.publicCatalogView)
   if (!limit.success) return rateLimitResponse(limit)
 
-  const { accountId } = await params
-  if (!accountId) {
+  const { accountId: segment } = await params
+  if (!segment) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   const db = supabaseAdmin()
+
+  // The segment is the account UUID or its `catalog_slug` (/c/<slug>).
+  const accountId = await resolveCatalogAccountId(db, segment)
+  if (!accountId) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
 
   const [
     { data: account },
@@ -51,7 +58,7 @@ export async function GET(
   ] = await Promise.all([
     db
       .from('accounts')
-      .select('name, default_currency, industry_vertical')
+      .select('name, default_currency, industry_vertical, catalog_banner_url')
       .eq('id', accountId)
       .maybeSingle(),
     db
@@ -129,6 +136,7 @@ export async function GET(
     account_name: account.name,
     currency: account.default_currency ?? 'USD',
     industry_vertical: account.industry_vertical ?? 'generic',
+    banner_url: account.catalog_banner_url ?? null,
     whatsapp_number: whatsapp?.public_phone_number ?? null,
     categories: (categories ?? []).map((c) => ({ id: c.id, name: c.name })),
     products: (products ?? []).map((product) => ({

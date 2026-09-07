@@ -27,6 +27,7 @@ import {
 import { quoteStay, occupancyForGuests, type ProductRate } from '@/lib/products/rates'
 import { formatCurrency } from '@/lib/currency'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { resolveCatalogAccountId } from '@/lib/catalog/resolve-account'
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get('x-forwarded-for')
@@ -62,8 +63,8 @@ export async function POST(
   )
   if (!limit.success) return rateLimitResponse(limit)
 
-  const { accountId } = await params
-  if (!accountId) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const { accountId: segment } = await params
+  if (!segment) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const body = (await request.json().catch(() => null)) as Body | null
   const name = body?.name?.trim() ?? ''
@@ -75,6 +76,10 @@ export async function POST(
   if (!productId) return NextResponse.json({ error: 'Selecciona un servicio' }, { status: 400 })
 
   const db = supabaseAdmin()
+
+  // `segment` is the account UUID or its `catalog_slug` (/c/<slug>).
+  const accountId = await resolveCatalogAccountId(db, segment)
+  if (!accountId) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const { data: account } = await db
     .from('accounts')

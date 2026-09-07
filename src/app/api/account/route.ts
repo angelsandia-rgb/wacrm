@@ -2,7 +2,9 @@
 // /api/account
 //
 //   GET   — current caller's account + role. Any member.
-//   PATCH — rename the account.                  Admin+.
+//   PATCH — update the account: name, and the public-catalog
+//           handle (`catalog_slug`) + banner (`catalog_banner_url`).
+//           Admin+.
 //
 // Why both verbs share a route file
 //   They speak about the same singular resource (the caller's
@@ -23,6 +25,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
+import { slugifyCatalog, isValidCatalogSlug } from "@/lib/catalog/slug";
 
 export async function GET() {
   try {
@@ -37,6 +40,7 @@ export async function GET() {
 }
 
 const MAX_NAME_LEN = 80;
+const MAX_URL_LEN = 2048;
 
 export async function PATCH(request: Request) {
   try {
@@ -44,38 +48,94 @@ export async function PATCH(request: Request) {
 
     // Per-user limit on admin-class mutations. Bounds accidental
     // abuse (script run in a loop) and a compromised admin session
-    // spamming renames. Each admin endpoint keys its own bucket so
+    // spamming updates. Each admin endpoint keys its own bucket so
     // one route doesn't starve another.
     const limit = await checkSharedRateLimit(
-      `admin:rename:${ctx.userId}`,
+      `admin:account-update:${ctx.userId}`,
       RATE_LIMITS.adminAction,
     );
     if (!limit.success) return rateLimitResponse(limit);
 
     const body = (await request.json().catch(() => null)) as
-      | { name?: unknown }
+      | { name?: unknown; catalog_slug?: unknown; catalog_banner_url?: unknown }
       | null;
-    const rawName = body?.name;
-
-    if (typeof rawName !== "string") {
-      return NextResponse.json(
-        { error: "'name' must be a string" },
-        { status: 400 },
-      );
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ error: "Invalid body" }, { status: 400 });
     }
 
-    const name = rawName.trim();
-    if (name.length === 0) {
-      return NextResponse.json(
-        { error: "Account name cannot be empty" },
-        { status: 400 },
-      );
+    const patch: Record<string, unknown> = {};
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== "string") {
+        return NextResponse.json(
+          { error: "'name' must be a string" },
+          { status: 400 },
+        );
+      }
+      const name = body.name.trim();
+      if (name.length === 0) {
+        return NextResponse.json(
+          { error: "Account name cannot be empty" },
+          { status: 400 },
+        );
+      }
+      if (name.length > MAX_NAME_LEN) {
+        return NextResponse.json(
+          { error: `Account name must be ${MAX_NAME_LEN} characters or fewer` },
+          { status: 400 },
+        );
+      }
+      patch.name = name;
     }
-    if (name.length > MAX_NAME_LEN) {
-      return NextResponse.json(
-        { error: `Account name must be ${MAX_NAME_LEN} characters or fewer` },
-        { status: 400 },
-      );
+
+    if (body.catalog_slug !== undefined) {
+      if (typeof body.catalog_slug !== "string") {
+        return NextResponse.json(
+          { error: "'catalog_slug' must be a string" },
+          { status: 400 },
+        );
+      }
+      const raw = body.catalog_slug.trim();
+      if (raw === "") {
+        // Clearing the slug — the catalog stays reachable at /catalog/<uuid>.
+        patch.catalog_slug = null;
+      } else {
+        const slug = slugifyCatalog(raw);
+        if (!isValidCatalogSlug(slug)) {
+          return NextResponse.json(
+            {
+              error:
+                "El enlace debe tener entre 3 y 40 caracteres: solo letras, números y guiones.",
+            },
+            { status: 400 },
+          );
+        }
+        patch.catalog_slug = slug;
+      }
+    }
+
+    if (body.catalog_banner_url !== undefined) {
+      if (typeof body.catalog_banner_url !== "string") {
+        return NextResponse.json(
+          { error: "'catalog_banner_url' must be a string" },
+          { status: 400 },
+        );
+      }
+      const url = body.catalog_banner_url.trim();
+      if (url === "") {
+        patch.catalog_banner_url = null;
+      } else if (url.length > MAX_URL_LEN || !/^https?:\/\//i.test(url)) {
+        return NextResponse.json(
+          { error: "El banner debe ser una URL http(s) válida." },
+          { status: 400 },
+        );
+      } else {
+        patch.catalog_banner_url = url;
+      }
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
 
     // RLS allows this UPDATE because accounts_update requires
@@ -83,12 +143,19 @@ export async function PATCH(request: Request) {
     // guaranteed the caller is admin+.
     const { data, error } = await ctx.supabase
       .from("accounts")
-      .update({ name })
+      .update(patch)
       .eq("id", ctx.accountId)
-      .select("id, name")
+      .select("id, name, catalog_slug, catalog_banner_url")
       .single();
 
     if (error) {
+      // Unique index on lower(catalog_slug) — someone else took it.
+      if (error.code === "23505") {
+        return NextResponse.json(
+          { error: "Ese enlace ya está en uso por otra empresa. Elige otro." },
+          { status: 409 },
+        );
+      }
       console.error("[PATCH /api/account] update error:", error);
       return NextResponse.json(
         { error: "Failed to update account" },

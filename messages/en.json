@@ -1063,7 +1063,18 @@
       "menuHint": "Your restaurant's own menu PDF (already hosted online). It's sent when a guest asks for the menu — automatically by the AI, or from the inbox composer's + menu.",
       "menuUrlLabel": "Menu PDF link",
       "menuUploadBtn": "Upload PDF",
-      "menuReplaceBtn": "Replace PDF"
+      "menuReplaceBtn": "Replace PDF",
+      "publicLinkTitle": "Public catalog link",
+      "publicLinkDesc": "Share this link on WhatsApp, Instagram or Facebook so customers can browse your catalog. It works with or without a short name.",
+      "publicLinkLabel": "Short name",
+      "publicLinkHint": "3–40 characters: letters, numbers and hyphens only.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "bannerLabel": "Cover / banner",
+      "bannerHint": "Shown full-width at the top of your public catalog.",
+      "bannerNone": "No cover image yet.",
+      "bannerUploadBtn": "Upload cover",
+      "bannerReplaceBtn": "Replace cover"
     },
     "import": {
       "title": "Import products",

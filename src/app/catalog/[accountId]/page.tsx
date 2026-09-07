@@ -105,6 +105,10 @@ interface CatalogData {
   account_name: string;
   currency: string;
   industry_vertical: string;
+  /** Company banner shown full-width at the top of the catalog
+   *  (accounts.catalog_banner_url, migration 116). Null = fall back to
+   *  the auto "featured product" hero. */
+  banner_url: string | null;
   whatsapp_number: string | null;
   categories: { id: string; name: string }[];
   products: CatalogProduct[];
@@ -282,7 +286,12 @@ function PublicCatalogPageInner() {
     [selectedItems]
   );
   const totalCount = selectedItems.reduce((sum, i) => sum + i.quantity, 0);
-  const featuredProduct = data?.products.find((product) => product.image_url);
+  const bannerUrl = data?.banner_url?.trim() || null;
+  // The account's own banner takes the hero slot; only fall back to an
+  // auto "featured product" hero when there's no banner.
+  const featuredProduct = bannerUrl
+    ? undefined
+    : data?.products.find((product) => product.image_url);
 
   // Category chips — only the categories that actually have at least one
   // visible product, in the order the account arranged them. Selecting
@@ -588,6 +597,17 @@ function PublicCatalogPageInner() {
           </label>
         </div>
       </header>
+
+      {bannerUrl && (
+        <section className="w-full overflow-hidden bg-[#d8ddd8]">
+          {/* eslint-disable-next-line @next/next/no-img-element -- account-configured Supabase storage URL, same convention as product images. */}
+          <img
+            src={bannerUrl}
+            alt={data.account_name}
+            className="aspect-[16/9] w-full object-cover sm:aspect-[1024/300]"
+          />
+        </section>
+      )}
 
       {featuredProduct && (
         <section className="relative isolate min-h-[440px] overflow-hidden bg-[#d8ddd8] sm:min-h-[640px]">
