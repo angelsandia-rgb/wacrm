@@ -1345,12 +1345,13 @@
         "value": "Value",
         "valuePlaceholder": "Value to match",
         "uploadCsv": "Upload CSV File",
-        "csvFormatDesc": "Must contain a 'phone' column (E.164 format). 'name' column is optional.",
+        "csvFormatDesc": "Needs a 'phone' column with the country code — e.g. 50212345678 (Guatemala). The leading '+' is optional. 'name' is optional. A local number without a country code won't reach WhatsApp.",
         "csvContactsFound": "{count} valid contact(s) found in CSV.",
         "errorLoadTags": "Failed to load tags",
         "errorLoadFields": "Failed to load custom fields",
         "errorCsvParse": "Could not parse CSV file.",
-        "errorCsvMissingPhone": "CSV must have a 'phone' column."
+        "errorCsvMissingPhone": "CSV must have a 'phone' column.",
+        "csvTemplateBtn": "Download template"
       },
       "personalize": {
         "title": "Personalize Variables",

@@ -379,12 +379,13 @@
         "value": "Valor",
         "valuePlaceholder": "Valor a buscar",
         "uploadCsv": "Subir Archivo CSV",
-        "csvFormatDesc": "Debe contener una columna 'phone' (formato E.164). La columna 'name' es opcional.",
+        "csvFormatDesc": "Necesita una columna 'phone' con el código de país, por ejemplo 50212345678 (Guatemala). El '+' inicial es opcional. 'name' es opcional. Un número local sin código de país no llega a WhatsApp.",
         "csvContactsFound": "{count} contacto(s) válido(s) encontrados en el CSV.",
         "errorLoadTags": "No se pudieron cargar las etiquetas",
         "errorLoadFields": "No se pudieron cargar los campos personalizados",
         "errorCsvParse": "No se pudo procesar el archivo CSV.",
-        "errorCsvMissingPhone": "El CSV debe tener una columna 'phone'."
+        "errorCsvMissingPhone": "El CSV debe tener una columna 'phone'.",
+        "csvTemplateBtn": "Descargar plantilla"
       },
       "personalize": {
         "title": "Personalizar Variables",
