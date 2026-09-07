@@ -287,6 +287,26 @@ and polish.
 
 ### Fixed
 
+- **Catalog reservation now confirms on WhatsApp, not just on the page.**
+  When a guest fills the hotel catalog's "Cotiza tu estadía" form from a
+  link that carries its conversation (`?c=`), the recap
+  (service · dates · guests · estimated total) is now also sent as a
+  message into that WhatsApp/Instagram/Facebook thread — before, the
+  request silently went to `reservation_requests` + the Google Sheet with
+  no channel acknowledgement, and the AI never sees a form POST as an
+  inbound to reply to. Best-effort (a closed 24h window can't fail the
+  request).
+
+- **Zernio "[Unsupported message]" placeholder no longer wakes the bot.**
+  Zernio hands us the literal text `[Unsupported message]` when it can't
+  classify a WhatsApp message — seen consistently on the *first* message
+  of a new chat on a number in Coexistence mode. It now lands as a
+  system note ("the customer sent something we couldn't read — ask them
+  to resend as text") instead of a customer turn: it no longer triggers
+  the AI / flows / automations / outbound webhooks, and no longer skews
+  `isFirstInboundMessage` for the real first message. The raw payload is
+  logged so the parser can be fixed if a recoverable field turns up.
+
 - **AI auto-reply was completely dead for every account (2026-09-06 →
   2026-09-07).** The multimodal-vision change added `media_type` to the
   `messages` SELECT in `buildConversationContext`, but that column does
