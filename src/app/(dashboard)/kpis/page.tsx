@@ -37,6 +37,7 @@ import { KpiLineChart } from '@/components/kpis/kpi-line-chart'
 import { KpiDonutChart } from '@/components/kpis/kpi-donut-chart'
 import { KpiFunnelChart } from '@/components/kpis/kpi-funnel-chart'
 import { SpendInputCard } from '@/components/kpis/spend-input-card'
+import { HotelKpis } from '@/components/kpis/hotel-kpis'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -58,7 +59,8 @@ interface CacHistoryPoint {
 
 export default function KpisPage() {
   const t = useTranslations('Kpis')
-  const { user, accountId, canEditSettings, defaultCurrency, profileLoading } = useAuth()
+  const { user, accountId, canEditSettings, defaultCurrency, profileLoading, account } = useAuth()
+  const isHotel = account?.industry_vertical === 'hotel'
 
   const [range, setRange] = useState<RangeDays>(30)
   const [dataset, setDataset] = useState<KpiDataset | null>(null)
@@ -70,6 +72,10 @@ export default function KpisPage() {
   const granularity = granularityForRangeDays(range)
 
   const load = useCallback(() => {
+    if (isHotel) {
+      setLoading(false)
+      return // hotel accounts render <HotelKpis/>, which loads its own data
+    }
     setLoading(true)
     const db = createClient()
     const window = windowFor(range)
@@ -108,7 +114,7 @@ export default function KpisPage() {
         toast.error(t('loadFailed'))
       })
       .finally(() => setLoading(false))
-  }, [range, granularity, t])
+  }, [range, granularity, t, isHotel])
 
   useEffect(() => {
     load()
@@ -187,6 +193,12 @@ export default function KpisPage() {
       ],
     }
   }, [dataset, t])
+
+  // Hotel accounts get a hospitality dashboard (occupancy / ADR / RevPAR
+  // / booking pace) instead of the sales-funnel KPIs. Rendered after all
+  // hooks above so rules-of-hooks stays happy; `load` is a no-op for
+  // hotels so the generic dataset query never fires.
+  if (isHotel) return <HotelKpis />
 
   // ---- Access gate ------------------------------------------------
   if (profileLoading) {

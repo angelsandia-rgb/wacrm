@@ -152,6 +152,41 @@
     },
     "emptyState": {
       "title": "Not enough data yet"
+    },
+    "hotel": {
+      "title": "Hotel overview",
+      "description": "Live occupancy, rate and reservation-request metrics for your property.",
+      "rangeDays": "{count} days",
+      "occupancy": "Occupancy",
+      "occupancyNoRooms": "Add a room product to compute occupancy",
+      "occupancySub": "{sold} of {available} room-nights sold",
+      "revenue": "Room revenue",
+      "revenueSub": "Approved room reservations in range",
+      "adr": "ADR",
+      "adrSub": "Average daily rate per room-night sold",
+      "revpar": "RevPAR",
+      "revparSub": "Revenue per available room-night",
+      "arrivals": "Arrivals (next 7 days)",
+      "arrivalsSub": "{guests} guests expected",
+      "departures": "Departures (next 7 days)",
+      "departuresSub": "Check-outs in the coming week",
+      "expectedGuests": "Guests in range",
+      "expectedGuestsSub": "Across approved reservations",
+      "occByDay": "Room-nights by day",
+      "occByDayDesc": "Occupied room-nights per day in the selected range",
+      "noReservationsYet": "No reservations in this range yet",
+      "categoryMix": "Requests by category",
+      "categoryMixDesc": "Where reservation requests are coming from",
+      "noRequestsYet": "No reservation requests yet",
+      "requests": "Requests",
+      "cat": {
+        "habitaciones": "Rooms",
+        "spa": "Spa",
+        "actividades": "Outdoor activities",
+        "paquetes": "Packages",
+        "eventos": "Events",
+        "otros": "Other"
+      }
     }
   },
   "Kpis": {
@@ -234,6 +269,49 @@
       "briefStarted": "Brief started",
       "briefSub": "Leads with at least one spec field captured",
       "briefNoLeads": "No leads in this period"
+    },
+    "hotel": {
+      "title": "Hotel KPIs",
+      "description": "Reservation demand, approval rate, length of stay and booking lead time — with full Excel export.",
+      "rangeYear": "1 year",
+      "rangeDays": "{count} days",
+      "periodLabel": "Period: {range}",
+      "requests": "Reservation requests",
+      "vsPrev": "vs. previous period",
+      "approvalRate": "Approval rate",
+      "approvalSub": "{approved} approved · {denied} denied · {pending} pending",
+      "avgStay": "Avg. length of stay",
+      "avgStaySub": "Nights per approved reservation",
+      "leadTime": "Booking lead time",
+      "leadTimeValue": "{days} days",
+      "leadTimeSub": "From request to check-in",
+      "requestsOverTime": "Requests over time",
+      "requestsOverTimeDesc": "Reservation requests received per period",
+      "revenueOverTime": "Revenue over time",
+      "revenueOverTimeDesc": "Estimated value of approved reservations",
+      "occByDay": "Room-nights by day",
+      "occByDayDesc": "Occupied room-nights per day",
+      "noRequestsYet": "No reservation requests yet",
+      "noReservationsYet": "No reservations in this range yet",
+      "statusMix": "Request status",
+      "statusMixDesc": "Approved, pending and denied requests",
+      "status": {
+        "approved": "Approved",
+        "pending": "Pending",
+        "denied": "Denied"
+      },
+      "categoryMix": "Requests by category",
+      "categoryMixDesc": "Reservation requests split by service",
+      "cat": {
+        "habitaciones": "Rooms",
+        "spa": "Spa",
+        "actividades": "Outdoor activities",
+        "paquetes": "Packages",
+        "eventos": "Events",
+        "otros": "Other"
+      },
+      "adminOnlyTitle": "Admins only",
+      "adminOnlyHint": "This page includes revenue figures. Ask an account admin to review it."
     }
   },
   "Inbox": {
