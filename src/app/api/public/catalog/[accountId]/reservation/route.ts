@@ -26,6 +26,7 @@ import {
 } from '@/lib/reservations/upsert'
 import { quoteStay, occupancyForGuests, type ProductRate } from '@/lib/products/rates'
 import { formatCurrency } from '@/lib/currency'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get('x-forwarded-for')
@@ -201,12 +202,27 @@ export async function POST(
     } else if (estimatedPrice != null) {
       bits.push(`desde ${formatCurrency(estimatedPrice, currency)}`)
     }
+    const recap = `Registramos tu solicitud: ${bits.join(' · ')}. Te contactamos para confirmar la disponibilidad.`
 
-    return NextResponse.json({
-      ok: true,
-      reservation_id: id,
-      summary: `Registramos tu solicitud: ${bits.join(' · ')}. Te contactamos para confirmar la disponibilidad.`,
-    })
+    // When the catalog link came from a WhatsApp/IG/FB conversation
+    // (signed `?c=`), echo the recap into that thread so the guest gets
+    // the same confirmation on the channel they were talking on — the
+    // form only shows an on-page recap, and the AI never sees a catalog
+    // POST as an inbound to reply to. Best-effort: a closed 24h window
+    // or a send error must not fail the (already-recorded) request.
+    if (conversationId) {
+      try {
+        await sendMessageToConversation(db, accountId, {
+          conversationId,
+          messageType: 'text',
+          contentText: `📋 ${recap}`,
+        })
+      } catch (err) {
+        console.error('[public/catalog/reservation] confirmation send failed:', err)
+      }
+    }
+
+    return NextResponse.json({ ok: true, reservation_id: id, summary: recap })
   } catch (err) {
     if (err instanceof ContactError) {
       return NextResponse.json({ error: err.message }, { status: err.status })

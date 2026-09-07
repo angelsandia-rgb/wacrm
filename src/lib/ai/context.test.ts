@@ -2,16 +2,17 @@ import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildConversationContext } from './context'
 
-/** Columns that actually exist on `public.messages` (see the numbered
- *  migrations). A `.select()` naming anything outside this set makes
+/** The columns that actually exist on `public.messages` (verified
+ *  against information_schema — NOT the `realtime.messages` table that
+ *  shares the name and has `payload` / `event` / `binary_payload` /
+ *  `topic` etc.). A `.select()` naming anything outside this set makes
  *  PostgREST throw 42703 at runtime — which is exactly how AI auto-reply
  *  silently died for ~1.5 days when `media_type` was added here. */
 const REAL_MESSAGES_COLUMNS = new Set([
-  'ai_generated', 'binary_payload', 'content_text', 'content_type',
-  'conversation_id', 'created_at', 'event', 'extension', 'id', 'inserted_at',
-  'interactive_payload', 'interactive_reply_id', 'media_url', 'message_id',
-  'payload', 'private', 'reply_to_message_id', 'sender_id', 'sender_type',
-  'skip_broadcast', 'status', 'template_name', 'topic', 'updated_at',
+  'ai_generated', 'content_text', 'content_type', 'conversation_id',
+  'created_at', 'id', 'interactive_payload', 'interactive_reply_id',
+  'media_url', 'message_id', 'reply_to_message_id', 'sender_id',
+  'sender_type', 'status', 'template_name',
 ])
 
 /** Minimal fake matching the query chain in buildConversationContext:

@@ -545,6 +545,37 @@ async function processInboundMessage(message: ZernioWebhookMessage, config: any)
 
   const attachment = message.attachments?.[0]
   const contentText: string | null = attachment ? null : message.text
+
+  // Zernio hands us `text: "[Unsupported message]"` (verbatim, its own
+  // placeholder) when it cannot classify the WhatsApp message — seen
+  // consistently on the FIRST message of a new chat on a number in
+  // Coexistence mode. It carries no recoverable payload, so treat it as
+  // a non-actionable system note: the agent still sees "the customer
+  // sent something we couldn't read", but it does NOT become a customer
+  // turn (so it can't skew `isFirstInboundMessage`), does NOT trigger
+  // the AI / flows / automations, and does NOT fan out as a webhook.
+  if (!attachment && (contentText ?? '').trim() === '[Unsupported message]') {
+    console.warn(
+      '[whatsapp zernio webhook] Zernio "[Unsupported message]" placeholder — raw message:',
+      JSON.stringify(message),
+    )
+    await supabaseAdmin()
+      .from('messages')
+      .upsert(
+        {
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          content_type: 'internal_note',
+          content_text:
+            '⚠️ El cliente envió un mensaje que la integración de WhatsApp no pudo leer (suele pasar con el primer mensaje en modo Coexistencia). Pídele que lo reenvíe como texto.',
+          message_id: message.platformMessageId,
+          status: 'sent',
+        },
+        { onConflict: 'conversation_id,message_id', ignoreDuplicates: true },
+      )
+    return
+  }
+
   let mediaUrl: string | null = null
   let contentType = 'text'
   if (attachment) {
