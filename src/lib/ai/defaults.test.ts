@@ -53,6 +53,18 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — hotel stay estimate', () => {
+  it('lets the bot share the computed figure and never appears in draft mode', () => {
+    const est = 'Master Suite Deluxe · 1 noche: Total estimado: Q500.'
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelStayEstimate: est })
+    expect(p).toContain(est)
+    expect(p.toLowerCase()).toContain('give them this exact number')
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelStayEstimate: est }),
+    ).not.toContain(est)
+  })
+})
+
 describe('buildSystemPrompt — flow handoff directive', () => {
   it('injects the directive as a priority task in auto_reply mode', () => {
     const p = buildSystemPrompt({

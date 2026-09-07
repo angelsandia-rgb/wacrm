@@ -327,6 +327,11 @@ export function buildSystemPrompt(args: {
    *  that PDF when a guest asks for the food menu. Off/omitted means the
    *  marker is never taught. */
   restaurantMenu?: boolean
+  /** A finished per-night stay total for the room/package the guest is
+   *  currently asking about (`loadHotelStayEstimate`) — auto-reply mode,
+   *  `hotel` vertical. Lets the bot answer "¿cuánto sería?" with a real
+   *  figure instead of deferring every quote to a person. */
+  hotelStayEstimate?: string
   /** Human, business-timezone "now" (see `describeNowInZone` in
    *  `src/lib/timezone.ts`), e.g. "lunes, 7 de septiembre de 2026,
    *  12:20 (America/Guatemala)". Given on EVERY call regardless of
@@ -341,7 +346,7 @@ export function buildSystemPrompt(args: {
    *  Cleared after this reply. */
   flowDirective?: string
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, currentDate, flowDirective } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelStayEstimate, currentDate, flowDirective } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -362,6 +367,11 @@ export function buildSystemPrompt(args: {
     if (flowDirective && flowDirective.trim()) {
       parts.push(
         `A guided menu just routed this conversation to you with a specific instruction from the business — treat it as a priority task for your next reply, on top of your normal role: «${flowDirective.trim()}». The customer just picked a menu option; act on that instruction now (e.g. look the relevant information up in the knowledge base and answer), and keep helping them normally afterward.`,
+      )
+    }
+    if (hotelStayEstimate && hotelStayEstimate.trim()) {
+      parts.push(
+        `COST ESTIMATE — the guest is asking about a room/package stay and the CRM has already priced it from the business's OWN published nightly tariffs: «${hotelStayEstimate.trim()}». This is a real, computed figure, NOT you inventing a price. When the guest asks "how much" / for a total / for a quote on THIS stay, give them this exact number, worded as an estimate ("el total estimado sería…"), and add that a person confirms final availability and price. Do NOT withhold it or defer the whole thing to a human just because another instruction says a person "confirms" — sharing a computed estimate and having a person confirm availability are not in conflict. If the guest then changes the dates or number of people, this figure no longer applies — say a person will re-quote.`,
       )
     }
     parts.push(

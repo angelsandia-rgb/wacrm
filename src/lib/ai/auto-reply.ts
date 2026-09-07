@@ -6,6 +6,7 @@ import { buildConversationContext } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
+import { loadHotelStayEstimate } from './hotel-stay-estimate'
 import { loadQuickReplyContext } from './quick-reply-context'
 import { generateReply, isRetryableAiError, type GenerateArgs } from './generate'
 import { buildSystemPrompt, aiAutoReplyRetryDelayMs, type AutoReplyCalendarContext } from './defaults'
@@ -303,6 +304,7 @@ export async function dispatchInboundToAiReply(
     let isHotel = false
     let hasRestaurantMenu = false
     let businessTimeZone = 'UTC'
+    let hotelStayEstimate: string | undefined
     let calendarContext: AutoReplyCalendarContext | null = null
     try {
       // Ground the reply in the account's knowledge base.
@@ -322,7 +324,7 @@ export async function dispatchInboundToAiReply(
       // whether a restaurant menu PDF is on file (migration 114).
       const { data: catalogModeRow } = await db
         .from('accounts')
-        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone')
+        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency')
         .eq('id', accountId)
         .maybeSingle()
       catalogDeliveryMode =
@@ -332,6 +334,19 @@ export async function dispatchInboundToAiReply(
         (catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim(),
       )
       businessTimeZone = (catalogModeRow?.timezone as string | null | undefined)?.trim() || 'UTC'
+
+      // Hotel: a finished per-night stay total for the room/package the
+      // guest is currently asking about, so the bot can answer "¿cuánto
+      // sería?" with a real number instead of deferring every quote.
+      if (isHotel) {
+        hotelStayEstimate =
+          (await loadHotelStayEstimate(
+            db,
+            accountId,
+            conversationId,
+            (catalogModeRow?.default_currency as string | undefined) ?? 'USD',
+          ).catch(() => null)) ?? undefined
+      }
 
       // Autonomous scheduling context — only non-null when the account
       // opted in AND has a connected Google Calendar.
@@ -369,6 +384,7 @@ export async function dispatchInboundToAiReply(
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
+      hotelStayEstimate,
       currentDate: describeNowInZone(businessTimeZone),
       flowDirective,
     })
