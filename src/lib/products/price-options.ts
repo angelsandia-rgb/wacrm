@@ -7,6 +7,9 @@
 
 export const MAX_PRICE_OPTIONS = 2
 
+/** Photos per product, and per price option (migration 117). */
+export const MAX_PRODUCT_IMAGES = 5
+
 export interface ParsedPriceOption {
   label: string
   price: number
@@ -21,6 +24,35 @@ export type ParsePriceOptionsResult =
 export type ParseInstallationCostResult =
   | { ok: true; value: number | null }
   | { ok: false; error: string }
+
+/**
+ * Normalise a product's `image_urls` payload: keep only non-empty
+ * strings, de-duplicate, cap at `MAX_PRODUCT_IMAGES`. The legacy
+ * scalar `image_url` column is kept in sync with `result[0]` by the
+ * route so every existing reader (catalog send, quote PDF, AI context)
+ * keeps working untouched. Accepts a bare `image_url` string as a
+ * one-element fallback for older clients.
+ */
+export function parseProductImages(rawImageUrls: unknown, rawImageUrl?: unknown): string[] {
+  let list: string[] = []
+  if (Array.isArray(rawImageUrls)) {
+    list = rawImageUrls.filter(
+      (u): u is string => typeof u === 'string' && u.trim().length > 0,
+    )
+  } else if (typeof rawImageUrl === 'string' && rawImageUrl.trim().length > 0) {
+    list = [rawImageUrl.trim()]
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const u of list) {
+    const v = u.trim()
+    if (seen.has(v)) continue
+    seen.add(v)
+    out.push(v)
+    if (out.length >= MAX_PRODUCT_IMAGES) break
+  }
+  return out
+}
 
 /**
  * Validates a single optional installation-cost field — shared by the
@@ -76,7 +108,9 @@ export function parsePriceOptions(raw: unknown): ParsePriceOptionsResult {
     }
 
     const imageUrls = Array.isArray(row.image_urls)
-      ? row.image_urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+      ? row.image_urls
+          .filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+          .slice(0, MAX_PRODUCT_IMAGES)
       : []
 
     options.push({ label, price, installation_cost: installationCost.value, image_urls: imageUrls })

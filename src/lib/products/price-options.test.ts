@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { parsePriceOptions, parseInstallationCost, MAX_PRICE_OPTIONS } from './price-options'
+import {
+  parsePriceOptions,
+  parseInstallationCost,
+  parseProductImages,
+  MAX_PRICE_OPTIONS,
+  MAX_PRODUCT_IMAGES,
+} from './price-options'
 
 describe('parsePriceOptions', () => {
   it('defaults to an empty list when the field is absent', () => {
@@ -61,6 +67,30 @@ describe('parsePriceOptions', () => {
   it('filters out non-string image_urls entries', () => {
     const result = parsePriceOptions([{ label: 'A', price: 10, image_urls: ['ok', 42, null, '  '] }])
     expect(result).toMatchObject({ ok: true, options: [{ image_urls: ['ok'] }] })
+  })
+
+  it('caps a price option at MAX_PRODUCT_IMAGES photos', () => {
+    const many = Array.from({ length: 9 }, (_, i) => `https://x/${i}.png`)
+    const result = parsePriceOptions([{ label: 'A', price: 10, image_urls: many }])
+    expect(result.ok && result.options[0].image_urls).toHaveLength(MAX_PRODUCT_IMAGES)
+  })
+})
+
+describe('parseProductImages', () => {
+  it('keeps non-empty strings, trims, de-dupes, caps at 5', () => {
+    expect(
+      parseProductImages(['  a ', 'a', 'b', '', 42, 'c', 'd', 'e', 'f']),
+    ).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('falls back to a bare image_url string when no array is given', () => {
+    expect(parseProductImages(undefined, ' https://x/1.png ')).toEqual(['https://x/1.png'])
+    expect(parseProductImages(undefined, '')).toEqual([])
+    expect(parseProductImages(undefined, undefined)).toEqual([])
+  })
+
+  it('an array wins over the scalar fallback', () => {
+    expect(parseProductImages(['a', 'b'], 'z')).toEqual(['a', 'b'])
   })
 })
 

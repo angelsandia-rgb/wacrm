@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
-import { parsePriceOptions, parseInstallationCost } from '@/lib/products/price-options'
+import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
 import { parseRates } from '@/lib/products/rates'
 import { resolveCategoryId } from '@/lib/products/categories'
 
@@ -48,8 +48,12 @@ export async function PATCH(
     }
     update.installation_cost = installationCost.value
   }
-  if ('image_url' in body) {
-    update.image_url = typeof body.image_url === 'string' ? body.image_url.trim() || null : null
+  if ('image_urls' in body || 'image_url' in body) {
+    // Up to 5 photos (migration 117); keep the scalar `image_url` as the
+    // first one so catalog send / quote PDF / AI context stay untouched.
+    const imageUrls = parseProductImages(body.image_urls, body.image_url)
+    update.image_urls = imageUrls
+    update.image_url = imageUrls[0] ?? null
   }
   if ('is_active' in body) {
     update.is_active = body.is_active === true

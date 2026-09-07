@@ -11,7 +11,7 @@ import {
   uploadAccountMedia,
   MEDIA_MAX_BYTES_BY_KIND,
 } from '@/lib/storage/upload-media';
-import { MAX_PRICE_OPTIONS } from '@/lib/products/price-options';
+import { MAX_PRICE_OPTIONS, MAX_PRODUCT_IMAGES } from '@/lib/products/price-options';
 import { DAY_ORDER, DAY_LABEL_ES, type DayOfWeek } from '@/lib/products/rates';
 import {
   Dialog,
@@ -220,7 +220,9 @@ export function ProductForm({
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [baseInstallationCost, setBaseInstallationCost] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
+  // Product photo gallery — up to MAX_PRODUCT_IMAGES (migration 117).
+  // First one is the "main" photo (mirrors the legacy `image_url`).
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -243,7 +245,13 @@ export function ProductForm({
     setBaseInstallationCost(
       product?.installation_cost != null ? String(product.installation_cost) : ''
     );
-    setImageUrl(product?.image_url ?? '');
+    setImageUrls(
+      product?.image_urls?.length
+        ? product.image_urls
+        : product?.image_url
+          ? [product.image_url]
+          : [],
+    );
     setIsActive(product?.is_active ?? true);
     setPriceOptions(
       (product?.price_options ?? []).map((option) => ({
@@ -349,11 +357,15 @@ export function ProductForm({
       toast.error(t('toastImageTooLarge'));
       return;
     }
+    if (priceOptions[index].imageUrls.length >= MAX_PRODUCT_IMAGES) {
+      toast.error(t('toastMaxImages', { max: MAX_PRODUCT_IMAGES }));
+      return;
+    }
     setUploadingOptionIndex(index);
     try {
       const { publicUrl } = await uploadAccountMedia('product-media', file);
       updatePriceOption(index, {
-        imageUrls: [...priceOptions[index].imageUrls, publicUrl],
+        imageUrls: [...priceOptions[index].imageUrls, publicUrl].slice(0, MAX_PRODUCT_IMAGES),
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('toastUploadFailed'));
@@ -370,24 +382,49 @@ export function ProductForm({
     });
   }
 
-  async function handleImageFile(file: File) {
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      toast.error(t('toastInvalidImage'));
-      return;
-    }
-    if (file.size > MEDIA_MAX_BYTES_BY_KIND.image) {
-      toast.error(t('toastImageTooLarge'));
+  async function handleImageFiles(files: File[]) {
+    const room = MAX_PRODUCT_IMAGES - imageUrls.length;
+    if (room <= 0) {
+      toast.error(t('toastMaxImages', { max: MAX_PRODUCT_IMAGES }));
       return;
     }
     setUploading(true);
     try {
-      const { publicUrl } = await uploadAccountMedia('product-media', file);
-      setImageUrl(publicUrl);
+      const uploaded: string[] = [];
+      for (const file of files.slice(0, room)) {
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+          toast.error(t('toastInvalidImage'));
+          continue;
+        }
+        if (file.size > MEDIA_MAX_BYTES_BY_KIND.image) {
+          toast.error(t('toastImageTooLarge'));
+          continue;
+        }
+        const { publicUrl } = await uploadAccountMedia('product-media', file);
+        uploaded.push(publicUrl);
+      }
+      if (uploaded.length > 0) {
+        setImageUrls((prev) => [...prev, ...uploaded].slice(0, MAX_PRODUCT_IMAGES));
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('toastUploadFailed'));
     } finally {
       setUploading(false);
     }
+  }
+
+  function removeImage(index: number) {
+    setImageUrls((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function moveImage(index: number, direction: -1 | 1) {
+    setImageUrls((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   }
 
   async function handleSave() {
@@ -472,7 +509,7 @@ export function ProductForm({
         description: description.trim() || null,
         price: priceValue,
         installation_cost: resolvedBaseInstallationCost,
-        image_url: imageUrl || null,
+        image_urls: imageUrls,
         is_active: isActive,
         price_options: resolvedPriceOptions,
       };
@@ -570,48 +607,86 @@ export function ProductForm({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground">{t('imageLabel')}</Label>
+            <Label className="text-muted-foreground">
+              {t('imageLabel')}{' '}
+              <span className="text-muted-foreground text-xs">
+                {t('imageGalleryHint', { max: MAX_PRODUCT_IMAGES })}
+              </span>
+            </Label>
             <input
               ref={fileInputRef}
               type="file"
               accept="image/png,image/jpeg,image/webp"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void handleImageFile(f);
+                if (e.target.files && e.target.files.length > 0) {
+                  void handleImageFiles(Array.from(e.target.files));
+                }
                 e.target.value = '';
               }}
             />
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-                className="border-border text-muted-foreground hover:bg-muted"
-              >
-                {uploading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Upload className="h-3.5 w-3.5" />
-                )}
-                {t('uploadImageBtn')}
-              </Button>
-              {imageUrl && (
-                <span className="text-muted-foreground truncate text-xs">
-                  {t('imageUploaded')}
-                </span>
-              )}
-            </div>
-            {imageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={imageUrl}
-                alt={t('imagePreviewAlt')}
-                className="border-border mt-2 h-20 w-20 rounded-md border object-cover"
-              />
+            {imageUrls.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {imageUrls.map((url, i) => (
+                  <div
+                    key={url + i}
+                    className="border-border relative size-20 overflow-hidden rounded-md border"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt="" className="size-full object-cover" />
+                    {i === 0 && (
+                      <span className="bg-primary/90 absolute inset-x-0 bottom-0 text-center text-[9px] font-semibold text-primary-foreground">
+                        {t('imageMainBadge')}
+                      </span>
+                    )}
+                    <div className="absolute inset-x-0 top-0 flex justify-between bg-black/30">
+                      <button
+                        type="button"
+                        disabled={i === 0}
+                        onClick={() => moveImage(i, -1)}
+                        className="px-1 text-xs text-white disabled:opacity-30"
+                        title={t('moveLeft')}
+                      >
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeImage(i)}
+                        className="px-1 text-white"
+                        title={t('remove')}
+                      >
+                        <X className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={i === imageUrls.length - 1}
+                        onClick={() => moveImage(i, 1)}
+                        className="px-1 text-xs text-white disabled:opacity-30"
+                        title={t('moveRight')}
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={uploading || imageUrls.length >= MAX_PRODUCT_IMAGES}
+              onClick={() => fileInputRef.current?.click()}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              {uploading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              {t('uploadImageBtn')}
+            </Button>
           </div>
 
           {isHotel && (
@@ -877,7 +952,10 @@ export function ProductForm({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={uploadingOptionIndex === index}
+                      disabled={
+                        uploadingOptionIndex === index ||
+                        option.imageUrls.length >= MAX_PRODUCT_IMAGES
+                      }
                       onClick={() => {
                         pendingOptionIndexRef.current = index;
                         optionFileInputRef.current?.click();

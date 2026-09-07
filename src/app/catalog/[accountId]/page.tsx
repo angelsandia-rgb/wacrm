@@ -92,7 +92,10 @@ interface CatalogProduct {
   description: string | null;
   price: number;
   installation_cost: number | null;
+  /** First gallery photo (mirror of image_urls[0]). */
   image_url: string | null;
+  /** Full photo gallery, up to 5 (migration 117). */
+  image_urls: string[];
   price_options: CatalogPriceOption[];
   /** Per-date room rates (hotel vertical). When present, the product is
    *  shown with a rate summary and is not add-to-cart — a stay needs
@@ -334,9 +337,11 @@ function PublicCatalogPageInner() {
   const detailImages =
     selectedOption && selectedOption.image_urls.length > 0
       ? selectedOption.image_urls
-      : selectedProduct?.image_url
-        ? [selectedProduct.image_url]
-        : [];
+      : (selectedProduct?.image_urls?.length ?? 0) > 0
+        ? selectedProduct!.image_urls
+        : selectedProduct?.image_url
+          ? [selectedProduct.image_url]
+          : [];
   const detailLineKey = selectedProduct
     ? lineKey(selectedProduct.id, selectedOptionId)
     : null;
