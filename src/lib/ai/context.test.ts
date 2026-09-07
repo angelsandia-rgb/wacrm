@@ -2,12 +2,44 @@ import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildConversationContext } from './context'
 
+/** Columns that actually exist on `public.messages` (see the numbered
+ *  migrations). A `.select()` naming anything outside this set makes
+ *  PostgREST throw 42703 at runtime — which is exactly how AI auto-reply
+ *  silently died for ~1.5 days when `media_type` was added here. */
+const REAL_MESSAGES_COLUMNS = new Set([
+  'ai_generated', 'binary_payload', 'content_text', 'content_type',
+  'conversation_id', 'created_at', 'event', 'extension', 'id', 'inserted_at',
+  'interactive_payload', 'interactive_reply_id', 'media_url', 'message_id',
+  'payload', 'private', 'reply_to_message_id', 'sender_id', 'sender_type',
+  'skip_broadcast', 'status', 'template_name', 'topic', 'updated_at',
+])
+
 /** Minimal fake matching the query chain in buildConversationContext:
- *  from().select().eq().eq().order().limit() → { data, error }. */
-function fakeDb(rows: unknown[], filters?: { includedTypes?: string[] }): SupabaseClient {
+ *  from().select().eq().eq().order().limit() → { data, error }.
+ *  `select()` validates its column list against the real schema so a
+ *  typo'd / non-existent column fails the test instead of prod. */
+function fakeDb(
+  rows: unknown[],
+  filters?: { includedTypes?: string[]; selectedColumns?: string[] },
+): SupabaseClient {
   const chain = {
     from: () => chain,
-    select: () => chain,
+    select: (cols: string) => {
+      const list = cols.split(',').map((c) => c.trim()).filter(Boolean)
+      if (filters) filters.selectedColumns = list
+      const unknown = list.filter((c) => !REAL_MESSAGES_COLUMNS.has(c))
+      if (unknown.length > 0) {
+        return {
+          ...chain,
+          limit: () =>
+            Promise.resolve({
+              data: null,
+              error: { code: '42703', message: `column messages.${unknown[0]} does not exist` },
+            }),
+        }
+      }
+      return chain
+    },
     eq: () => chain,
     in: (_column: string, values: string[]) => {
       if (filters) filters.includedTypes = values
@@ -20,6 +52,22 @@ function fakeDb(rows: unknown[], filters?: { includedTypes?: string[] }): Supaba
 }
 
 describe('buildConversationContext', () => {
+  it('only SELECTs columns that exist on the messages table', async () => {
+    // Regression guard: `media_type` was added to this select and the
+    // column does not exist → every call threw PostgREST 42703 and AI
+    // auto-reply went silently dead for every account (2026-09-06/07).
+    const filters: { selectedColumns?: string[] } = {}
+    const out = await buildConversationContext(
+      fakeDb([{ sender_type: 'customer', content_text: 'hi' }], filters),
+      'conv-1',
+    )
+    expect(out).toEqual([{ role: 'user', content: 'hi' }])
+    expect(filters.selectedColumns, 'select() named a non-existent messages column').toBeDefined()
+    for (const col of filters.selectedColumns ?? []) {
+      expect(REAL_MESSAGES_COLUMNS.has(col), `messages has no column "${col}"`).toBe(true)
+    }
+  })
+
   it('maps sender_type to role and returns chronological order', async () => {
     // DB returns newest-first (created_at DESC); the fn reverses it.
     const rows = [
@@ -98,7 +146,7 @@ describe('buildConversationContext', () => {
       const resolver = async () => img
       const out = await buildConversationContext(
         fakeDb(
-          [{ sender_type: 'customer', content_type: 'image', content_text: 'este modelo', media_url: '/api/whatsapp/media/x', media_type: 'image/jpeg' }],
+          [{ sender_type: 'customer', content_type: 'image', content_text: 'este modelo', media_url: '/api/whatsapp/media/x' }],
           filters,
         ),
         'conv-1',
