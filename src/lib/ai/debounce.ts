@@ -24,7 +24,7 @@
 // current single-instance deployment; a future multi-instance
 // deployment would need a shared store (e.g. Redis) instead.
 //
-// The default quiet period is a full minute (see `aiDebounceMs` in
+// The default quiet period is 30 seconds (see `aiDebounceMs` in
 // defaults.ts) — long enough for a customer typing across several
 // bubbles at their own pace to finish before the bot answers what
 // might otherwise be a half-finished thought. Every inbound message
