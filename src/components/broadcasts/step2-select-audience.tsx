@@ -10,6 +10,7 @@ import {
   Tags,
   Filter,
   Upload,
+  Download,
   Loader2,
   ArrowRight,
   ArrowLeft,
@@ -141,6 +142,27 @@ export function Step2SelectAudience({
       ...audience,
       csvContacts: rows.map((r) => ({ phone: r.phone, name: r.name })),
     });
+  }
+
+  // Downloads the exact CSV shape the parser expects: a `phone` header
+  // (required) + an optional `name`. Phones must carry the country code
+  // (e.g. 502 for Guatemala) — a bare local number won't reach WhatsApp.
+  // The leading "+" is optional; the system strips it either way.
+  function downloadCsvTemplate() {
+    const csv =
+      'phone,name\r\n' +
+      '50212345678,Juan Pérez\r\n' +
+      '+50255551234,María López\r\n' +
+      '50247000000,\r\n';
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'plantilla-difusion.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   // Tags are used both by the primary "Filter by Tags" audience type
@@ -467,15 +489,26 @@ export function Step2SelectAudience({
             onChange={handleCsvFile}
             className="hidden"
           />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => csvInputRef.current?.click()}
-            className="border-border text-foreground"
-          >
-            <Upload className="h-4 w-4" />
-            {t('selectAudience.uploadCsv')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => csvInputRef.current?.click()}
+              className="border-border text-foreground"
+            >
+              <Upload className="h-4 w-4" />
+              {t('selectAudience.uploadCsv')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={downloadCsvTemplate}
+              className="text-muted-foreground"
+            >
+              <Download className="h-4 w-4" />
+              {t('selectAudience.csvTemplateBtn')}
+            </Button>
+          </div>
 
           {csvFileName && (
             <p className="text-xs text-muted-foreground">{csvFileName}</p>

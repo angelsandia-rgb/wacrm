@@ -1345,12 +1345,13 @@
         "value": "값",
         "valuePlaceholder": "일치시킬 값",
         "uploadCsv": "CSV 파일 업로드",
-        "csvFormatDesc": "'phone' 열(E.164 형식)이 필요합니다. 'name' 열은 선택 사항입니다.",
+        "csvFormatDesc": "국가 번호를 포함한 'phone' 열이 필요합니다 (예: 50212345678, 과테말라). 맨 앞의 '+'는 선택입니다. 'name'은 선택입니다. 국가 번호 없는 로컬 번호는 WhatsApp에 도달하지 않습니다.",
         "csvContactsFound": "CSV에서 유효한 연락처 {count}개를 찾았습니다.",
         "errorLoadTags": "태그를 불러오지 못했습니다",
         "errorLoadFields": "커스텀 필드를 불러오지 못했습니다",
         "errorCsvParse": "CSV 파일을 파싱할 수 없습니다.",
-        "errorCsvMissingPhone": "CSV에 'phone' 열이 있어야 합니다."
+        "errorCsvMissingPhone": "CSV에 'phone' 열이 있어야 합니다.",
+        "csvTemplateBtn": "템플릿 다운로드"
       },
       "personalize": {
         "title": "변수 개인화",
