@@ -20,7 +20,7 @@ import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { sendCatalogToConversation, SendCatalogError } from '@/lib/products/send-catalog'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
-import { formatWithOffset } from '@/lib/timezone'
+import { formatWithOffset, describeNowInZone } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/alerts'
@@ -302,6 +302,7 @@ export async function dispatchInboundToAiReply(
     let catalogDeliveryMode: 'digital' | 'pdf' | 'photos' = 'digital'
     let isHotel = false
     let hasRestaurantMenu = false
+    let businessTimeZone = 'UTC'
     let calendarContext: AutoReplyCalendarContext | null = null
     try {
       // Ground the reply in the account's knowledge base.
@@ -321,7 +322,7 @@ export async function dispatchInboundToAiReply(
       // whether a restaurant menu PDF is on file (migration 114).
       const { data: catalogModeRow } = await db
         .from('accounts')
-        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url')
+        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone')
         .eq('id', accountId)
         .maybeSingle()
       catalogDeliveryMode =
@@ -330,6 +331,7 @@ export async function dispatchInboundToAiReply(
       hasRestaurantMenu = Boolean(
         (catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim(),
       )
+      businessTimeZone = (catalogModeRow?.timezone as string | null | undefined)?.trim() || 'UTC'
 
       // Autonomous scheduling context — only non-null when the account
       // opted in AND has a connected Google Calendar.
@@ -363,6 +365,7 @@ export async function dispatchInboundToAiReply(
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
+      currentDate: describeNowInZone(businessTimeZone),
     })
 
     let generation: GenerateResult

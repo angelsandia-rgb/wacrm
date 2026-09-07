@@ -49,6 +49,16 @@ and polish.
 
 ### Added
 
+- **The AI always knows what day it is now.** Every AI reply (auto-reply,
+  draft, playground) is grounded with the current date + time in the
+  account's own timezone, whether or not Google Calendar is connected.
+  So when a guest says "el viernes", "el 11", "este fin de semana" or
+  "mañana", the bot resolves it to a real date itself instead of asking
+  the customer for the month and year "to be safe" — a repeated
+  complaint on the hotel accounts. New `describeNowInZone()` in
+  `src/lib/timezone.ts`; the hotel starter-kit prompt gained a matching
+  line so new hotels behave the same from day one.
+
 - **Hotel: send the restaurant's menu PDF on request.** A `hotel`
   account can save its restaurant's own online menu PDF in Products →
   "Entrega del catálogo" (paste a link or upload the file). Once set, the

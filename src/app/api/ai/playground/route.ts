@@ -6,6 +6,7 @@ import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { loadCatalogContext } from '@/lib/ai/catalog-context'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
+import { describeNowInZone } from '@/lib/timezone'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 import { loadBusinessMetrics, metricsGrounding } from '@/lib/ai/business-metrics'
@@ -82,11 +83,17 @@ export async function POST(request: Request) {
     )
     const metrics = await loadBusinessMetrics(supabase, accountId)
     const catalog = await loadCatalogContext(supabase, accountId)
+    const { data: acctTz } = await supabase
+      .from('accounts')
+      .select('timezone')
+      .eq('id', accountId)
+      .maybeSingle()
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
       catalog,
+      currentDate: describeNowInZone((acctTz?.timezone as string | null | undefined) || 'UTC'),
     }) + metricsGrounding(metrics)
 
     const { text, handoff } = await generateReply({ config, systemPrompt, messages })
