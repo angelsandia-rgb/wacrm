@@ -193,14 +193,16 @@ export const MAX_OUTPUT_TOKENS = 2048
 const DEFAULT_REQUEST_TIMEOUT_MS = 40_000
 const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
 const DEFAULT_AUTO_REPLY_RETRY_DELAY_MS = 1_500
-const DEFAULT_DEBOUNCE_MS = 60_000
+const DEFAULT_DEBOUNCE_MS = 30_000
 
 /** How long the auto-reply debouncer (`debounce.ts`) waits for a
  *  conversation to go quiet before answering the burst — gives a
- *  customer typing across several bubbles a full "prudencial" pause to
- *  finish before the bot replies to what might be a half-finished
- *  thought. Override with `AI_DEBOUNCE_MS`; 0 disables debouncing
- *  (used by tests wanting an immediate reply). */
+ *  customer typing across several bubbles a pause to finish before the
+ *  bot replies to what might be a half-finished thought. Was 60s; halved
+ *  to 30s (owner's call, 2026-09-07) to cut the felt response time —
+ *  still long enough to coalesce normal multi-bubble typing. Override
+ *  with `AI_DEBOUNCE_MS`; 0 disables debouncing (used by tests wanting
+ *  an immediate reply). */
 export function aiDebounceMs(): number {
   const raw = Number(process.env.AI_DEBOUNCE_MS)
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_DEBOUNCE_MS
