@@ -74,6 +74,25 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
   return EMBEDDED_EMAIL_RE.test(trimmed)
 }
 
+/** A public-catalog URL in either shape: the long `/catalog/<uuid>`
+ *  form or the short `/c/<slug>` alias (migration 116), with or without
+ *  the signed `?c=` query. The `send_catalog` action delivers the
+ *  correct short link as its own message, so any catalog URL the model
+ *  pasted into its prose — usually a stale long one copied from earlier
+ *  in the thread — is stripped before send. */
+const CATALOG_URL_RE =
+  /\s*https?:\/\/\S*?\/(?:catalog\/[0-9a-fA-F-]{20,}|c\/[a-z0-9][a-z0-9-]{1,39})(?:\?\S*)?/g
+
+export function stripCatalogUrls(text: string): string {
+  return text
+    .replace(CATALOG_URL_RE, '')
+    // tidy a now-dangling "…aquí:" / "— " / trailing bullet left behind
+    .replace(/[ \t]*[:\-–—][ \t]*$/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /** Generic, safe fallback sent instead of a fabricated confirmation —
  *  never promises a time/date that was never actually booked. */
 const FAKE_APPOINTMENT_FALLBACK_TEXT =
@@ -453,7 +472,20 @@ export async function dispatchInboundToAiReply(
         .maybeSingle()
       if (qr?.content_text) quickReplyText = { id: qr.id as string, text: qr.content_text as string }
     }
-    const outboundText = quickReplyText?.text ?? text
+    let outboundText = quickReplyText?.text ?? text
+
+    // `sendCatalogToConversation` (below) delivers the catalog link as
+    // its own message using the account's short /c/<slug> URL. If the
+    // model also pasted a catalog URL into its reply — almost always a
+    // stale long /catalog/<uuid> link it copied from earlier in the
+    // thread — drop it so the customer isn't handed two links, one wrong.
+    if (sendCatalog && !quickReplyText) {
+      const stripped = stripCatalogUrls(outboundText)
+      // Keep the original if stripping the URL left nothing — the empty
+      // check below would otherwise drop the whole turn, catalog send
+      // included.
+      if (stripped) outboundText = stripped
+    }
 
     // Defense in depth against a fabricated appointment confirmation:
     // the model told the customer their demo/appointment is booked
