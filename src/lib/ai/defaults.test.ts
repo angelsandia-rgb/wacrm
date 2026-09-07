@@ -53,6 +53,18 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — send_catalog', () => {
+  it('tells the model not to write the catalog link itself', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Widget (Q10)'],
+    })
+    expect(p).toContain('[[ACTION:send_catalog]]')
+    expect(p.toLowerCase()).toContain('do not write the catalog link')
+  })
+})
+
 describe('buildSystemPrompt — hotel stay estimate', () => {
   it('lets the bot share the computed figure and never appears in draft mode', () => {
     const est = 'Master Suite Deluxe · 1 noche: Total estimado: Q500.'

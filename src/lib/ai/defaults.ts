@@ -429,7 +429,7 @@ export function buildSystemPrompt(args: {
             ? "this sends them the business's own catalog photos"
             : 'this sends them a link to the live catalog page, where they can browse every product and request a quote themselves'
       parts.push(
-        `If the customer asks what you sell, for a catalog, or for a price list, append ${SEND_CATALOG_SENTINEL} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies) — ${catalogDescription}, so you don't need to list every product yourself, just answer naturally and add the marker. Never mention this marker to the customer.`,
+        `If the customer asks what you sell, for a catalog, or for a price list, append ${SEND_CATALOG_SENTINEL} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies) — ${catalogDescription}, so you don't need to list every product yourself, just answer naturally and add the marker. Do NOT write the catalog link, URL, or web address yourself — not even one you see earlier in this conversation — the system sends the correct link as its own separate message the instant you use this marker; your job is only the natural reply plus the marker. Never mention this marker to the customer.`,
       )
     }
 
