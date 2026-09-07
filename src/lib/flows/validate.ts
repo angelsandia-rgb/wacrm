@@ -528,6 +528,18 @@ function validateNode(
       }
       const seenIds = new Set<string>();
       sections.forEach((section, si) => {
+        if (
+          section.title &&
+          section.title.length > INTERACTIVE_LIMITS.listSectionTitleMaxLength
+        ) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `sections.${si}.title`,
+            message: `Section ${si + 1} title exceeds ${INTERACTIVE_LIMITS.listSectionTitleMaxLength} chars (WhatsApp limit).`,
+          });
+        }
         const rows = section.rows ?? [];
         rows.forEach((row, ri) => {
           const field = `sections.${si}.rows.${ri}`;

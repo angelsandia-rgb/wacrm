@@ -385,6 +385,37 @@ describe("validateFlowForActivation — nodes", () => {
     ).toBe(true);
   });
 
+  it("flags a list SECTION title over 24 chars", () => {
+    const nodes = [
+      { node_key: "s", node_type: "start", config: { next_node_key: "l" } },
+      {
+        node_key: "l",
+        node_type: "send_list",
+        config: {
+          text: "Pick",
+          button_label: "Pick",
+          sections: [
+            {
+              title: "ACTIVIDADES AL AIRE LIBRE", // 25 chars
+              rows: [{ reply_id: "x", title: "ok", next_node_key: "h" }],
+            },
+          ],
+        },
+      },
+      { node_key: "h", node_type: "handoff", config: {} },
+    ];
+    const issues = validateFlowForActivation(
+      { ...validFlow, entry_node_id: "s" },
+      nodes,
+    );
+    expect(
+      issues.some(
+        (i) =>
+          i.field === "sections.0.title" && i.message.includes("24 chars"),
+      ),
+    ).toBe(true);
+  });
+
   it("warns about unreachable nodes", () => {
     const nodes = [
       { node_key: "s", node_type: "start", config: { next_node_key: "h" } },

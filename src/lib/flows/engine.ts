@@ -539,6 +539,37 @@ async function sendListAndSuspend(
   return { outcome: "advanced", node_key: node.node_key };
 }
 
+/**
+ * A send_buttons / send_list node failed to deliver its menu (Meta /
+ * Zernio rejected the interactive message — an over-long title, a
+ * provider hiccup). Unlike send_text / send_media, these branches used
+ * to let the exception escape and be swallowed by the top-level catch,
+ * leaving the customer with no menu, no error and no fallback while the
+ * run stayed parked on the previous node. Now: log it and escalate to a
+ * human so the conversation isn't a dead end.
+ */
+async function menuSendFailedToHandoff(
+  db: AdminClient,
+  run: FlowRunRow,
+  node: FlowNodeRow,
+  err: unknown,
+): Promise<void> {
+  await logEvent(db, run.id, "error", node.node_key, {
+    reason: "send_menu_failed",
+    detail: err instanceof Error ? err.message : String(err),
+  });
+  if (run.conversation_id) {
+    await db
+      .from("conversations")
+      .update({ status: "pending", updated_at: new Date().toISOString() })
+      .eq("id", run.conversation_id);
+  }
+  await logEvent(db, run.id, "handoff", node.node_key, {
+    reason: "send_menu_failed",
+  });
+  await endRun(db, run.id, "handed_off", "send_menu_failed");
+}
+
 async function executeHandoff(
   db: AdminClient,
   run: FlowRunRow,
@@ -845,24 +876,18 @@ async function advanceFromNodeKey(
       currentKey = cfg.next_node_key;
       continue;
     }
-    if (node.node_type === "send_buttons") {
-      await sendButtonsAndSuspend(db, run, node);
-      // Persist the new current_node_key via optimistic UPDATE.
-      const advanced = await advanceCurrentNodeKey(
-        db,
-        run.id,
-        run.current_node_key,
-        node.node_key,
-      );
-      if (!advanced) {
-        await logEvent(db, run.id, "error", node.node_key, {
-          reason: "lost_race_during_advance",
-        });
+    if (node.node_type === "send_buttons" || node.node_type === "send_list") {
+      try {
+        if (node.node_type === "send_buttons") {
+          await sendButtonsAndSuspend(db, run, node);
+        } else {
+          await sendListAndSuspend(db, run, node);
+        }
+      } catch (err) {
+        await menuSendFailedToHandoff(db, run, node, err);
+        return { outcome: "handed_off" };
       }
-      return { outcome: "advanced" };
-    }
-    if (node.node_type === "send_list") {
-      await sendListAndSuspend(db, run, node);
+      // Persist the new current_node_key via optimistic UPDATE.
       const advanced = await advanceCurrentNodeKey(
         db,
         run.id,
@@ -1139,10 +1164,20 @@ async function handleReplyForActiveRun(
   }
   if (action.type === "reprompt") {
     // Re-send the same prompt. Same node, no current_node_key change.
-    if (currentNode.node_type === "send_buttons") {
-      await sendButtonsAndSuspend(db, run, currentNode);
-    } else if (currentNode.node_type === "send_list") {
-      await sendListAndSuspend(db, run, currentNode);
+    if (
+      currentNode.node_type === "send_buttons" ||
+      currentNode.node_type === "send_list"
+    ) {
+      try {
+        if (currentNode.node_type === "send_buttons") {
+          await sendButtonsAndSuspend(db, run, currentNode);
+        } else {
+          await sendListAndSuspend(db, run, currentNode);
+        }
+      } catch (err) {
+        await menuSendFailedToHandoff(db, run, currentNode, err);
+        return { consumed: true, flow_run_id: run.id, outcome: "handed_off" };
+      }
     } else if (currentNode.node_type === "collect_input") {
       // Customer typed something we couldn't accept (empty after trim,
       // or var_key missing — rare). Re-send the prompt so they try again.

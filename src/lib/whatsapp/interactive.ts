@@ -186,6 +186,14 @@ export function validateInteractivePayload(
       if (!section || !Array.isArray(section.rows)) {
         return fail('Every list section needs rows.')
       }
+      if (
+        typeof section.title === 'string' &&
+        section.title.length > INTERACTIVE_LIMITS.listSectionTitleMaxLength
+      ) {
+        return fail(
+          `List section title "${section.title}" exceeds the ${INTERACTIVE_LIMITS.listSectionTitleMaxLength}-character limit.`,
+        )
+      }
       for (const row of section.rows) {
         total++
         if (!row || typeof row.id !== 'string' || row.id.trim() === '') {

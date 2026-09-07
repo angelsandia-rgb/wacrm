@@ -3,6 +3,7 @@ import {
   sendInteractiveList,
   sendMediaMessage,
   sendTextMessage,
+  INTERACTIVE_LIMITS,
   type InteractiveButton,
   type InteractiveListSection,
   type MediaKind,
@@ -481,9 +482,52 @@ type SendInput =
   | (SendInteractiveButtonsEngineArgs & { kind: 'buttons' })
   | (SendInteractiveListEngineArgs & { kind: 'list' })
 
+/**
+ * Last-resort clamp of an interactive payload to WhatsApp's hard
+ * limits, applied right before send. The builder's validator
+ * (`flows/validate.ts`) blocks over-long titles at save time, but a
+ * flow authored before that check — or edited around it — would
+ * otherwise have Meta reject the WHOLE menu message, and the engine
+ * used to swallow that failure, stranding the customer with no menu
+ * and no fallback (real incident, 2026-09-07: a 25-char list section
+ * title "ACTIVIDADES AL AIRE LIBRE"). Truncating a title is far better
+ * than dropping the menu.
+ */
+function clampInteractiveInput(input: SendInput): SendInput {
+  const cut = (s: string | undefined, n: number) =>
+    typeof s === 'string' && s.length > n ? s.slice(0, n) : s
+  const body = cut(input.bodyText, INTERACTIVE_LIMITS.bodyMaxLength) ?? input.bodyText
+  if (input.kind === 'buttons') {
+    return {
+      ...input,
+      bodyText: body,
+      buttons: input.buttons.map((b) => ({
+        ...b,
+        title: cut(b.title, INTERACTIVE_LIMITS.buttonTitleMaxLength) ?? b.title,
+      })),
+    }
+  }
+  return {
+    ...input,
+    bodyText: body,
+    buttonLabel:
+      cut(input.buttonLabel, INTERACTIVE_LIMITS.buttonTitleMaxLength) ?? input.buttonLabel,
+    sections: input.sections.map((s) => ({
+      ...s,
+      title: cut(s.title, INTERACTIVE_LIMITS.listSectionTitleMaxLength),
+      rows: s.rows.map((r) => ({
+        ...r,
+        title: cut(r.title, INTERACTIVE_LIMITS.listRowTitleMaxLength) ?? r.title,
+        description: cut(r.description, INTERACTIVE_LIMITS.listRowDescriptionMaxLength),
+      })),
+    })),
+  }
+}
+
 async function sendInteractiveViaMeta(
-  input: SendInput,
+  rawInput: SendInput,
 ): Promise<{ whatsapp_message_id: string }> {
+  const input = clampInteractiveInput(rawInput)
   const db = supabaseAdmin()
 
   // Instagram/Facebook's closest analogue to buttons/list is a flat
