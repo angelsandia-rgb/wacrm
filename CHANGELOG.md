@@ -270,6 +270,21 @@ and polish.
     debounce store being unreachable no longer swallows the reply; the
     last-resort catch raises an alert.
 
+### Added
+
+- **AI auto-reply liveness alarm.** A symptom-based safety net that
+  runs on the conversations cron: if a bot that is supposed to be
+  answering (`ai_configs` active + auto-reply on) has produced **zero**
+  provider calls in the last hour while real AI-eligible customer
+  messages came in across two or more conversations, it opens a
+  `critical` `ai_liveness` system alert. Catches the class of silent
+  outage the `media_type` bug caused — a dispatch that stops replying
+  without throwing — regardless of root cause (routing regression, bad
+  `.select()`, webhook stall, quietly-broken config). No migration.
+  (Alert fan-out still depends on `TELEGRAM_BOT_TOKEN` /
+  `TELEGRAM_ALERT_CHAT_ID` being set — until then the alert is
+  DB-only.)
+
 ### Fixed
 
 - **AI auto-reply was completely dead for every account (2026-09-06 →
