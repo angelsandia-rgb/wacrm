@@ -20,6 +20,7 @@ import {
   Zap,
   Lightbulb,
   BookOpen,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GatedButton } from '@/components/ui/gated-button';
@@ -37,6 +38,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useCan } from '@/hooks/use-can';
+import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -208,9 +210,13 @@ export function MessageComposer({
   const hardWindowBlock = sessionExpired && channel === 'whatsapp';
 
   const [text, setText] = useState('');
+  const { account } = useAuth();
+  const isHotel = account?.industry_vertical === 'hotel';
+
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [sendingCatalog, setSendingCatalog] = useState(false);
+  const [sendingMenu, setSendingMenu] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestion, setSuggestion] = useState<ActionSuggestion | null>(null);
   const [confirmingSuggestion, setConfirmingSuggestion] = useState(false);
@@ -398,6 +404,30 @@ export function MessageComposer({
       setSendingCatalog(false);
     }
   }, [sendingCatalog, conversationId, t]);
+
+  // Sends the account's restaurant menu PDF (accounts.restaurant_menu_url,
+  // migration 114) to this conversation — hotel vertical only.
+  const handleSendRestaurantMenu = useCallback(async () => {
+    if (sendingMenu) return;
+    setSendingMenu(true);
+    try {
+      const res = await fetch('/api/products/send-restaurant-menu', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: conversationId }),
+      });
+      const data = await readResponseJson(res).catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error ?? t('sendMenuFailed'));
+        return;
+      }
+      toast.success(t('sendMenuSuccess'));
+    } catch {
+      toast.error(t('sendMenuFailed'));
+    } finally {
+      setSendingMenu(false);
+    }
+  }, [sendingMenu, conversationId, t]);
 
   // Ask the AI to suggest one of the four business actions (close the
   // conversation, mark a deal won, move a deal, update lead temperature)
@@ -1060,6 +1090,19 @@ export function MessageComposer({
                 )}
                 {t('sendCatalog')}
               </DropdownMenuItem>
+              {isHotel && (
+                <DropdownMenuItem
+                  disabled={sendingMenu}
+                  onClick={() => void handleSendRestaurantMenu()}
+                >
+                  {sendingMenu ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <UtensilsCrossed className="mr-2 h-4 w-4" />
+                  )}
+                  {t('sendMenu')}
+                </DropdownMenuItem>
+              )}
 
               {/* On mobile the composer keeps only attach + input + send
                   (WhatsApp-style), so the template / draft / suggest

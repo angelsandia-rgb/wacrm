@@ -11,6 +11,7 @@ import {
   MOVE_DEAL_SENTINEL_PREFIX,
   MOVE_DEAL_SENTINEL_SUFFIX,
   SEND_CATALOG_SENTINEL,
+  SEND_RESTAURANT_MENU_SENTINEL,
   SET_TEMPERATURE_SENTINEL_PREFIX,
   SET_TEMPERATURE_SENTINEL_SUFFIX,
   SCHEDULE_APPOINTMENT_SENTINEL_PREFIX,
@@ -109,6 +110,7 @@ export function parseGeneration(
   const handoff = raw.includes(HANDOFF_SENTINEL)
   const markDealWon = raw.includes(MARK_DEAL_WON_SENTINEL)
   const sendCatalog = raw.includes(SEND_CATALOG_SENTINEL)
+  const sendRestaurantMenu = raw.includes(SEND_RESTAURANT_MENU_SENTINEL)
 
   const moveMatch = raw.match(
     new RegExp(
@@ -223,6 +225,8 @@ export function parseGeneration(
     .join('')
     .split(SEND_CATALOG_SENTINEL)
     .join('')
+    .split(SEND_RESTAURANT_MENU_SENTINEL)
+    .join('')
     .replace(moveMatch ? moveMatch[0] : '', '')
     .replace(temperatureMatch ? temperatureMatch[0] : '', '')
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
@@ -251,6 +255,7 @@ export function parseGeneration(
     markDealWon,
     moveToStageName,
     sendCatalog,
+    sendRestaurantMenu,
     leadTemperature,
     appointmentProposal,
     sentinelLeakDetected,

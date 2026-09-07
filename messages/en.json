@@ -426,7 +426,10 @@
       "suggestionAppointmentEmailRequired": "Enter the customer's email before confirming.",
       "sendCatalog": "Send catalog",
       "sendCatalogSuccess": "Catalog sent.",
-      "sendCatalogFailed": "Couldn't send the catalog."
+      "sendCatalogFailed": "Couldn't send the catalog.",
+      "sendMenu": "Send restaurant menu",
+      "sendMenuSuccess": "Menu sent.",
+      "sendMenuFailed": "Couldn't send the menu."
     },
     "bubble": {
       "photo": "Photo",
@@ -1048,7 +1051,12 @@
       "quoteModePdf": "As a PDF",
       "quoteModePdfHint": "A PDF document with the line items and total is rendered and sent.",
       "quoteModeMessage": "As a message",
-      "quoteModeMessageHint": "The line items and total are sent as a plain text message, no file attached."
+      "quoteModeMessageHint": "The line items and total are sent as a plain text message, no file attached.",
+      "menuLabel": "Restaurant menu",
+      "menuHint": "Your restaurant's own menu PDF (already hosted online). It's sent when a guest asks for the menu — automatically by the AI, or from the inbox composer's + menu.",
+      "menuUrlLabel": "Menu PDF link",
+      "menuUploadBtn": "Upload PDF",
+      "menuReplaceBtn": "Replace PDF"
     },
     "import": {
       "title": "Import products",

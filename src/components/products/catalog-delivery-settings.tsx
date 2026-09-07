@@ -14,12 +14,14 @@ import {
   ArrowDown,
   ExternalLink,
   MessageSquareText,
+  UtensilsCrossed,
 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { uploadAccountMedia, MEDIA_MAX_BYTES_BY_KIND } from "@/lib/storage/upload-media";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Card,
@@ -39,6 +41,7 @@ interface CatalogRow {
   catalog_pdf_url: string | null;
   catalog_photo_urls: string[] | null;
   quote_delivery_mode: QuoteMode;
+  restaurant_menu_url: string | null;
 }
 
 /**
@@ -51,7 +54,8 @@ interface CatalogRow {
  */
 export function CatalogDeliverySettings() {
   const t = useTranslations("Products.catalog");
-  const { accountId, canEditSettings, profileLoading } = useAuth();
+  const { accountId, account, canEditSettings, profileLoading } = useAuth();
+  const isHotel = account?.industry_vertical === "hotel";
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
@@ -59,7 +63,9 @@ export function CatalogDeliverySettings() {
   const [quoteMode, setQuoteMode] = useState<QuoteMode>("pdf");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
+  const [menuUrl, setMenuUrl] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [menuUploading, setMenuUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Original values, to know whether Save has anything to do.
@@ -68,11 +74,13 @@ export function CatalogDeliverySettings() {
     quoteMode: QuoteMode;
     pdfUrl: string | null;
     photoUrls: string[];
+    menuUrl: string;
   }>({
     mode: "digital",
     quoteMode: "pdf",
     pdfUrl: null,
     photoUrls: [],
+    menuUrl: "",
   });
 
   useEffect(() => {
@@ -82,7 +90,7 @@ export function CatalogDeliverySettings() {
     (async () => {
       const { data } = await supabase
         .from("accounts")
-        .select("catalog_delivery_mode, catalog_pdf_url, catalog_photo_urls, quote_delivery_mode")
+        .select("catalog_delivery_mode, catalog_pdf_url, catalog_photo_urls, quote_delivery_mode, restaurant_menu_url")
         .eq("id", accountId)
         .maybeSingle<CatalogRow>();
       if (cancelled) return;
@@ -90,11 +98,13 @@ export function CatalogDeliverySettings() {
       const loadedQuoteMode = data?.quote_delivery_mode ?? "pdf";
       const loadedPdf = data?.catalog_pdf_url ?? null;
       const loadedPhotos = data?.catalog_photo_urls ?? [];
+      const loadedMenu = data?.restaurant_menu_url ?? "";
       setMode(loadedMode);
       setQuoteMode(loadedQuoteMode);
       setPdfUrl(loadedPdf);
       setPhotoUrls(loadedPhotos);
-      setOriginal({ mode: loadedMode, quoteMode: loadedQuoteMode, pdfUrl: loadedPdf, photoUrls: loadedPhotos });
+      setMenuUrl(loadedMenu);
+      setOriginal({ mode: loadedMode, quoteMode: loadedQuoteMode, pdfUrl: loadedPdf, photoUrls: loadedPhotos, menuUrl: loadedMenu });
       setLoading(false);
     })();
     return () => {
@@ -106,6 +116,7 @@ export function CatalogDeliverySettings() {
     mode !== original.mode ||
     quoteMode !== original.quoteMode ||
     pdfUrl !== original.pdfUrl ||
+    menuUrl.trim() !== original.menuUrl ||
     photoUrls.length !== original.photoUrls.length ||
     photoUrls.some((u, i) => u !== original.photoUrls[i]);
 
@@ -126,6 +137,26 @@ export function CatalogDeliverySettings() {
       toast.error(err instanceof Error ? err.message : t("uploadFailed"));
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleMenuFile(file: File) {
+    if (file.type !== "application/pdf") {
+      toast.error(t("invalidPdf"));
+      return;
+    }
+    if (file.size > MAX_CATALOG_FILE_BYTES) {
+      toast.error(t("fileTooLarge"));
+      return;
+    }
+    setMenuUploading(true);
+    try {
+      const { publicUrl } = await uploadAccountMedia("catalog-media", file);
+      setMenuUrl(publicUrl);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("uploadFailed"));
+    } finally {
+      setMenuUploading(false);
     }
   }
 
@@ -174,6 +205,7 @@ export function CatalogDeliverySettings() {
     if (!accountId || !dirty) return;
     setSaving(true);
     try {
+      const trimmedMenu = menuUrl.trim();
       const { error } = await supabase
         .from("accounts")
         .update({
@@ -181,13 +213,15 @@ export function CatalogDeliverySettings() {
           catalog_pdf_url: pdfUrl,
           catalog_photo_urls: photoUrls,
           quote_delivery_mode: quoteMode,
+          restaurant_menu_url: trimmedMenu || null,
         })
         .eq("id", accountId);
       if (error) {
         toast.error(t("saveFailed"));
         return;
       }
-      setOriginal({ mode, quoteMode, pdfUrl, photoUrls });
+      setMenuUrl(trimmedMenu);
+      setOriginal({ mode, quoteMode, pdfUrl, photoUrls, menuUrl: trimmedMenu });
       toast.success(t("saveSuccess"));
     } finally {
       setSaving(false);
@@ -399,6 +433,67 @@ export function CatalogDeliverySettings() {
           )}
         </CardContent>
       </Card>
+
+      {isHotel && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-foreground">
+              <UtensilsCrossed className="size-4 text-primary shrink-0" />
+              {t("menuLabel")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">{t("menuHint")}</p>
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">{t("menuUrlLabel")}</Label>
+              <Input
+                type="url"
+                inputMode="url"
+                placeholder="https://…/menu.pdf"
+                value={menuUrl}
+                disabled={disabled || menuUploading}
+                onChange={(e) => setMenuUrl(e.target.value)}
+              />
+              {menuUrl.trim() && (
+                <a
+                  href={menuUrl.trim()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                >
+                  <FileText className="size-3.5 shrink-0" />
+                  {t("viewCurrent")}
+                  <ExternalLink className="size-3 shrink-0" />
+                </a>
+              )}
+            </div>
+            <label>
+              <input
+                type="file"
+                accept="application/pdf"
+                disabled={disabled || menuUploading}
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleMenuFile(file);
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled || menuUploading}
+                onClick={(e) => (e.currentTarget.previousElementSibling as HTMLInputElement)?.click()}
+              >
+                {menuUploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                {menuUrl.trim() ? t("menuReplaceBtn") : t("menuUploadBtn")}
+              </Button>
+            </label>
+            {!canEditSettings && <p className="text-xs text-muted-foreground">{t("adminOnlyHint")}</p>}
+          </CardContent>
+        </Card>
+      )}
 
       {canEditSettings && (
         <Button

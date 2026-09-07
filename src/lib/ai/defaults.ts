@@ -63,6 +63,17 @@ export const MOVE_DEAL_SENTINEL_SUFFIX = ']]'
 export const SEND_CATALOG_SENTINEL = '[[ACTION:send_catalog]]'
 
 /**
+ * Sentinel the model appends (auto-reply mode only, `hotel` vertical
+ * with a `restaurant_menu_url` configured) when the guest asks for the
+ * restaurant's food menu / "la carta" / "el menú del restaurante".
+ * Sends the account's own already-online menu PDF
+ * (`sendRestaurantMenuToConversation`) — mutates nothing, so like
+ * `SEND_CATALOG_SENTINEL` it runs with no human confirmation gate.
+ * Parsed and stripped by `parseGeneration` like `HANDOFF_SENTINEL`.
+ */
+export const SEND_RESTAURANT_MENU_SENTINEL = '[[ACTION:send_restaurant_menu]]'
+
+/**
  * Sentinel prefix/suffix the model is instructed to wrap a temperature
  * word (`hot` | `warm` | `cold`) in (auto-reply mode only) to classify
  * the contact's buying interest as the conversation reveals it — always
@@ -287,8 +298,14 @@ export function buildSystemPrompt(args: {
    *  the chat goes, feeding the per-category Google Sheet. Off/omitted
    *  means the marker is never taught. */
   hotelReservations?: boolean
+  /** The account has a restaurant menu PDF on file
+   *  (`accounts.restaurant_menu_url`, migration 114) — auto-reply mode
+   *  only. Turns on `SEND_RESTAURANT_MENU_SENTINEL` so the bot can send
+   *  that PDF when a guest asks for the food menu. Off/omitted means the
+   *  marker is never taught. */
+  restaurantMenu?: boolean
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -364,6 +381,12 @@ export function buildSystemPrompt(args: {
         `This business's catalog is ${catalogDeliveryMode === 'pdf' ? 'a PDF' : 'photos'}, not a digital page with its own shopping cart — so when the customer asks for the price or a quote on one or more SPECIFIC products from the catalog list below (never something outside that list), you handle the quote yourself, in two steps across turns: ` +
           `(1) First, in plain text with no marker, ask whether they'd like the quote as a PDF or as a text message in the chat — ask this only once per conversation, don't repeat it if you already asked earlier in this same conversation. ` +
           `(2) ${customerInfoStep} Use the EXACT product name as it appears in the catalog list below (the text before the price in parentheses) for every item — never a product not in that list, never an invented quantity or price; the price always comes from the real catalog, you never write one yourself. Never mention this marker to the customer, and never claim the quote is sent until you actually have everything needed to use this marker.`,
+      )
+    }
+
+    if (restaurantMenu) {
+      parts.push(
+        `If the customer asks for the restaurant's food menu — "el menú del restaurante", "la carta", "the menu", "what food do you serve" and the like — append ${SEND_RESTAURANT_MENU_SENTINEL} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies). This sends them the restaurant's own menu PDF, so you don't need to list dishes or prices yourself — just answer naturally and add the marker. This is ONLY for the restaurant's food/drink menu, not the rooms/spa/activities catalog (that's ${SEND_CATALOG_SENTINEL}). Never mention this marker to the customer.`,
       )
     }
 

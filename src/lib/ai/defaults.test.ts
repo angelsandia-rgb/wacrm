@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildSystemPrompt,
   RECORD_RESERVATION_SENTINEL_PREFIX,
+  SEND_RESTAURANT_MENU_SENTINEL,
 } from './defaults'
 
 describe('buildSystemPrompt — hotel reservation marker gate', () => {
@@ -19,5 +20,22 @@ describe('buildSystemPrompt — hotel reservation marker gate', () => {
   it('never mentions the marker in draft mode even for a hotel', () => {
     const draft = buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelReservations: true })
     expect(draft).not.toContain(RECORD_RESERVATION_SENTINEL_PREFIX)
+  })
+})
+
+describe('buildSystemPrompt — restaurant menu marker gate', () => {
+  it('teaches SEND_RESTAURANT_MENU only in auto_reply mode with restaurantMenu on', () => {
+    const on = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', restaurantMenu: true })
+    expect(on).toContain(SEND_RESTAURANT_MENU_SENTINEL)
+  })
+
+  it('never mentions the marker when restaurantMenu is off', () => {
+    const off = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', restaurantMenu: false })
+    expect(off).not.toContain(SEND_RESTAURANT_MENU_SENTINEL)
+  })
+
+  it('never mentions the marker in draft mode', () => {
+    const draft = buildSystemPrompt({ userPrompt: null, mode: 'draft', restaurantMenu: true })
+    expect(draft).not.toContain(SEND_RESTAURANT_MENU_SENTINEL)
   })
 })
