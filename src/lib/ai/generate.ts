@@ -14,6 +14,8 @@ import {
   SEND_RESTAURANT_MENU_SENTINEL,
   SET_TEMPERATURE_SENTINEL_PREFIX,
   SET_TEMPERATURE_SENTINEL_SUFFIX,
+  SET_CONTACT_NAME_SENTINEL_PREFIX,
+  SET_CONTACT_NAME_SENTINEL_SUFFIX,
   SCHEDULE_APPOINTMENT_SENTINEL_PREFIX,
   SCHEDULE_APPOINTMENT_SENTINEL_SUFFIX,
   CREATE_QUOTE_SENTINEL_PREFIX,
@@ -129,6 +131,15 @@ export function parseGeneration(
     ? (temperatureRaw as LeadTemperature)
     : null
 
+  const contactNameMatch = raw.match(
+    new RegExp(
+      `${escapeRegExp(SET_CONTACT_NAME_SENTINEL_PREFIX)}(.+?)${escapeRegExp(SET_CONTACT_NAME_SENTINEL_SUFFIX)}`,
+    ),
+  )
+  // Only a light trim here — `auto-reply.ts` does the real validation
+  // (length, must contain a letter, not the phone number) before writing.
+  const contactName = contactNameMatch ? contactNameMatch[1].trim().replace(/\s+/g, ' ') || null : null
+
   const appointmentMatch = raw.match(
     new RegExp(
       `${escapeRegExp(SCHEDULE_APPOINTMENT_SENTINEL_PREFIX)}(.+?)${escapeRegExp(SCHEDULE_APPOINTMENT_SENTINEL_SUFFIX)}`,
@@ -229,6 +240,7 @@ export function parseGeneration(
     .join('')
     .replace(moveMatch ? moveMatch[0] : '', '')
     .replace(temperatureMatch ? temperatureMatch[0] : '', '')
+    .replace(contactNameMatch ? contactNameMatch[0] : '', '')
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
@@ -254,7 +266,7 @@ export function parseGeneration(
   //      `QUICK_REPLY`). Strip it SILENTLY — never a reason to park the
   //      conversation on a human.
   const SAFE_KNOWN_MARKER_RE =
-    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_restaurant_menu|set_temperature|record_reservation)(?::[^\]]{0,600})?)\s*\]\]/gi
+    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_restaurant_menu|set_temperature|set_contact_name|record_reservation)(?::[^\]]{0,600})?)\s*\]\]/gi
   const straySafe = text.match(SAFE_KNOWN_MARKER_RE)
   if (straySafe) {
     console.warn('[ai generate] stripped stray/duplicate low-stakes marker(s) from reply text:', straySafe)
@@ -293,6 +305,7 @@ export function parseGeneration(
     sendCatalog,
     sendRestaurantMenu,
     leadTemperature,
+    contactName,
     appointmentProposal,
     sentinelLeakDetected,
     quoteProposal,

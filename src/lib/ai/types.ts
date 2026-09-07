@@ -108,6 +108,12 @@ export interface GenerateResult {
    *  mode only), or null when the model didn't emit a (valid) marker —
    *  see `SET_TEMPERATURE_SENTINEL_PREFIX`. */
   leadTemperature: 'cold' | 'warm' | 'hot' | null
+  /** The customer's real name as they stated/corrected it in the chat
+   *  (auto-reply mode only), lightly trimmed, or null — see
+   *  `SET_CONTACT_NAME_SENTINEL_PREFIX`. `auto-reply.ts` validates it
+   *  hard before overwriting `contacts.name` and refreshing the
+   *  reservation's Google Sheet row. */
+  contactName: string | null
   /** A real appointment slot the model proposed to book autonomously
    *  (auto-reply mode only, account opted in AND Google Calendar
    *  connected), or null — see `SCHEDULE_APPOINTMENT_SENTINEL_PREFIX`.

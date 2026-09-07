@@ -8,6 +8,16 @@
 // are the industry-standard ones (occupancy, ADR, RevPAR, length of
 // stay, booking lead time), so the numbers move the way a hotelier
 // expects.
+//
+// "Live" vs "approved": there is no in-app approve/deny screen yet — a
+// request sits at `pending` its whole life unless someone edits it via
+// the API. So the operational and revenue-estimate figures below count
+// every request that has NOT been explicitly denied (`status !==
+// 'denied'`), not `status === 'approved'` only — otherwise the whole
+// Panel reads zero for every real hotel. The approve/deny *counters*
+// (`requestsApproved` / `requestsDenied` / `approvalRate` / the status
+// mix) still reflect the literal status, for whenever that workflow
+// lands.
 // ============================================================
 
 export type ReservationStatus = 'pending' | 'approved' | 'denied'
@@ -33,6 +43,12 @@ export interface DateWindow {
 }
 
 const DAY_MS = 86_400_000
+
+/** A request that still counts — anything the hotel hasn't rejected.
+ *  See the "Live vs approved" note in the file header. */
+function isLive(r: HotelReservation): boolean {
+  return r.status !== 'denied'
+}
 
 function toUTCDate(ymd: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null
@@ -100,13 +116,14 @@ function windowRevenue(r: HotelReservation, window: DateWindow): number {
 
 export interface HotelKpis {
   // --- room revenue-management (category "habitaciones" only) ---
-  /** Room-nights sold in the window (approved room reservations). */
+  /** Room-nights sold in the window (live room reservations — anything
+   *  not denied). */
   roomNights: number
   /** rooms × days in the window; `null` when the room count is unknown. */
   availableRoomNights: number | null
   /** roomNights / availableRoomNights, 0–1; `null` without a room count. */
   occupancy: number | null
-  /** Estimated confirmed ROOM revenue attributable to the window. */
+  /** Estimated ROOM revenue (live reservations) attributable to the window. */
   revenue: number
   /** revenue / roomNights (average daily rate); `null` with no nights. */
   adr: number | null
@@ -123,17 +140,17 @@ export interface HotelKpis {
   /** approved / (approved + denied) among requests created in the window,
    *  every category. */
   approvalRate: number | null
-  /** Sum of `estimated_price` across approved requests created in the
-   *  window, every category — a rough "confirmed demand value". */
+  /** Sum of `estimated_price` across live (not-denied) requests created
+   *  in the window, every category — a rough "demand value in play". */
   estRevenue: number
-  /** Average nights per approved stay (habitaciones + paquetes) created
-   *  in the window. */
+  /** Average nights per live stay (habitaciones + paquetes) created in
+   *  the window. */
   avgLengthOfStay: number | null
   /** Average days from request to the service date (check-in, or the
-   *  use date for spa/activities/events) — approved, created in window,
+   *  use date for spa/activities/events) — live, created in window,
    *  every category. */
   avgLeadTimeDays: number | null
-  /** Total guests across approved reservations whose service date
+  /** Total guests across live reservations whose service date
    *  (check-in or use date) falls in the window, every category. */
   guests: number
 }
@@ -145,11 +162,11 @@ export function computeHotelKpis(
 ): HotelKpis {
   // --- room revenue-management: category "habitaciones" only ---
   const rooms = reservations.filter((r) => r.category === 'habitaciones')
-  const approvedRooms = rooms.filter((r) => r.status === 'approved')
+  const liveRooms = rooms.filter(isLive)
 
   let roomNights = 0
   let revenue = 0
-  for (const r of approvedRooms) {
+  for (const r of liveRooms) {
     roomNights += nightsInWindow(r.check_in, r.check_out, window)
     revenue += windowRevenue(r, window)
   }
@@ -166,18 +183,21 @@ export function computeHotelKpis(
   const cwApproved = createdInWindow.filter((r) => r.status === 'approved')
   const cwDenied = createdInWindow.filter((r) => r.status === 'denied')
   const decided = cwApproved.length + cwDenied.length
+  // Stay / lead-time / est-revenue describe demand the hotel is working,
+  // so they span every not-denied request, not the approved subset.
+  const cwLive = createdInWindow.filter(isLive)
 
   // Length of stay only means something for the two categories that
   // have a check-in/check-out span.
   const stayCats = new Set(['habitaciones', 'paquetes'])
-  const losValues = cwApproved
+  const losValues = cwLive
     .filter((r) => stayCats.has(r.category))
     .map((r) => stayNights(r.check_in, r.check_out))
     .filter((n) => n > 0)
 
   // Lead time: request → service date. Rooms/packages use check-in; spa,
   // activities and events use their `use_date`.
-  const leadValues = cwApproved
+  const leadValues = cwLive
     .map((r) => {
       const serviceYmd = r.check_in ?? r.use_date
       const svc = serviceYmd ? toUTCDate(serviceYmd) : null
@@ -188,18 +208,18 @@ export function computeHotelKpis(
     })
     .filter((d): d is number => d != null)
 
-  const estRevenue = cwApproved.reduce(
+  const estRevenue = cwLive.reduce(
     (s, r) =>
       s + (typeof r.estimated_price === 'number' && r.estimated_price > 0 ? r.estimated_price : 0),
     0,
   )
 
-  // Guests: approved reservations of any category whose service date
+  // Guests: live reservations of any category whose service date
   // (check-in or use date) lands in the window — forward-looking, so
   // not limited to requests created in the window.
   const guests = reservations
     .filter((r) => {
-      if (r.status !== 'approved') return false
+      if (!isLive(r)) return false
       const d = r.check_in ?? r.use_date
       return d ? inWindow(`${d}T00:00:00Z`, window) : false
     })
@@ -236,9 +256,9 @@ export interface DaySeriesPoint {
   requests: number
 }
 
-/** Per-day series across the window: confirmed room-nights + prorated
- *  room revenue that day (category "habitaciones"), and reservation
- *  requests created that day (EVERY category). */
+/** Per-day series across the window: live room-nights + prorated room
+ *  revenue that day (category "habitaciones", anything not denied), and
+ *  reservation requests created that day (EVERY category). */
 export function hotelDaySeries(
   reservations: HotelReservation[],
   window: DateWindow,
@@ -255,7 +275,7 @@ export function hotelDaySeries(
   )
 
   for (const r of reservations) {
-    if (r.category === 'habitaciones' && r.status === 'approved') {
+    if (r.category === 'habitaciones' && isLive(r)) {
       const total = stayNights(r.check_in, r.check_out)
       const perNight =
         total > 0 && typeof r.estimated_price === 'number' && r.estimated_price > 0
@@ -295,9 +315,10 @@ export interface CategoryStat {
   denied: number
   /** approved / (approved + denied); `null` when nothing decided. */
   approvalRate: number | null
-  /** Sum of `estimated_price` across this category's approved requests. */
+  /** Sum of `estimated_price` across this category's live (not-denied)
+   *  requests. */
   estRevenue: number
-  /** Sum of `guests` across this category's approved requests. */
+  /** Sum of `guests` across this category's live (not-denied) requests. */
   guests: number
 }
 
@@ -332,7 +353,7 @@ export function hotelCategoryBreakdown(
     if (r.status === 'pending') p.pending += 1
     else if (r.status === 'approved') p.approved += 1
     else if (r.status === 'denied') p.denied += 1
-    if (r.status === 'approved') {
+    if (isLive(r)) {
       if (typeof r.estimated_price === 'number' && r.estimated_price > 0) {
         p.estRevenue += r.estimated_price
       }
@@ -354,18 +375,21 @@ export function hotelCategoryBreakdown(
 }
 
 export interface ArrivalsDepartures {
-  /** Approved room check-ins in the next `days` days. */
+  /** Live room check-ins in the next `days` days. */
   arrivals: number
-  /** Approved room check-outs in the next `days` days. */
+  /** Live room check-outs in the next `days` days. */
   departures: number
+  /** Guests across those room check-ins. */
   arrivalGuests: number
-  /** Approved spa / activity / event bookings whose use date is in the
-   *  next `days` days. */
+  /** Live spa / activity / event bookings whose use date is in the next
+   *  `days` days. */
   services: number
+  /** Guests across those spa / activity / event bookings. */
+  serviceGuests: number
 }
 
-/** Approved reservations checking in / out (rooms) or being used
- *  (spa / activities / events) within the next `days` days. */
+/** Live (not-denied) reservations checking in / out (rooms) or being
+ *  used (spa / activities / events) within the next `days` days. */
 export function upcomingArrivalsDepartures(
   reservations: HotelReservation[],
   fromDay: Date,
@@ -378,8 +402,9 @@ export function upcomingArrivalsDepartures(
   let departures = 0
   let arrivalGuests = 0
   let services = 0
+  let serviceGuests = 0
   for (const r of reservations) {
-    if (r.status !== 'approved') continue
+    if (!isLive(r)) continue
     if (r.category === 'habitaciones') {
       const ci = r.check_in ? toUTCDate(r.check_in) : null
       const co = r.check_out ? toUTCDate(r.check_out) : null
@@ -390,8 +415,11 @@ export function upcomingArrivalsDepartures(
       if (inRange(co)) departures += 1
     } else if (r.category === 'spa' || r.category === 'actividades' || r.category === 'eventos') {
       const ud = r.use_date ? toUTCDate(r.use_date) : null
-      if (inRange(ud)) services += 1
+      if (inRange(ud)) {
+        services += 1
+        serviceGuests += typeof r.guests === 'number' ? r.guests : 0
+      }
     }
   }
-  return { arrivals, departures, arrivalGuests, services }
+  return { arrivals, departures, arrivalGuests, services, serviceGuests }
 }

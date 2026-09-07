@@ -67,9 +67,11 @@ describe('computeHotelKpis', () => {
     res({ check_in: '2026-03-13', check_out: '2026-03-16', guests: 2, estimated_price: 2700, created_at: '2026-03-05T10:00:00Z' }),
     // 2-night stay in March, priced 2000 → 1000/night
     res({ check_in: '2026-03-20', check_out: '2026-03-22', guests: 3, estimated_price: 2000, created_at: '2026-03-18T10:00:00Z' }),
-    // denied request created in window — counts toward approval rate, not nights
+    // denied request created in window — counts toward approval rate, but
+    // is excluded from every "live" figure (nights, revenue, stay, lead time)
     res({ check_in: '2026-03-25', check_out: '2026-03-27', estimated_price: 1500, status: 'denied', created_at: '2026-03-19T10:00:00Z' }),
-    // pending
+    // pending — still "live" (no approve/deny screen exists), so it feeds
+    // stay / lead-time / est-revenue; its stay is outside the window though
     res({ check_in: '2026-04-02', check_out: '2026-04-05', status: 'pending', created_at: '2026-03-28T10:00:00Z' }),
     // a spa request — counts toward demand, ignored by the ROOM KPIs
     res({ category: 'spa', estimated_price: 300, guests: 1, created_at: '2026-03-10T10:00:00Z' }),
@@ -93,9 +95,31 @@ describe('computeHotelKpis', () => {
     expect(k.requestsDenied).toBe(1)
     expect(k.requestsPending).toBe(1)
     expect(k.approvalRate).toBeCloseTo(3 / 4) // 3 approved / 4 decided
-    expect(k.estRevenue).toBeCloseTo(5000) // 2700 + 2000 + 300 (approved, all cats)
-    expect(k.avgLengthOfStay).toBeCloseTo(2.5) // (3 + 2) / 2 — rooms only have a stay
-    expect(k.avgLeadTimeDays).toBeCloseTo((8 + 2) / 2) // 03-05→03-13=8, 03-18→03-20=2
+    expect(k.estRevenue).toBeCloseTo(5000) // 2700 + 2000 + 300 (live, all cats; pending room has no price)
+    expect(k.avgLengthOfStay).toBeCloseTo(8 / 3) // (3 + 2 + 3) / 3 — incl. the live pending room
+    expect(k.avgLeadTimeDays).toBeCloseTo((8 + 2 + 5) / 3) // 03-05→03-13=8, 03-18→03-20=2, 03-28→04-02=5
+  })
+
+  it('a hotel whose requests are all still pending is NOT a blank Panel', () => {
+    // The real-world default: no one approves/denies, everything sits at
+    // `pending`. Every demand figure must still populate.
+    const window: DateWindow = {
+      start: new Date(2026, 4, 1),
+      end: new Date(2026, 5, 1), // exclusive → all of May is "inside"
+    }
+    const allPending: HotelReservation[] = [
+      res({ category: 'habitaciones', status: 'pending', check_in: '2026-05-20', check_out: '2026-05-23', guests: 2, estimated_price: 1500, created_at: '2026-05-10T12:00:00Z' }),
+      res({ category: 'spa', status: 'pending', use_date: '2026-05-12', guests: 3, created_at: '2026-05-10T12:00:00Z' }),
+      res({ category: 'eventos', status: 'pending', use_date: '2026-05-28', guests: 20, created_at: '2026-05-10T12:00:00Z' }),
+    ]
+    const k = computeHotelKpis(allPending, 4, window)
+    expect(k.requests).toBe(3)
+    expect(k.requestsPending).toBe(3)
+    expect(k.approvalRate).toBeNull() // nothing decided
+    expect(k.estRevenue).toBeCloseTo(1500)
+    expect(k.avgLengthOfStay).toBeCloseTo(3)
+    expect(k.roomNights).toBe(3) // the pending room's 3 nights still count
+    expect(k.occupancy).toBeCloseTo(3 / (4 * 31))
   })
 
   it('no room count → occupancy / RevPAR are null but ADR still works', () => {
@@ -169,7 +193,9 @@ describe('hotelCategoryBreakdown', () => {
     expect(rooms.approvalRate).toBeCloseTo(0.5)
 
     const spa = b.find((r) => r.category === 'spa')!
-    expect(spa).toMatchObject({ requests: 2, approved: 1, pending: 1, estRevenue: 300, guests: 1 })
+    // est. revenue / guests span live rows (approved + pending); only the
+    // approve/deny counters split them out
+    expect(spa).toMatchObject({ requests: 2, approved: 1, pending: 1, estRevenue: 600, guests: 1 })
     expect(spa.approvalRate).toBe(1) // 1 approved / 1 decided (pending is not "decided")
 
     const eventos = b.find((r) => r.category === 'eventos')!
@@ -184,24 +210,26 @@ describe('hotelCategoryBreakdown', () => {
 })
 
 describe('upcomingArrivalsDepartures', () => {
-  it('counts approved check-ins / check-outs in the next 7 days', () => {
+  it('counts live (not-denied) check-ins / check-outs / services in the next 7 days', () => {
     const from = new Date(2026, 2, 10) // 2026-03-10
     const r = upcomingArrivalsDepartures(
       [
-        res({ check_in: '2026-03-12', check_out: '2026-03-15', guests: 2 }), // arrival in range
+        res({ check_in: '2026-03-12', check_out: '2026-03-15', guests: 2 }), // arrival + departure in range
         res({ check_in: '2026-03-09', check_out: '2026-03-14', guests: 4 }), // departure in range, arrival not
         res({ check_in: '2026-03-20', check_out: '2026-03-25' }), // both out of range
-        res({ check_in: '2026-03-13', check_out: '2026-03-14', status: 'pending' }), // pending → ignored
-        res({ category: 'spa', use_date: '2026-03-12' }), // service in range
+        res({ check_in: '2026-03-13', check_out: '2026-03-14', status: 'pending' }), // pending still counts
+        res({ check_in: '2026-03-13', check_out: '2026-03-14', status: 'denied' }), // denied → ignored
+        res({ category: 'spa', use_date: '2026-03-12', guests: 3 }), // service in range
         res({ category: 'eventos', use_date: '2026-03-30' }), // service out of range
-        res({ category: 'actividades', use_date: '2026-03-15', status: 'pending' }), // pending → ignored
+        res({ category: 'actividades', use_date: '2026-03-15', status: 'pending' }), // pending still counts
       ],
       from,
       7,
     )
-    expect(r.arrivals).toBe(1)
-    expect(r.departures).toBe(2) // 2026-03-15 and 2026-03-14 both fall in [03-10, 03-17)
-    expect(r.arrivalGuests).toBe(2)
-    expect(r.services).toBe(1) // only the approved spa on 03-12
+    expect(r.arrivals).toBe(2) // 03-12 (approved) + 03-13 (pending)
+    expect(r.departures).toBe(3) // 03-15, 03-14 (approved) and 03-14 (pending) all in [03-10, 03-17)
+    expect(r.arrivalGuests).toBe(2) // only the 03-12 arrival carries guests
+    expect(r.services).toBe(2) // spa 03-12 + activity 03-15 (pending)
+    expect(r.serviceGuests).toBe(3) // spa carries 3; the activity has none
   })
 })

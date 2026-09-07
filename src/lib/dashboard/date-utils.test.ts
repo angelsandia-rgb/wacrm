@@ -11,6 +11,7 @@ import {
   localDayKey,
   mondayIndex,
   startOfLocalDay,
+  startOfNextLocalDay,
 } from './date-utils';
 
 describe('startOfLocalDay', () => {
@@ -31,6 +32,27 @@ describe('startOfLocalDay', () => {
     const before = d.getTime();
     startOfLocalDay(d);
     expect(d.getTime()).toBe(before);
+  });
+});
+
+describe('startOfNextLocalDay', () => {
+  it('is local midnight the day after the given date', () => {
+    const d = new Date('2026-05-18T13:45:22.500');
+    const out = startOfNextLocalDay(d);
+    expect(out.getHours()).toBe(0);
+    expect(out.getDate()).toBe(19);
+    expect(out.getMonth()).toBe(d.getMonth());
+    // an instant earlier today is strictly before it (today is "inside")
+    expect(d.getTime()).toBeLessThan(out.getTime());
+  });
+
+  it('does not mutate the input and rolls month boundaries', () => {
+    const d = new Date('2026-05-31T09:00:00');
+    const before = d.getTime();
+    const out = startOfNextLocalDay(d);
+    expect(d.getTime()).toBe(before);
+    expect(out.getMonth()).toBe(5); // June
+    expect(out.getDate()).toBe(1);
   });
 });
 

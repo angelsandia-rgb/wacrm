@@ -15,6 +15,17 @@ export function daysAgoStart(days: number): Date {
   return out
 }
 
+/** Local midnight *tomorrow* — the exclusive upper bound for a window
+ *  that should include everything that has happened so far today. The
+ *  hotel-metrics module (`src/lib/hotel-metrics/compute.ts`) treats
+ *  `window.end` as exclusive, so passing a bare `startOfLocalDay()`
+ *  there silently dropped every reservation created today. */
+export function startOfNextLocalDay(d: Date = new Date()): Date {
+  const out = startOfLocalDay(d)
+  out.setDate(out.getDate() + 1)
+  return out
+}
+
 /** Date-only key (YYYY-MM-DD) for bucketing rows by local calendar day. */
 export function localDayKey(d: Date | string): string {
   const date = typeof d === 'string' ? new Date(d) : d

@@ -88,6 +88,20 @@ export const SET_TEMPERATURE_SENTINEL_PREFIX = '[[ACTION:set_temperature:'
 export const SET_TEMPERATURE_SENTINEL_SUFFIX = ']]'
 
 /**
+ * Sentinel prefix/suffix the model wraps the customer's real name in
+ * (auto-reply mode only) once they state or correct it in the chat —
+ * so the phone-profile name the contact was created with ("Juan
+ * WhatsApp") gets replaced with what they actually go by. Low-stakes: a
+ * label on the contact, re-emitted on any later turn, so a stray one is
+ * stripped silently, never a handoff. `auto-reply.ts` sanitises the
+ * value hard (length, must contain a letter, not the phone number) and
+ * re-fires `reservation.updated` for the contact's sheet-backed
+ * reservations so the Google Sheet's "Cliente" column updates too.
+ */
+export const SET_CONTACT_NAME_SENTINEL_PREFIX = '[[ACTION:set_contact_name:'
+export const SET_CONTACT_NAME_SENTINEL_SUFFIX = ']]'
+
+/**
  * Sentinel prefix/suffix the model is instructed to wrap
  * `<start ISO 8601>|<end ISO 8601>|<attendee email>` in (auto-reply
  * mode only, and only ever shown to the model when the account has
@@ -344,6 +358,9 @@ export function buildSystemPrompt(args: {
     )
     parts.push(
       `You are replying automatically with no human in the loop. Never hand off automatically the moment a human is mentioned — use this two-step protocol instead: (1) The FIRST time the customer explicitly asks to speak with a person / an agent / a human being (e.g. "can I talk to someone", "let me speak with a person", "I want to talk to an agent"), do NOT use ${HANDOFF_SENTINEL} yet — instead reply, in the customer's own language, asking them to confirm, e.g. "¿te gustaría que te conecte con alguien del equipo?" / "would you like me to connect you with someone from the team?", and wait for their answer. (2) Only once you can see in the conversation above that you already asked that exact question AND the customer has now clearly confirmed yes (not a new, different request) — reply with exactly ${HANDOFF_SENTINEL} and nothing else, no other text; a human agent will then take over. If instead they decline, ignore the question, or start talking about something else, do NOT hand off — keep helping them yourself and drop it. Do NOT hand off just because you are unsure, missing some information, or the customer seems upset or is complaining — in those cases still write your best reply yourself: say what you do know, ask a clarifying question about whatever is missing, or offer to follow up, but keep the conversation going.`,
+    )
+    parts.push(
+      `When the customer tells you their name — or corrects a wrong one — and you're reasonably sure it's a real personal or business name (not a joke, not "no", not a product), append ${SET_CONTACT_NAME_SENTINEL_PREFIX}<their full name>${SET_CONTACT_NAME_SENTINEL_SUFFIX} at the very end of your reply (after your customer-facing message, and after any other marker). Write the name as they'd want it recorded — normal capitalization, no extra words. Only do this the first time you learn it or when it actually changes; skip it once the name on file already matches. Keep the name to one line with no "]", ";" or "|" inside. This replaces the WhatsApp profile name in the CRM (and in the reservations sheet). Never mention this marker to the customer.`,
     )
     parts.push(
       `On every single reply, separately assess this contact's buying-interest temperature from the whole conversation so far and append ${SET_TEMPERATURE_SENTINEL_PREFIX}hot${SET_TEMPERATURE_SENTINEL_SUFFIX}, ${SET_TEMPERATURE_SENTINEL_PREFIX}warm${SET_TEMPERATURE_SENTINEL_SUFFIX}, or ${SET_TEMPERATURE_SENTINEL_PREFIX}cold${SET_TEMPERATURE_SENTINEL_SUFFIX} at the very end of your reply — use exactly one of those three words. "hot" = ready to buy now, asking to close/pay, or has said things like "I'll take it" / "I want it" / "I'm very interested" even before a final purchase is confirmed; "warm" = engaged, asking real questions, interested but not urgent; "cold" = just browsing, a one-word greeting, or vague. This is completely independent of every other marker below — make this assessment and include the marker EVERY time there is any signal at all, even on a turn where you are also handing off, asking for final purchase confirmation, or moving a stage; do not skip it just because you're also doing something else this turn. Only skip it on a reply that truly carries no signal either way (e.g. the customer only said "ok" or asked something unrelated to interest). Never mention this marker to the customer.`,
