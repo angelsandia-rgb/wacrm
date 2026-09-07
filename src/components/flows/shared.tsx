@@ -422,7 +422,10 @@ export function summarizeNode(
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
-      return note.length > 0 ? truncate(note) : null;
+      const toAi = cfg.target === 'ai';
+      const prefix = toAi ? '→ IA: ' : '';
+      if (note.length > 0) return `${prefix}${truncate(note)}`;
+      return toAi ? '→ IA' : null;
     }
   }
 }

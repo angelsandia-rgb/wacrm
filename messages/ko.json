@@ -1801,7 +1801,13 @@
         "filenamePlaceholder": "invoice.pdf",
         "advanceAfterSending": "전송 후 다음 진행",
         "pickNextNode": "다음 노드를 선택하세요…",
-        "none": "— 없음 —"
+        "none": "— 없음 —",
+        "handoffTargetLabel": "전환 대상",
+        "handoffTargetHuman": "상담원(사람)",
+        "handoffTargetAi": "AI 어시스턴트",
+        "handoffTargetHelp": "\"AI 어시스턴트\"를 선택하면 플로우가 종료되고 자동 응답 봇이 아래 지시에 따라 대화를 이어갑니다.",
+        "handoffAiNoteLabel": "AI 지시사항",
+        "handoffAiNoteHelp": "고객이 AI에 도달했을 때 AI가 해야 할 일(예: \"선택한 옵션을 지식베이스에서 찾아 2~3개 옵션 제시\"). 플로우에서 앞서 수집한 변수가 치환됩니다. 다음 응답에 한 번만 사용됩니다."
       },
       "categories": {
         "messaging": "메시징",

@@ -98,11 +98,24 @@ export interface SendMediaNodeConfig {
 }
 
 export interface HandoffNodeConfig {
-  /** Optional internal note written to flow_run_events.payload.note. */
+  /**
+   * `'human'` (default) — end the run, flip the conversation to a
+   * person (optionally `assign_to`). `'ai'` — hand the conversation to
+   * the AI auto-reply bot instead, passing `note` as a one-shot
+   * instruction it must follow on its next reply (stored on
+   * `conversations.ai_flow_directive`, migration 118).
+   */
+  target?: "human" | "ai";
+  /**
+   * For `target: 'human'` — an internal note written to
+   * `flow_run_events.payload.note`. For `target: 'ai'` — the
+   * instruction handed to the bot (`{{ vars.* }}` interpolated).
+   */
   note?: string;
   /**
    * Optional agent user_id to assign on the conversation when this
    * node fires. Leave unset to flip the status without assignment.
+   * Ignored when `target: 'ai'`.
    */
   assign_to?: string;
 }
@@ -365,6 +378,7 @@ export interface DispatchInboundResult {
     | "started"
     | "completed"
     | "handed_off"
+    | "released_to_ai"
     | "fallback_fired"
     | "duplicate_inbound_ignored"
     | "no_match";

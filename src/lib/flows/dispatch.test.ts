@@ -380,3 +380,45 @@ describe("dispatchInboundToFlows — a menu that fails to send hands off, not si
     expect(result.outcome).toBe("handed_off");
   });
 });
+
+describe("dispatchInboundToFlows — handoff node → AI", () => {
+  const AI_HANDOFF_NODES = [
+    {
+      id: "n1",
+      flow_id: "flow-1",
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "ho" },
+    },
+    {
+      id: "n2",
+      flow_id: "flow-1",
+      node_key: "ho",
+      node_type: "handoff",
+      config: { target: "ai", note: "Busca la opción en la KB." },
+    },
+  ];
+
+  it("releases the conversation to the AI (consumed:false) and logs target:ai", async () => {
+    h.state.flows = [KEYWORD_FLOW];
+    h.state.nodes = AI_HANDOFF_NODES;
+
+    const result = await dispatch({
+      kind: "text",
+      text: "order status",
+      meta_message_id: "m1",
+    });
+
+    // NOT consumed → the webhook then runs the AI auto-reply on this
+    // same inbound.
+    expect(result.consumed).toBe(false);
+    expect(result.outcome).toBe("released_to_ai");
+
+    const handoffEvents = h.state.inserted
+      .filter((i) => i.table === "flow_run_events")
+      .map((i) => i.row)
+      .filter((e) => e.event_type === "handoff");
+    expect(handoffEvents).toHaveLength(1);
+    expect((handoffEvents[0].payload as { target?: string }).target).toBe("ai");
+  });
+});

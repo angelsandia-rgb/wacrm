@@ -334,8 +334,14 @@ export function buildSystemPrompt(args: {
    *  ("el viernes", "el 11", "mañana") itself instead of pestering the
    *  customer for the month/year. */
   currentDate?: string
+  /** A one-shot instruction handed to the bot by a Flow "handoff → AI"
+   *  node (`conversations.ai_flow_directive`, migration 118) — auto-reply
+   *  mode only. The customer picked a menu option and the flow routed
+   *  the conversation here with a specific task; this is that task.
+   *  Cleared after this reply. */
+  flowDirective?: string
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, currentDate } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, currentDate, flowDirective } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -353,6 +359,11 @@ export function buildSystemPrompt(args: {
   }
 
   if (mode === 'auto_reply') {
+    if (flowDirective && flowDirective.trim()) {
+      parts.push(
+        `A guided menu just routed this conversation to you with a specific instruction from the business — treat it as a priority task for your next reply, on top of your normal role: «${flowDirective.trim()}». The customer just picked a menu option; act on that instruction now (e.g. look the relevant information up in the knowledge base and answer), and keep helping them normally afterward.`,
+      )
+    }
     parts.push(
       `The customer may send you photos. When they do, look at the image and use what you see to answer — identify the product or model, read visible text/labels, spot a problem, or match it to an item in the catalog. If a photo is unreadable, blank, or clearly unrelated, say so and ask for a clearer one. Never claim you cannot see images.`,
     )

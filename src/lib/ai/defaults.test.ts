@@ -53,6 +53,25 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — flow handoff directive', () => {
+  it('injects the directive as a priority task in auto_reply mode', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      flowDirective: 'Busca la opción elegida en la base de conocimientos.',
+    })
+    expect(p).toContain('Busca la opción elegida en la base de conocimientos.')
+    expect(p.toLowerCase()).toContain('priority task')
+  })
+
+  it('is silent when no directive is passed, and never appears in draft mode', () => {
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('priority task')
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'draft', flowDirective: 'do X' }),
+    ).not.toContain('do X')
+  })
+})
+
 describe('buildSystemPrompt — restaurant menu marker gate', () => {
   it('teaches SEND_RESTAURANT_MENU only in auto_reply mode with restaurantMenu on', () => {
     const on = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', restaurantMenu: true })
