@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { AiError, type AiUsage, type ChatMessage } from '@/lib/ai/types'
 import { mergeConsecutive, providerHttpError, toNetworkError } from '@/lib/ai/providers/shared'
 import { ASSISTANT_TOOLS, executeReadTool, isWriteTool } from './tools'
+import type { AssistantTurnResult } from './run-turn'
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -27,20 +28,6 @@ interface AnthropicToolResponse {
   content?: ContentBlock[]
   stop_reason?: string
   usage?: { input_tokens?: number; output_tokens?: number }
-}
-
-/** One proposed write action the model wants to take. Never executed by
- *  this module — the caller (route.ts) hands it to the frontend, which
- *  must get the owner's explicit confirmation before anything runs. */
-export interface PendingAction {
-  action: string
-  input: Record<string, unknown>
-}
-
-export interface AssistantTurnResult {
-  reply: string
-  pendingAction: PendingAction | null
-  usage: AiUsage | null
 }
 
 /** Mirrors providers/anthropic.ts's `normalizeForAnthropic` (not
@@ -96,15 +83,11 @@ async function callAnthropic(args: {
 }
 
 /**
- * Run one owner turn of the assistant to completion: calls Anthropic
- * with the tool catalog, executes every READ tool the model asks for
- * immediately (server-side, scoped to `accountId` via `db`'s RLS), and
- * feeds results back — bounded by `MAX_TOOL_ROUNDS`. The moment the
- * model calls a WRITE tool, the loop stops without executing it and
- * returns it as `pendingAction`; nothing is ever mutated inside this
- * function.
+ * Anthropic implementation of the assistant tool-calling loop — see
+ * `runAssistantTurn` in `run-turn.ts` for the provider-agnostic
+ * contract this fulfils.
  */
-export async function runAssistantTurn(args: {
+export async function runAssistantTurnAnthropic(args: {
   db: SupabaseClient
   accountId: string
   apiKey: string

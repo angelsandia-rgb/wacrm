@@ -89,8 +89,6 @@ export function AiAssistant() {
       if (!res.ok) {
         if (data.code === 'ai_not_configured') {
           toast.error('No agent configured yet — finish Setup first.');
-        } else if (data.code === 'unsupported_provider') {
-          toast.error(data.error ?? 'This assistant needs an Anthropic key.');
         } else {
           toast.error(data.error ?? "Couldn't reach the assistant.");
         }

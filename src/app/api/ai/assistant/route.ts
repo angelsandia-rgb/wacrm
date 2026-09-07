@@ -6,7 +6,7 @@ import { aiRequestTimeoutMs } from '@/lib/ai/defaults'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 import { logAiUsage } from '@/lib/ai/usage'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
-import { runAssistantTurn } from '@/lib/ai/assistant/anthropic-tools'
+import { runAssistantTurn } from '@/lib/ai/assistant/run-turn'
 import { formatWithOffset } from '@/lib/timezone'
 
 // Keep the tested transcript bounded, same rationale as playground.
@@ -86,16 +86,6 @@ export async function POST(request: Request) {
         { status: 400 },
       )
     }
-    if (config.provider !== 'anthropic') {
-      return NextResponse.json(
-        {
-          error: 'The assistant currently only supports Anthropic — switch your provider in Setup to use it.',
-          code: 'unsupported_provider',
-        },
-        { status: 400 },
-      )
-    }
-
     const { data: accountRow } = await supabase
       .from('accounts')
       .select('timezone')
@@ -105,6 +95,7 @@ export async function POST(request: Request) {
     const now = formatWithOffset(new Date(), timeZone)
 
     const result = await runAssistantTurn({
+      provider: config.provider,
       db: supabase,
       accountId,
       apiKey: config.apiKey,
