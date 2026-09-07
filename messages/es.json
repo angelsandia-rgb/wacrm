@@ -1791,7 +1791,13 @@
       "toastPriceInvalid": "El precio debe ser un número no negativo",
       "toastSaveFailed": "No se pudo guardar el producto",
       "toastSuccessEdit": "Producto actualizado",
-      "toastSuccessAdd": "Producto creado"
+      "toastSuccessAdd": "Producto creado",
+      "imageGalleryHint": "hasta {max}, la primera es la principal",
+      "imageMainBadge": "Principal",
+      "moveLeft": "Mover a la izquierda",
+      "moveRight": "Mover a la derecha",
+      "remove": "Quitar",
+      "toastMaxImages": "Hasta {max} fotos."
     },
     "quoteBuilder": {
       "title": "Nueva cotización",

@@ -56,7 +56,7 @@ export async function GET(
       .maybeSingle(),
     db
       .from('products')
-      .select('id, name, description, price, installation_cost, image_url, category_id')
+      .select('id, name, description, price, installation_cost, image_url, image_urls, category_id')
       .eq('account_id', accountId)
       .eq('is_active', true)
       .order('name'),

@@ -457,7 +457,11 @@ export interface Product {
   price: number;
   /** Optional flat installation fee for the base price (migration 076). */
   installation_cost?: number | null;
+  /** First photo of `image_urls` — kept in sync by the write routes so
+   *  older readers (catalog send, quote PDF, AI context) need no change. */
   image_url?: string | null;
+  /** Product photo gallery, up to 5 (migration 117). */
+  image_urls?: string[];
   is_active: boolean;
   /** Catalog category (migration 106) — null for uncategorised / generic
    *  accounts. */

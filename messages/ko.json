@@ -1142,7 +1142,13 @@
       "toastPriceInvalid": "가격은 0 이상의 숫자여야 합니다",
       "toastSaveFailed": "제품 저장에 실패했습니다",
       "toastSuccessEdit": "제품이 업데이트되었습니다",
-      "toastSuccessAdd": "제품이 생성되었습니다"
+      "toastSuccessAdd": "제품이 생성되었습니다",
+      "imageGalleryHint": "최대 {max}장, 첫 번째가 대표 사진",
+      "imageMainBadge": "대표",
+      "moveLeft": "왼쪽으로 이동",
+      "moveRight": "오른쪽으로 이동",
+      "remove": "삭제",
+      "toastMaxImages": "사진은 최대 {max}장입니다."
     },
     "quoteBuilder": {
       "title": "새 견적서",

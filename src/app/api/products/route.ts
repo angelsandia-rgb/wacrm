@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
-import { parsePriceOptions, parseInstallationCost } from '@/lib/products/price-options'
+import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
 import { parseRates } from '@/lib/products/rates'
 import { resolveCategoryId } from '@/lib/products/categories'
 
@@ -79,7 +79,10 @@ export async function POST(request: Request) {
   }
 
   const description = typeof body.description === 'string' ? body.description.trim() || null : null
-  const imageUrl = typeof body.image_url === 'string' ? body.image_url.trim() || null : null
+  // Up to 5 photos (migration 117); `image_url` stays the first one so
+  // every existing reader keeps working unchanged.
+  const imageUrls = parseProductImages(body.image_urls, body.image_url)
+  const imageUrl = imageUrls[0] ?? null
   const isActive = body.is_active !== false
 
   const installationCost = parseInstallationCost(body.installation_cost)
@@ -114,6 +117,7 @@ export async function POST(request: Request) {
       price,
       installation_cost: installationCost.value,
       image_url: imageUrl,
+      image_urls: imageUrls,
       is_active: isActive,
       category_id: category.value,
     })
