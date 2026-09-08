@@ -25,6 +25,7 @@ import { formatWithOffset, describeNowInZone } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/alerts'
+import { describeError, isUndefinedColumnError } from '@/lib/observability/describe-error'
 import {
   upsertReservationRequest,
   type ReservationCategory,
@@ -108,6 +109,95 @@ interface DispatchArgs {
   configOwnerUserId: string
 }
 
+interface ConvEligibility {
+  assigned_agent_id: string | null
+  ai_autoreply_disabled: boolean | null
+  ai_reply_count: number | null
+  ai_handoff_transient: boolean | null
+  ai_handoff_at: string | null
+  ai_flow_directive: string | null
+}
+
+/** Stable columns that predate every recent AI feature — the eligibility
+ *  read still works against these even when a newer column's migration
+ *  hasn't landed yet. */
+const CONV_ELIGIBILITY_STABLE_COLS = 'assigned_agent_id, ai_autoreply_disabled, ai_reply_count'
+const CONV_ELIGIBILITY_ALL_COLS = `${CONV_ELIGIBILITY_STABLE_COLS}, ai_handoff_transient, ai_handoff_at, ai_flow_directive`
+
+/**
+ * Read the conversation's AI-eligibility columns. If the full select
+ * fails because a column doesn't exist yet — code deployed ahead of its
+ * migration, the exact shape of the 2026-09-06 and 2026-09-07 outages —
+ * alert loudly and retry with only the columns that have always existed,
+ * so the bot keeps replying (minus the just-shipped feature) instead of
+ * going account-wide silent. Any other read error → alert + `null` (the
+ * caller stands down; replying blind risks answering into a human's
+ * thread). A genuine "no such conversation" → `null`, no alert.
+ */
+async function loadConvEligibility(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+): Promise<ConvEligibility | null> {
+  const full = await db
+    .from('conversations')
+    .select(CONV_ELIGIBILITY_ALL_COLS)
+    .eq('id', conversationId)
+    .maybeSingle()
+
+  if (!full.error) {
+    return full.data ? (full.data as unknown as ConvEligibility) : null
+  }
+
+  if (isUndefinedColumnError(full.error)) {
+    void dispatchSystemAlert({
+      severity: 'critical',
+      source: 'ai_dispatch_error',
+      title: 'AI auto-reply running in DEGRADED mode — a column is missing (apply the pending migration)',
+      detail: {
+        account_id: accountId,
+        conversation_id: conversationId,
+        message: describeError(full.error).slice(0, 300),
+      },
+      dedupKey: 'ai_schema_drift',
+      accountId,
+      throttleMinutes: 60,
+    })
+    const stable = await db
+      .from('conversations')
+      .select(CONV_ELIGIBILITY_STABLE_COLS)
+      .eq('id', conversationId)
+      .maybeSingle()
+    if (stable.error || !stable.data) return null
+    const row = stable.data as unknown as Pick<
+      ConvEligibility,
+      'assigned_agent_id' | 'ai_autoreply_disabled' | 'ai_reply_count'
+    >
+    return {
+      ...row,
+      ai_handoff_transient: null,
+      ai_handoff_at: null,
+      ai_flow_directive: null,
+    }
+  }
+
+  console.error('[ai auto-reply] conversation eligibility read failed:', full.error)
+  void dispatchSystemAlert({
+    severity: 'warning',
+    source: 'ai_dispatch_error',
+    title: 'AI auto-reply could not read the conversation row',
+    detail: {
+      account_id: accountId,
+      conversation_id: conversationId,
+      message: describeError(full.error).slice(0, 300),
+    },
+    dedupKey: `ai_dispatch_error:${accountId}`,
+    accountId,
+    throttleMinutes: 60,
+  })
+  return null
+}
+
 /**
  * AI auto-reply for a freshly-arrived inbound message.
  *
@@ -176,7 +266,7 @@ export async function dispatchInboundToAiReply(
           detail: {
             account_id: accountId,
             conversation_id: conversationId,
-            message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+            message: describeError(err).slice(0, 300),
           },
           dedupKey: `ai_dispatch_error:${accountId}`,
           accountId,
@@ -187,12 +277,8 @@ export async function dispatchInboundToAiReply(
     }
     if (!config || !config.autoReplyEnabled) return
 
-    const { data: conv, error: convErr } = await db
-      .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_handoff_transient, ai_handoff_at, ai_flow_directive')
-      .eq('id', conversationId)
-      .maybeSingle()
-    if (convErr || !conv) return
+    const conv = await loadConvEligibility(db, accountId, conversationId)
+    if (!conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
@@ -218,7 +304,7 @@ export async function dispatchInboundToAiReply(
     // "AI never handed off" symptom this now fixes: treat running out
     // of auto-reply budget the same as the bot being unable to help,
     // and hand off instead of going quiet.
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) {
+    if ((conv.ai_reply_count ?? 0) >= config.autoReplyMaxPerConversation) {
       await handOffToHuman({
         db,
         conversationId,
@@ -257,11 +343,25 @@ export async function dispatchInboundToAiReply(
           detail: {
             account_id: accountId,
             conversation_id: conversationId,
-            message: err2 instanceof Error ? err2.message.slice(0, 300) : String(err2).slice(0, 300),
+            message: describeError(err2).slice(0, 300),
           },
           dedupKey: `ai_dispatch_error:${accountId}`,
           accountId,
           throttleMinutes: 60,
+        })
+        // Reading the thread twice failed — don't leave the guest in
+        // silence. Route the conversation to a human (transient: the
+        // dispatcher may auto-recover the bot once the blip passes).
+        await handOffToHuman({
+          db,
+          conversationId,
+          handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: false,
+          summary:
+            '🤖 La IA no pudo leer esta conversación y la pasó a una persona. Si fue un fallo temporal, el bot se reactiva solo más tarde.',
+          transient: true,
+        }).catch((hoErr) => {
+          console.error('[ai auto-reply] handoff after context-read failure also failed:', hoErr)
         })
         return
       }
@@ -379,7 +479,7 @@ export async function dispatchInboundToAiReply(
         detail: {
           account_id: accountId,
           conversation_id: conversationId,
-          message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+          message: describeError(err).slice(0, 300),
         },
         dedupKey: `ai_dispatch_error:${accountId}`,
         accountId,
@@ -792,7 +892,7 @@ export async function dispatchInboundToAiReply(
       detail: {
         account_id: accountId,
         conversation_id: conversationId,
-        message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+        message: describeError(err).slice(0, 300),
       },
       dedupKey: `ai_dispatch_error:${accountId}`,
       accountId,
@@ -897,7 +997,7 @@ function alertClaimSlotFailed(accountId: string, conversationId: string, err: un
     detail: {
       account_id: accountId,
       conversation_id: conversationId,
-      message: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+      message: describeError(err).slice(0, 300),
     },
     dedupKey: `ai_claim_slot:${accountId}`,
     accountId,
@@ -987,7 +1087,7 @@ async function handleAiGenerationFailure(args: {
   }
 
   const code = err instanceof AiError ? err.code : 'unknown'
-  const message = err instanceof Error ? err.message : String(err)
+  const message = describeError(err)
   console.error(`[ai auto-reply] generateReply failed after retry (${code}):`, message)
 
   void dispatchSystemAlert({

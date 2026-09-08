@@ -50,6 +50,7 @@ const h = vi.hoisted(() => ({
     /** `messages` read for `tryRecoverTransientHandoff` — a human's own
      *  reply after the handoff, or null (nobody engaged → recover). */
     humanMsgAfterHandoff: null as { id: string } | null,
+    convFullSelectError: false,
     /** Rows `tryRecoverTransientHandoff`'s guarded UPDATE ... .select('id') returns. */
     recoveryUpdateRows: [{ id: 'conv-1' }] as { id: string }[],
   },
@@ -300,10 +301,23 @@ vi.mock('./admin-client', () => ({
       }
       // conversations
       return {
-        select: () => ({
+        select: (cols: string) => ({
           eq: () => ({
-            maybeSingle: () =>
-              Promise.resolve({ data: h.state.conv, error: null }),
+            maybeSingle: () => {
+              // Simulate "code deployed ahead of its migration": the full
+              // eligibility select (which names the newest column) 42703s,
+              // the stable-columns retry succeeds.
+              if (
+                h.state.convFullSelectError &&
+                cols.includes('ai_flow_directive')
+              ) {
+                return Promise.resolve({
+                  data: null,
+                  error: { code: '42703', message: 'column c.ai_flow_directive does not exist' },
+                })
+              }
+              return Promise.resolve({ data: h.state.conv, error: null })
+            },
           }),
         }),
         update: (payload: Record<string, unknown>) => {
@@ -365,6 +379,7 @@ beforeEach(() => {
     ai_handoff_at: null,
   }
   h.state.humanMsgAfterHandoff = null
+  h.state.convFullSelectError = false
   h.state.recoveryUpdateRows = [{ id: 'conv-1' }]
   h.state.claim = true
   h.state.updatePayload = null
@@ -462,6 +477,15 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     // It still attempts the claim, but the send is skipped.
     expect(h.state.rpcCalls).toHaveLength(1)
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('keeps replying in DEGRADED mode when the eligibility select 42703s (column deployed ahead of its migration)', async () => {
+    h.state.convFullSelectError = true
+    await dispatchInboundToAiReply(ARGS)
+    // The stable-columns retry carried the eligibility check, so the bot
+    // still generated and sent a reply instead of going account-wide silent.
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 
   it('skips when AI is off / not configured', async () => {
