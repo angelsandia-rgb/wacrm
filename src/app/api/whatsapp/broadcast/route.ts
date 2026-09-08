@@ -185,16 +185,15 @@ export async function POST(request: Request) {
       let lastError: string | null = null
 
       if (config.provider === 'zernio') {
-        // Zernio addresses a conversation by its own opaque id — a
-        // recipient with no prior inbound message (no contact / no
-        // conversation yet) can't be reached this way. Same scope
-        // boundary as every other Zernio send path in this integration.
+        // No existing thread → the template OPENS one (cold outreach) via
+        // sendWhatsAppTemplateViaZernio's `recipientPhone` path; if a
+        // conversations row exists we stamp the returned Zernio id onto it.
         try {
           const contact = await findExistingContact(supabase, accountId, sanitized)
           const { data: conv } = contact
             ? await supabase
                 .from('conversations')
-                .select('zernio_conversation_id')
+                .select('id, zernio_conversation_id')
                 .eq('account_id', accountId)
                 .eq('contact_id', contact.id)
                 .maybeSingle()
@@ -212,8 +211,16 @@ export async function POST(request: Request) {
             template: templateRow ?? undefined,
             messageParams: recipient.messageParams,
             params: recipient.params ?? [],
+            recipientPhone: sanitized,
           })
           sentMessageId = result.messageId
+          if (result.zernioConversationId && conv?.id && !conv.zernio_conversation_id) {
+            await supabase
+              .from('conversations')
+              .update({ zernio_conversation_id: result.zernioConversationId })
+              .eq('id', conv.id)
+              .is('zernio_conversation_id', null)
+          }
         } catch (error) {
           lastError = error instanceof Error ? error.message : 'Unknown error'
         }
