@@ -243,7 +243,8 @@ export async function planBroadcastResume(
     templateLanguage: resolvedTemplate.language,
     phoneNumberId: config.phone_number_id,
     accessToken: config.provider !== 'zernio' ? decrypt(config.access_token) : '',
-    zernioApiKey: config.provider === 'zernio' ? decrypt(config.zernio_api_key) : null,
+    // Raw — the Zernio send helpers decrypt it (double-decrypt bug otherwise).
+    zernioApiKey: config.provider === 'zernio' ? config.zernio_api_key : null,
     zernioAccountId: config.zernio_account_id ?? null,
     templateRow: resolvedTemplate.row,
     planned: slice.map((row) => ({

@@ -60,7 +60,15 @@ describe('createBroadcast validation', () => {
 // Build a Supabase-shaped mock that gets createBroadcast past its config +
 // template lookups and into persistence. `rpcResult` is what the atomic
 // create_broadcast_with_recipients RPC returns.
-function makeDb(rpcResult: { data: unknown; error: unknown }) {
+function makeDb(
+  rpcResult: { data: unknown; error: unknown },
+  configRow: Record<string, unknown> = {
+    id: 'cfg-1',
+    provider: 'meta',
+    phone_number_id: 'pn-1',
+    access_token: 'enc',
+  },
+) {
   const calls = {
     rpc: [] as { name: string; args: unknown }[],
     // Incremented if the OLD non-atomic path (a direct broadcasts /
@@ -77,11 +85,7 @@ function makeDb(rpcResult: { data: unknown; error: unknown }) {
           eq: () => chain,
           order: () => chain,
           limit: () => chain,
-          maybeSingle: () =>
-            Promise.resolve({
-              data: { id: 'cfg-1', provider: 'meta', phone_number_id: 'pn-1', access_token: 'enc' },
-              error: null,
-            }),
+          maybeSingle: () => Promise.resolve({ data: configRow, error: null }),
         };
         return chain;
       }
@@ -133,6 +137,32 @@ describe('createBroadcast atomicity (#370)', () => {
     expect(plan.planned).toEqual([
       { recipientRowId: 'r-1', contactId: 'c1', phone: '14155550123', params: [] },
     ]);
+  });
+
+  it('passes the RAW (still-encrypted) zernio_api_key into the plan — the send helper decrypts it', async () => {
+    const { db } = makeDb(
+      { data: [{ broadcast_id: 'b-1', recipient_id: 'r-1', contact_id: 'c1' }], error: null },
+      {
+        id: 'cfg-z',
+        provider: 'zernio',
+        phone_number_id: null,
+        access_token: '',
+        zernio_api_key: 'iv:ct:tag', // encrypted shape, must reach the plan verbatim
+        zernio_account_id: 'z-acct',
+      },
+    );
+
+    const plan = await createBroadcast(db, 'acc', 'user', {
+      templateName: 'promo',
+      recipients: [{ to: '+14155550123' }],
+    });
+
+    // Was `decrypt(...)` before — the mock returns 'plain-access-token',
+    // and passing that on made the Zernio send helper decrypt a second
+    // time → "unrecognised format (got 0 colons)" on every recipient.
+    expect(plan.zernioApiKey).toBe('iv:ct:tag');
+    expect(plan.provider).toBe('zernio');
+    expect(plan.accessToken).toBe('');
   });
 
   it('throws and leaves no orphaned parent when the atomic create fails', async () => {

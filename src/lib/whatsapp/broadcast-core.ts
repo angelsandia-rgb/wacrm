@@ -137,7 +137,10 @@ export async function createBroadcast(
   // zernio_api_key instead) — see whatsapp_config's provider CHECK
   // constraint (migration 042).
   const accessToken = config.provider !== 'zernio' ? decrypt(config.access_token) : '';
-  const zernioApiKey = config.provider === 'zernio' ? decrypt(config.zernio_api_key) : null;
+  // Raw (still-encrypted) — the `sendWhatsApp*ViaZernio` helpers decrypt
+  // it themselves. Passing an already-decrypted key here made the helper
+  // decrypt a second time and throw "unrecognised format (got 0 colons)".
+  const zernioApiKey = config.provider === 'zernio' ? config.zernio_api_key : null;
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.

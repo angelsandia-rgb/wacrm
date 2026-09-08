@@ -235,6 +235,34 @@ describe('planBroadcastResume', () => {
     expect(unsendable).toBe(0);
   });
 
+  it('carries the RAW zernio_api_key into the plan (the send helper decrypts it)', async () => {
+    const writes: PlanWrites = {};
+    const { plan } = await planBroadcastResume(
+      planDb(
+        {
+          broadcast: BROADCAST,
+          config: {
+            id: 'cfg-z',
+            provider: 'zernio',
+            phone_number_id: null,
+            access_token: '',
+            zernio_api_key: 'iv:ct:tag',
+            zernio_account_id: 'z-acct',
+          },
+          recipients: [recipient('r1', '+15551234567')],
+        },
+        writes,
+      ),
+      'acct-1',
+      'bc-1',
+      'pending',
+    );
+    // Not `decrypted:iv:ct:tag` — must reach the plan verbatim so the
+    // Zernio send helper is the only thing that decrypts it.
+    expect(plan.zernioApiKey).toBe('iv:ct:tag');
+    expect(plan.accessToken).toBe('');
+  });
+
   it('scopes to failed rows when retrying, and to both for "all"', async () => {
     const failedWrites: PlanWrites = {};
     await planBroadcastResume(
