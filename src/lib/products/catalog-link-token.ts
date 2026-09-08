@@ -45,9 +45,9 @@ export function signCatalogConversation(conversationId: string): string {
  * phone instead".
  */
 export function verifyCatalogConversation(
-  token: string | null | undefined,
+  token: unknown,
 ): string | null {
-  if (!token) return null;
+  if (typeof token !== 'string' || !token || token.length > 512) return null;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return null;
   const id = token.slice(0, dot);

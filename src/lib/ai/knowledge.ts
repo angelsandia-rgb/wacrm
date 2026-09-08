@@ -93,14 +93,16 @@ export async function retrieveKnowledge(
 
   // Skip everything when the account has no knowledge base — otherwise
   // every draft / auto-reply would pay for a query embedding + two RPCs
-  // just to get []. One cheap indexed COUNT (head, no rows) instead of a
-  // paid embeddings call on the hot path.
+  // just to get []. One cheap indexed existence lookup instead of a
+  // paid embeddings call on the hot path. Check existence, never COUNT
+  // all chunks: retrieval cost should not grow just to answer "is empty?".
   try {
-    const { count, error } = await db
+    const { data, error } = await db
       .from('ai_knowledge_chunks')
-      .select('id', { count: 'exact', head: true })
+      .select('id')
       .eq('account_id', accountId)
-    if (error || !count) return []
+      .limit(1)
+    if (error || !data?.length) return []
   } catch {
     return []
   }

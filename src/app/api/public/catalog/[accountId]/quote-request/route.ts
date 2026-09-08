@@ -83,9 +83,21 @@ export async function POST(
   }
 
   const body = (await request.json().catch(() => null)) as RequestBody | null
+  const fieldLimits: Partial<Record<keyof RequestBody, number>> = {
+    name: 200, phone: 40, nit: 80, email: 320, address: 1000, conversation_id: 512,
+  }
+  for (const field of Object.keys(fieldLimits) as (keyof typeof fieldLimits)[]) {
+    const value = body?.[field]
+    if (value != null && (typeof value !== 'string' || value.length > fieldLimits[field]!)) {
+      return NextResponse.json({ error: 'Datos de contacto inválidos' }, { status: 400 })
+    }
+  }
   const name = body?.name?.trim() ?? ''
   const phone = body?.phone?.trim() ?? ''
   const rawItems = Array.isArray(body?.items) ? body.items : []
+  if (rawItems.length > 100 || rawItems.some((item) => !item || typeof item !== 'object')) {
+    return NextResponse.json({ error: 'Lista de productos inválida' }, { status: 400 })
+  }
 
   if (!name) {
     return NextResponse.json({ error: 'Tu nombre es requerido' }, { status: 400 })

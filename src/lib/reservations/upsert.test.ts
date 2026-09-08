@@ -3,12 +3,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const dispatch = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/webhooks/deliver', () => ({ dispatchWebhookEvent: dispatch }))
+// Link ownership is exercised separately with real validation and tenant-aware stubs.
+vi.mock('./validate-links', () => ({ reservationLinksBelongToAccount: vi.fn().mockResolvedValue(true) }))
 
 import {
   upsertReservationRequest,
   categorySlugFromName,
   parseQuoteReservations,
 } from './upsert'
+import { reservationLinksBelongToAccount } from './validate-links'
 
 describe('parseQuoteReservations', () => {
   it('maps a well-formed quote-builder entry, forcing source quote_builder', () => {
@@ -135,6 +138,32 @@ function makeAdmin(
 }
 
 describe('upsertReservationRequest', () => {
+  it('never writes when a related record belongs to another account', async () => {
+    vi.mocked(reservationLinksBelongToAccount).mockResolvedValueOnce(false)
+    const { admin, calls } = makeAdmin(null)
+    expect(await upsertReservationRequest(admin, 'acct-1', { category: 'spa', contact_id: 'foreign' })).toBeNull()
+    expect(calls.inserted).toHaveLength(0)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('merges into the winner after a concurrent insert conflict', async () => {
+    let reads = 0
+    const patches: object[] = []
+    const chain = {
+      select: () => chain, eq: () => chain,
+      maybeSingle: async () => ({ data: ++reads === 2 ? { id: 'winner' } : null, error: null }),
+      insert: () => chain,
+      single: async () => ({ data: null, error: { code: '23505' } }),
+      update: (patch: object) => { patches.push(patch); return chain },
+      then: (resolve: (value: unknown) => void) => resolve({ error: null }),
+    }
+    const admin = { from: () => chain } as unknown as SupabaseClient
+    expect(await upsertReservationRequest(admin, 'acct-1', {
+      category: 'spa', conversation_id: 'conv-1', duration_minutes: 60,
+    })).toBe('winner')
+    expect(patches).toEqual([{ conversation_id: 'conv-1', duration_minutes: 60 }])
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
   it('inserts when there is no conversation match, then fires reservation.updated', async () => {
     const { admin, calls } = makeAdmin(null)
     const id = await upsertReservationRequest(admin, 'acct-1', {

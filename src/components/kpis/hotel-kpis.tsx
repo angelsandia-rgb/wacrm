@@ -39,11 +39,13 @@ function nights(v: number | null): string {
 
 export function HotelKpis() {
   const t = useTranslations('Kpis.hotel')
+  const errors = useTranslations('HotelMetricsError')
   const { defaultCurrency, canEditSettings, profileLoading } = useAuth()
 
   const [range, setRange] = useState<RangeDays>(30)
   const [data, setData] = useState<HotelMetricsData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
 
   const load = useCallback(() => {
     // `loading` starts true and this runs once; the setState calls all
@@ -51,8 +53,8 @@ export function HotelKpis() {
     const db = createClient()
     const since = daysAgoStart(365 * 2).toISOString()
     loadHotelMetrics(db, since)
-      .then(setData)
-      .catch((err) => console.error('[hotel-kpis] load failed:', err))
+      .then((result) => { setData(result); setFailed(false) })
+      .catch((err) => { console.error('[hotel-kpis] load failed:', err); setFailed(true) })
       .finally(() => setLoading(false))
   }, [])
 
@@ -105,6 +107,11 @@ export function HotelKpis() {
       </div>
     )
   }
+
+  if (failed) return <div role="alert" className="space-y-3 p-4">
+    <p>{errors('message')}</p>
+    <button onClick={load} className="underline">{errors('retry')}</button>
+  </div>
 
   return (
     <div className="space-y-5">

@@ -39,7 +39,7 @@ function makeDb() {
     from: () => ({
       // retrieveKnowledge's empty-KB count guard.
       select: () => ({
-        eq: () => Promise.resolve({ count: state.chunkCount, error: null }),
+        eq: () => ({ limit: () => Promise.resolve({ data: state.chunkCount ? [{ id: 'chunk' }] : [], error: null }) }),
       }),
       delete: () => ({
         eq: (_col: string, val: string) => {

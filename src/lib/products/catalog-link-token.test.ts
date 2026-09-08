@@ -36,6 +36,9 @@ describe('catalog-link-token', () => {
   });
 
   it('returns null for empty / missing / malformed input', () => {
+    expect(verifyCatalogConversation({})).toBeNull();
+    expect(verifyCatalogConversation(123)).toBeNull();
+    expect(verifyCatalogConversation('x'.repeat(513))).toBeNull();
     expect(verifyCatalogConversation(null)).toBeNull();
     expect(verifyCatalogConversation(undefined)).toBeNull();
     expect(verifyCatalogConversation('')).toBeNull();

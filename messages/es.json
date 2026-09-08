@@ -1,4 +1,8 @@
 {
+  "HotelMetricsError": {
+    "message": "No pudimos cargar las métricas completas del hotel. Intenta nuevamente; si el problema continúa, contacta al administrador.",
+    "retry": "Reintentar"
+  },
   "AccountAccess": {
     "unlinkedTitle": "Este usuario no está vinculado a ninguna cuenta",
     "unlinkedBody": "Nada de lo que cambies se guardará mientras esto no se resuelva — la base de datos rechaza toda escritura de un usuario sin cuenta o sin rol. Si te invitaron a un equipo, pídele al propietario que reenvíe la invitación. En una instalación autoalojada, verifica que la migración de inicialización de cuenta se haya ejecutado para este usuario.",

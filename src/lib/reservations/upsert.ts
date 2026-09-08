@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
-import { nightsBetween, occupancyForGuests } from '@/lib/products/rates'
+import { nightsBetween, occupancyForGuests, isValidHotelDate } from '@/lib/products/rates'
+import { reservationLinksBelongToAccount } from './validate-links'
+import { reservationFieldError } from './validate-fields'
 
 // ============================================================
 // Create-or-extend a hotel "solicitud" (reservation / service request),
@@ -85,7 +87,6 @@ const SETTABLE_KEYS = [
   'notes',
 ] as const
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
  * Validate the `reservations[]` a quote-builder submit attaches to
@@ -112,7 +113,7 @@ export function parseQuoteReservations(raw: unknown): ReservationInput[] {
       return Number.isFinite(n) && n >= 0 ? n : undefined
     }
     const date = (v: unknown): string | undefined =>
-      typeof v === 'string' && ISO_DATE.test(v) ? v : undefined
+      isValidHotelDate(v) ? v : undefined
 
     const input: ReservationInput = {
       category: category as ReservationCategory,
@@ -155,6 +156,8 @@ export async function upsertReservationRequest(
   accountId: string,
   input: ReservationInput,
 ): Promise<string | null> {
+  if (reservationFieldError(input)) return null
+  if (!await reservationLinksBelongToAccount(admin, accountId, input)) return null
   const patch: Record<string, unknown> = {}
   for (const k of SETTABLE_KEYS) {
     const v = input[k as keyof ReservationInput]
@@ -164,14 +167,16 @@ export async function upsertReservationRequest(
   let id: string | null = null
 
   if (input.conversation_id) {
-    const { data: existing } = await admin
+    const { data: existing, error: lookupError } = await admin
       .from('reservation_requests')
-      .select('id')
+      .select('id, check_in, check_out')
       .eq('account_id', accountId)
       .eq('conversation_id', input.conversation_id)
       .eq('category', input.category)
-      .maybeSingle<{ id: string }>()
+      .maybeSingle<{ id: string; check_in: string | null; check_out: string | null }>()
+    if (lookupError) return null
     if (existing) {
+      if (reservationFieldError({ ...existing, ...patch })) return null
       id = existing.id
       if (Object.keys(patch).length > 0) {
         const { error } = await admin
@@ -197,11 +202,26 @@ export async function upsertReservationRequest(
       })
       .select('id')
       .single()
-    if (error || !data) {
+    if (error?.code === '23505' && input.conversation_id) {
+      // Another inbound/catalog request inserted the same key while we
+      // were reading. Merge our sparse patch into that winner once.
+      const { data: winner, error: winnerError } = await admin
+        .from('reservation_requests').select('id, check_in, check_out')
+        .eq('account_id', accountId).eq('conversation_id', input.conversation_id)
+        .eq('category', input.category)
+        .maybeSingle<{ id: string; check_in: string | null; check_out: string | null }>()
+      if (winnerError || !winner) return null
+      if (reservationFieldError({ ...winner, ...patch })) return null
+      const { error: mergeError } = await admin.from('reservation_requests')
+        .update(patch).eq('id', winner.id).eq('account_id', accountId)
+      if (mergeError) return null
+      id = winner.id
+    } else if (error || !data) {
       console.error('[reservations] insert failed:', error?.message)
       return null
+    } else {
+      id = data.id as string
     }
-    id = data.id as string
   }
 
   await syncReservationToContactFields(admin, accountId, id)

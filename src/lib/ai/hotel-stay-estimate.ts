@@ -52,6 +52,7 @@ export async function loadHotelStayEstimate(
     .select('id, category, service_name, product_id, guests, check_in, check_out, estimated_price')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
+    .eq('status', 'pending')
     .in('category', ['habitaciones', 'paquetes'])
     .not('check_in', 'is', null)
     .not('check_out', 'is', null)
@@ -71,7 +72,9 @@ export async function loadHotelStayEstimate(
   const rates = (rateRows ?? []) as ProductRate[]
   if (rates.length === 0) return null
 
-  const guests = rr.guests && rr.guests > 0 ? rr.guests : 2
+  // Never invent an occupancy: it determines the tariff.
+  if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return null
+  const guests = rr.guests
   const occupancy = occupancyForGuests(guests)
   const quote = quoteStay(rates, rr.check_in, rr.check_out, occupancy)
   if (quote.nights.length === 0) return null
@@ -86,7 +89,7 @@ export async function loadHotelStayEstimate(
   let text =
     `${label} · ${guests} personas (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
     `(${rr.check_in} al ${rr.check_out}): ${breakdown}. ` +
-    `Total estimado: ${formatCurrency(quote.total, currency)}.`
+    `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}: ${formatCurrency(quote.total, currency)}.`
   if (quote.missing.length > 0) {
     text += ` (${quote.missing.join(', ')} sin tarifa publicada — esas noches las cotiza una persona.)`
   }
@@ -113,22 +116,26 @@ async function resolveProductId(
   accountId: string,
   rr: ReservationRow,
 ): Promise<string | null> {
-  if (rr.product_id) return rr.product_id
   const name = rr.service_name?.trim().toLowerCase()
-  if (!name) return null
+  if (!rr.product_id && !name) return null
 
-  const { data: products } = await db
+  let query = db
     .from('products')
     .select('id, name')
     .eq('account_id', accountId)
     .eq('is_active', true)
+  if (rr.product_id) query = query.eq('id', rr.product_id)
+  const { data: products, error } = await query
+  if (error) return null
   const list = (products ?? []) as { id: string; name: string }[]
+  if (rr.product_id) return list.find((p) => p.id === rr.product_id)?.id ?? null
+  if (!name || list.length >= 1000) return null // cannot establish uniqueness on a capped result
 
-  const exact = list.find((p) => p.name.trim().toLowerCase() === name)
-  if (exact) return exact.id
-  const contains = list.find((p) => {
+  const exact = list.filter((p) => p.name.trim().toLowerCase() === name)
+  if (exact.length) return exact.length === 1 ? exact[0].id : null
+  const contains = list.filter((p) => {
     const pn = p.name.trim().toLowerCase()
     return pn.includes(name) || name.includes(pn)
   })
-  return contains?.id ?? null
+  return contains.length === 1 ? contains[0].id : null
 }

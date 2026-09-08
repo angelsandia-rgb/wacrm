@@ -145,6 +145,9 @@ Full walkthrough with screenshots:
 
 ## Documentation
 
+Auditoría del kit de hotel, correcciones, capacidad observada y plan de crecimiento:
+[Informe del 7 de septiembre de 2026](./docs/AUDITORIA_HOTEL_2026-09-07.md).
+
 Full self-host documentation — Supabase migrations, WhatsApp Business
 API config, and production deploy — lives at
 **[wacrm.tech/docs](https://wacrm.tech/docs)**
