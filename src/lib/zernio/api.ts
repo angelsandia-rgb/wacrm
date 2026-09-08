@@ -480,6 +480,73 @@ export async function sendZernioTemplate(args: ZernioSendTemplateArgs): Promise<
   return { messageId: data.data?.messageId ?? data.messageId }
 }
 
+export interface CreateZernioConversationArgs {
+  apiKey: string
+  accountId: string
+  /** Recipient phone in international format, digits only (country code included). */
+  participantId: string
+  templateName: string
+  /** e.g. `en_US`. */
+  templateLanguage: string
+  /** Flat array of variable values, in the order they appear across the
+   *  whole template: text-header vars first, then body vars, then one
+   *  value per dynamic URL button. */
+  templateParams?: string[]
+  /** Per-send override for a media-header template's asset. */
+  headerMedia?: {
+    type: 'image' | 'video' | 'document'
+    link?: string
+    id?: string
+    filename?: string
+  }
+}
+
+export interface CreateZernioConversationResult {
+  /** Platform message id of the template that opened the thread. */
+  messageId: string
+  /** Zernio's internal conversation id (24-char hex) — matches the id on
+   *  the `conversation.started` / `message.received` webhooks. */
+  conversationId: string
+}
+
+/**
+ * Start a WhatsApp conversation by sending an approved TEMPLATE to a
+ * phone number you have no thread with yet — the cold-outreach /
+ * broadcast path. `POST /v1/inbox/conversations` (docs.zernio.com,
+ * "Create conversation"). Calling it for a number you already have a
+ * thread with just appends the template to that thread, so it's also
+ * how you re-engage a contact after the 24h window closes.
+ */
+export async function createZernioConversation(
+  args: CreateZernioConversationArgs,
+): Promise<CreateZernioConversationResult> {
+  const { apiKey, accountId, participantId, templateName, templateLanguage, templateParams, headerMedia } = args
+  const url = `${ZERNIO_API_BASE}/inbox/conversations`
+  const response = await zernioFetch(
+    url,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        accountId,
+        participantId,
+        templateName,
+        templateLanguage,
+        ...(templateParams && templateParams.length > 0 ? { templateParams } : {}),
+        ...(headerMedia ? { headerMedia } : {}),
+      }),
+    },
+    ZERNIO_SEND_TIMEOUT_MS,
+  )
+  if (!response.ok) {
+    await throwZernioError(response, `Zernio API error: ${response.status}`)
+  }
+  const data = await response.json()
+  const messageId = data.data?.messageId ?? data.messageId
+  const conversationId = data.data?.conversationId ?? data.conversationId
+  return { messageId, conversationId }
+}
+
 export interface ZernioButton {
   /** Stable id echoed back on the button reply ID when tapped (≤ 256 chars, Meta's own limit). */
   id: string

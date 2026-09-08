@@ -14,6 +14,7 @@ import {
   sendZernioTemplate,
   sendZernioButtons,
   sendZernioInteractive,
+  createZernioConversation,
   type ZernioMediaKind,
 } from '@/lib/zernio/api';
 import { decrypt } from '@/lib/whatsapp/encryption';
@@ -81,14 +82,62 @@ export interface SendWhatsAppTemplateViaZernioArgs {
   messageParams?: SendTimeParams;
   /** Legacy body-only params, folded into `messageParams.body` when both are absent. */
   params?: string[];
+  /**
+   * Recipient phone (international, digits). When set AND there's no
+   * existing Zernio conversation, the template OPENS one via
+   * `POST /v1/inbox/conversations` (cold outreach / broadcast) instead
+   * of throwing "no conversation yet". Callers that must not initiate a
+   * conversation (a flow/automation reply node) simply omit this.
+   */
+  recipientPhone?: string;
 }
 
 export async function sendWhatsAppTemplateViaZernio(
   ctx: ZernioSendContext,
   args: SendWhatsAppTemplateViaZernioArgs,
-): Promise<{ messageId: string }> {
-  const { templateName, language, template, messageParams, params } = args;
+): Promise<{ messageId: string; zernioConversationId?: string }> {
+  const { templateName, language, template, messageParams, params, recipientPhone } = args;
   const apiKey = decrypt(ctx.config.zernio_api_key);
+
+  // No thread yet + a phone to reach → open the conversation WITH the
+  // template. This endpoint wants a flat `templateParams` array, not the
+  // Meta `components` shape used for an in-thread send.
+  if (!ctx.zernioConversationId && recipientPhone) {
+    const bodyValues = messageParams?.body ?? params ?? [];
+    const buttonValues = messageParams?.buttonParams
+      ? Object.keys(messageParams.buttonParams)
+          .map(Number)
+          .sort((a, b) => a - b)
+          .map((i) => messageParams.buttonParams![i])
+      : [];
+    const templateParams = [
+      ...(messageParams?.headerText ? [messageParams.headerText] : []),
+      ...bodyValues.map((v) => String(v)),
+      ...buttonValues.map((v) => String(v)),
+    ];
+
+    const headerType = template?.header_type;
+    const isMediaHeader = headerType === 'image' || headerType === 'video' || headerType === 'document';
+    const mediaLink = messageParams?.headerMediaUrl ?? template?.header_media_url;
+    const headerMedia =
+      isMediaHeader && (mediaLink || messageParams?.headerMediaId)
+        ? {
+            type: headerType,
+            ...(messageParams?.headerMediaId ? { id: messageParams.headerMediaId } : { link: mediaLink! }),
+          }
+        : undefined;
+
+    const created = await createZernioConversation({
+      apiKey,
+      accountId: ctx.config.zernio_account_id,
+      participantId: recipientPhone.replace(/\D/g, ''),
+      templateName,
+      templateLanguage: language,
+      templateParams: templateParams.length > 0 ? templateParams : undefined,
+      headerMedia,
+    });
+    return { messageId: created.messageId, zernioConversationId: created.conversationId };
+  }
 
   let components: unknown[] = [];
   if (template) {
@@ -105,7 +154,7 @@ export async function sendWhatsAppTemplateViaZernio(
     ];
   }
 
-  return sendZernioTemplate({
+  const result = await sendZernioTemplate({
     apiKey,
     conversationId: requireZernioConversation(ctx),
     accountId: ctx.config.zernio_account_id,
@@ -113,6 +162,7 @@ export async function sendWhatsAppTemplateViaZernio(
     language,
     components,
   });
+  return { messageId: result.messageId };
 }
 
 export async function sendWhatsAppInteractiveViaZernio(

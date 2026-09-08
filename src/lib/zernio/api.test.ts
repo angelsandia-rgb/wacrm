@@ -4,6 +4,7 @@ import {
   sendZernioMedia,
   listZernioTemplates,
   deleteZernioTemplate,
+  createZernioConversation,
 } from './api'
 import { SendMessageError } from '@/lib/messaging/types'
 
@@ -189,5 +190,58 @@ describe('humanAgentTag (Instagram/Facebook 24h-window exception)', () => {
     })
     const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string)
     expect(body).toMatchObject({ messagingType: 'MESSAGE_TAG', messageTag: 'HUMAN_AGENT' })
+  })
+})
+
+describe('createZernioConversation (cold-outreach template)', () => {
+  it('POSTs /inbox/conversations with participantId + flat templateParams and returns both ids', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      okResponse({ data: { messageId: 'zmsg-9', conversationId: 'abc123def456abc123def456' } }),
+    )
+    const res = await createZernioConversation({
+      apiKey: 'key',
+      accountId: 'acct-1',
+      participantId: '50255551234',
+      templateName: 'promo',
+      templateLanguage: 'es',
+      templateParams: ['Juan'],
+    })
+    expect(res).toEqual({ messageId: 'zmsg-9', conversationId: 'abc123def456abc123def456' })
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://zernio.com/api/v1/inbox/conversations')
+    const body = JSON.parse(init.body as string)
+    expect(body).toMatchObject({
+      accountId: 'acct-1',
+      participantId: '50255551234',
+      templateName: 'promo',
+      templateLanguage: 'es',
+      templateParams: ['Juan'],
+    })
+    expect(body).not.toHaveProperty('headerMedia')
+  })
+
+  it('includes headerMedia when given', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      okResponse({ data: { messageId: 'm', conversationId: 'c' } }),
+    )
+    await createZernioConversation({
+      apiKey: 'key', accountId: 'a', participantId: '502...', templateName: 't', templateLanguage: 'en',
+      headerMedia: { type: 'image', link: 'https://x/i.jpg' },
+    })
+    const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string)
+    expect(body.headerMedia).toEqual({ type: 'image', link: 'https://x/i.jpg' })
+  })
+
+  it('surfaces a Zernio error (e.g. TEMPLATE_REQUIRED) rather than swallowing it', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'A template is required', code: 'TEMPLATE_REQUIRED' }),
+    } as unknown as Response)
+    await expect(
+      createZernioConversation({
+        apiKey: 'key', accountId: 'a', participantId: '502', templateName: 't', templateLanguage: 'en',
+      }),
+    ).rejects.toBeInstanceOf(SendMessageError)
   })
 })

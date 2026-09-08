@@ -298,15 +298,14 @@ export async function deliverBroadcast(
     let lastError: string | null = null;
 
     if (plan.provider === 'zernio') {
-      // Zernio addresses a conversation by its own opaque id, not a
-      // phone number — a broadcast recipient with no prior inbound
-      // message has no conversation to send into yet. Fails that one
-      // recipient rather than the whole broadcast; same scope boundary
-      // as every other Zernio send path in this integration.
+      // No existing thread → the template OPENS one (cold outreach) via
+      // sendWhatsAppTemplateViaZernio's `recipientPhone` path. If a
+      // conversations row already exists we stamp the returned Zernio id
+      // onto it so a later reply lands on the same thread.
       try {
         const { data: conv } = await db
           .from('conversations')
-          .select('zernio_conversation_id')
+          .select('id, zernio_conversation_id')
           .eq('account_id', plan.accountId)
           .eq('contact_id', recipient.contactId)
           .maybeSingle();
@@ -319,8 +318,16 @@ export async function deliverBroadcast(
           language: plan.templateLanguage,
           template: plan.templateRow ?? undefined,
           params: recipient.params,
+          recipientPhone: recipient.phone,
         });
         sentMessageId = result.messageId;
+        if (result.zernioConversationId && conv?.id && !conv.zernio_conversation_id) {
+          await db
+            .from('conversations')
+            .update({ zernio_conversation_id: result.zernioConversationId })
+            .eq('id', conv.id)
+            .is('zernio_conversation_id', null);
+        }
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'Unknown error';
       }
