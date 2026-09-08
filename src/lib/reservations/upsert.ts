@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { nightsBetween, occupancyForGuests } from '@/lib/products/rates'
 
 // ============================================================
 // Create-or-extend a hotel "solicitud" (reservation / service request),
@@ -203,9 +204,101 @@ export async function upsertReservationRequest(
     id = data.id as string
   }
 
+  await syncReservationToContactFields(admin, accountId, id)
+
   await dispatchWebhookEvent(admin, accountId, 'reservation.updated', {
     reservation_id: id,
     source: input.source ?? 'manual',
   })
   return id
+}
+
+const OCCUPANCY_LABEL_ES: Record<ReturnType<typeof occupancyForGuests>, string> = {
+  standard: 'Individual',
+  couple: 'Pareja',
+  group: 'Grupo',
+}
+
+/**
+ * Mirror a room / package reservation into the contact's hotel custom
+ * fields (seeded by the `hotel` starter kit) so the deals tab and the
+ * "Requerimientos" Google Sheet — both built from `contact_custom_values`
+ * — stop coming up blank. "Noches" is derived here; nothing else fills it.
+ *
+ * Best-effort: a hotel that renamed or deleted a field just gets fewer
+ * columns filled. Never throws, never blocks the reservation write.
+ */
+async function syncReservationToContactFields(
+  admin: SupabaseClient,
+  accountId: string,
+  reservationId: string,
+): Promise<void> {
+  try {
+    const { data: r } = await admin
+      .from('reservation_requests')
+      .select('category, contact_id, service_name, guests, check_in, check_out')
+      .eq('id', reservationId)
+      .maybeSingle<{
+        category: string
+        contact_id: string | null
+        service_name: string | null
+        guests: number | null
+        check_in: string | null
+        check_out: string | null
+      }>()
+    if (!r || !r.contact_id) return
+    if (r.category !== 'habitaciones' && r.category !== 'paquetes') return
+
+    const nights =
+      r.check_in && r.check_out ? nightsBetween(r.check_in, r.check_out).length : 0
+
+    // Field name (as seeded by src/lib/verticals) → value for this reservation.
+    const wanted: Record<string, string> = {}
+    if (r.check_in) wanted['Fecha de entrada'] = r.check_in
+    if (r.check_out) wanted['Fecha de salida'] = r.check_out
+    if (nights > 0) wanted['Noches'] = String(nights)
+    if (r.guests && r.guests > 0) {
+      wanted['Huéspedes'] = String(r.guests)
+      wanted['Ocupación'] = OCCUPANCY_LABEL_ES[occupancyForGuests(r.guests)]
+    }
+    if (r.service_name) {
+      wanted[r.category === 'paquetes' ? 'Paquete' : 'Habitación'] = r.service_name
+    }
+    if (Object.keys(wanted).length === 0) return
+
+    const { data: fields } = await admin
+      .from('custom_fields')
+      .select('id, field_name')
+      .eq('account_id', accountId)
+    if (!fields || fields.length === 0) return
+
+    const byName = new Map(
+      (fields as { id: string; field_name: string }[]).map((f) => [
+        f.field_name.trim().toLowerCase(),
+        f.id,
+      ]),
+    )
+
+    const rows = Object.entries(wanted)
+      .map(([name, value]) => {
+        const fieldId = byName.get(name.toLowerCase())
+        return fieldId
+          ? { contact_id: r.contact_id, custom_field_id: fieldId, value }
+          : null
+      })
+      .filter((x): x is { contact_id: string; custom_field_id: string; value: string } => x !== null)
+    if (rows.length === 0) return
+
+    const { error } = await admin
+      .from('contact_custom_values')
+      .upsert(rows, { onConflict: 'contact_id,custom_field_id' })
+    if (error) {
+      console.error('[reservations] contact custom-field sync failed:', error.message)
+    }
+  } catch (err) {
+    console.error(
+      '[reservations] contact custom-field sync threw:',
+      err instanceof Error ? err.message : err,
+    )
+  }
 }
