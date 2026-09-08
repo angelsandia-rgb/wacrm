@@ -200,7 +200,10 @@ export async function POST(request: Request) {
                 .maybeSingle()
             : { data: null }
           const zernioCtx: ZernioSendContext = {
-            config: { zernio_api_key: decrypt(config.zernio_api_key), zernio_account_id: config.zernio_account_id },
+            // Raw (still-encrypted) key — sendWhatsAppTemplateViaZernio
+            // decrypts it. Passing decrypt(...) here made it decrypt
+            // twice → "unrecognised format (got 0 colons)" on every send.
+            config: { zernio_api_key: config.zernio_api_key, zernio_account_id: config.zernio_account_id },
             zernioConversationId: conv?.zernio_conversation_id ?? null,
           }
           const result = await sendWhatsAppTemplateViaZernio(zernioCtx, {
