@@ -292,7 +292,7 @@ const HOTEL_WELCOME: FlowTemplate = {
   slug: "hotel_welcome",
   name: "Bienvenida hotel",
   description:
-    "Recibe al huésped, ofrece un menú (reservar, spa y actividades, paquetes, otra consulta) y transfiere al área correcta. Los mensajes fuera del menú pasan a la IA.",
+    "Recibe al huésped, ofrece un menú (reservar, spa y actividades, paquetes) y pasa la conversación al asistente de IA con una instrucción según lo que eligió. Los mensajes fuera del menú también van a la IA.",
   icon: "MessageSquare",
   trigger_type: "first_inbound_message",
   trigger_config: {},
@@ -315,14 +315,18 @@ const HOTEL_WELCOME: FlowTemplate = {
       node_key: "handoff_reservas",
       node_type: "handoff",
       config: {
-        note: "El huésped quiere reservar / cotizar un paquete. Confirma disponibilidad contra el calendario de habitaciones y responde con la tarifa según las fechas.",
+        target: "ai",
+        note:
+          "El huésped quiere reservar o cotizar una habitación o un paquete. Si aún no los tienes, pídele con amabilidad (uno o dos por mensaje): nombre de quien reserva, fecha de entrada, fecha de salida y número de personas. Con las tarifas publicadas del hotel calcula el total noche por noche y compártelo como estimado. NUNCA confirmes disponibilidad ni cierres la reserva: aclara que recepción confirma la disponibilidad y el precio final.",
       } as HandoffNodeConfig,
     },
     {
       node_key: "handoff_spa",
       node_type: "handoff",
       config: {
-        note: "El huésped pregunta por spa o actividades. Indaga fecha y número de personas y confirma horario.",
+        target: "ai",
+        note:
+          "El huésped pregunta por spa o actividades. Pregúntale qué servicio le interesa, para cuántas personas, qué día lo usaría y a qué hora. Informa precio y duración solo desde la base de conocimiento (nunca inventes). NUNCA confirmes cupo: recepción lo confirma.",
       } as HandoffNodeConfig,
     },
   ],
