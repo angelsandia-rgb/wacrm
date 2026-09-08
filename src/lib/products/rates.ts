@@ -54,6 +54,14 @@ export const MAX_PRODUCT_RATES = 63 // 7 days × 3 occupancies × up to 3 season
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
+export function isValidHotelDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !ISO_DATE.test(value)) return false
+  const date = new Date(`${value}T12:00:00Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+export const MAX_STAY_NIGHTS = 366
+
 const JS_DAY_TO_CODE: DayOfWeek[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 /** The day-of-week code for an ISO date. */
@@ -68,11 +76,12 @@ export function dayOfWeekOf(dateISO: string): DayOfWeek {
  * malformed or non-positive range.
  */
 export function nightsBetween(checkInISO: string, checkOutISO: string): string[] {
-  if (!ISO_DATE.test(checkInISO) || !ISO_DATE.test(checkOutISO)) return []
+  if (!isValidHotelDate(checkInISO) || !isValidHotelDate(checkOutISO)) return []
   const start = new Date(`${checkInISO}T12:00:00Z`)
   const end = new Date(`${checkOutISO}T12:00:00Z`)
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return []
   if (end.getTime() <= start.getTime()) return []
+  if ((end.getTime() - start.getTime()) / 86_400_000 > MAX_STAY_NIGHTS) return []
 
   const out: string[] = []
   const cursor = new Date(start)
@@ -106,17 +115,22 @@ export function resolveNightlyRate(
   occupancy: Occupancy,
 ): number | null {
   const day = dayOfWeekOf(nightISO)
-  const tryOccupancy = (occ: Occupancy): number | null => {
-    const forDay = rates.filter((r) => r.day_of_week === day && r.occupancy === occ)
-    const seasonal = forDay.find((r) => seasonContains(r, nightISO))
-    if (seasonal) return seasonal.price
-    const always = forDay.find((r) => !r.date_from && !r.date_to)
-    return always ? always.price : null
+  const tryOccupancy = (occ: Occupancy): number | null | 'ambiguous' => {
+    const forDay = rates.filter((r) => r.day_of_week === day && r.occupancy === occ && Number.isFinite(r.price) && r.price > 0)
+    const seasonal = forDay.filter((r) => seasonContains(r, nightISO))
+    const candidates = seasonal.length ? seasonal : forDay.filter((r) => !r.date_from && !r.date_to)
+    const prices = new Set(candidates.map((r) => r.price))
+    if (prices.size > 1) return 'ambiguous'
+    return prices.size === 1 ? candidates[0].price : null
   }
 
   const exact = tryOccupancy(occupancy)
+  if (exact === 'ambiguous') return null
   if (exact !== null) return exact
-  if (occupancy === 'couple' || occupancy === 'group') return tryOccupancy('standard')
+  if (occupancy === 'couple' || occupancy === 'group') {
+    const fallback = tryOccupancy('standard')
+    return fallback === 'ambiguous' ? null : fallback
+  }
   return null
 }
 
@@ -348,7 +362,7 @@ export function parseRates(raw: unknown): ParseRatesResult {
     let dateFrom: string | null = null
     let dateTo: string | null = null
     if (fromSet && toSet) {
-      if (!ISO_DATE.test(from as string) || !ISO_DATE.test(to as string)) {
+      if (!isValidHotelDate(from) || !isValidHotelDate(to)) {
         return { ok: false, error: `rates[${i}] dates must be YYYY-MM-DD` }
       }
       if ((to as string) < (from as string)) {
@@ -366,6 +380,22 @@ export function parseRates(raw: unknown): ParseRatesResult {
       date_to: dateTo,
       position: rates.length,
     })
+  }
+
+  for (let i = 0; i < rates.length; i += 1) {
+    for (let j = i + 1; j < rates.length; j += 1) {
+      const a = rates[i]
+      const b = rates[j]
+      if (a.day_of_week !== b.day_of_week || a.occupancy !== b.occupancy) continue
+      const bothAlways = !a.date_from && !b.date_from
+      const seasonsOverlap = Boolean(
+        a.date_from && a.date_to && b.date_from && b.date_to &&
+        a.date_from <= b.date_to && b.date_from <= a.date_to,
+      )
+      if (bothAlways || seasonsOverlap) {
+        return { ok: false, error: `rates[${i}] and rates[${j}] overlap` }
+      }
+    }
   }
 
   return { ok: true, rates }

@@ -1352,6 +1352,12 @@ describe('dispatchInboundToAiReply — autonomous schedule_appointment', () => {
 })
 
 describe('dispatchInboundToAiReply — catalog context in prompt', () => {
+  it('retains catalog grounding when knowledge retrieval fails', async () => {
+    h.retrieveKnowledge.mockRejectedValue(new Error('knowledge unavailable'))
+    h.loadCatalogContext.mockResolvedValue(['- Suite Familiar (Q950)'])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('Suite Familiar (Q950)')
+  })
   it('includes catalog lines in the system prompt when the account has active products', async () => {
     h.loadCatalogContext.mockResolvedValue(['- Camisa (Q150)', '- Pantalón (Q250)'])
     await dispatchInboundToAiReply(ARGS)

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { reservationFieldError } from '@/lib/reservations/validate-fields'
 import {
   upsertReservationRequest,
   RESERVATION_CATEGORIES,
@@ -92,6 +93,8 @@ export async function POST(request: Request) {
   }
 
   const admin = supabaseAdmin()
+  const fieldError = reservationFieldError(parsed)
+  if (fieldError) return NextResponse.json({ error: fieldError }, { status: 400 })
   const id = await upsertReservationRequest(admin, ctx.accountId, {
     ...parsed,
     source: parsed.source ?? 'manual',

@@ -24,7 +24,7 @@ import {
   categorySlugFromName,
   type ReservationInput,
 } from '@/lib/reservations/upsert'
-import { quoteStay, occupancyForGuests, type ProductRate } from '@/lib/products/rates'
+import { quoteStay, occupancyForGuests, isValidHotelDate, nightsBetween, type ProductRate } from '@/lib/products/rates'
 import { formatCurrency } from '@/lib/currency'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { resolveCatalogAccountId } from '@/lib/catalog/resolve-account'
@@ -37,7 +37,6 @@ function getClientIp(request: Request): string {
   return 'unknown'
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 interface Body {
   product_id?: string
@@ -67,9 +66,31 @@ export async function POST(
   if (!segment) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const body = (await request.json().catch(() => null)) as Body | null
-  const name = body?.name?.trim() ?? ''
-  const phone = body?.phone?.trim() ?? ''
+  const name = typeof body?.name === 'string' ? body.name.trim() : ''
+  const phone = typeof body?.phone === 'string' ? body.phone.trim() : ''
   const productId = typeof body?.product_id === 'string' ? body.product_id : ''
+
+  if (name.length > 200 || phone.length > 40 ||
+      (body?.conversation_id != null && typeof body.conversation_id !== 'string')) {
+    return NextResponse.json({ error: 'Datos de contacto inválidos' }, { status: 400 })
+  }
+  for (const key of ['check_in', 'check_out', 'use_date'] as const) {
+    const value = body?.[key]
+    if (value != null && value !== '' && !isValidHotelDate(value)) {
+      return NextResponse.json({ error: 'Fecha inválida' }, { status: 400 })
+    }
+  }
+  if (body?.check_in && body?.check_out && nightsBetween(body.check_in, body.check_out).length === 0) {
+    return NextResponse.json({ error: 'La estadía debe ser de 1 a 366 noches' }, { status: 400 })
+  }
+  for (const key of ['guests', 'duration_minutes'] as const) {
+    const value = body?.[key]
+    if (value != null && value !== '' &&
+        ((typeof value !== 'string' && typeof value !== 'number') ||
+         !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > 2147483647)) {
+      return NextResponse.json({ error: 'Cantidad inválida' }, { status: 400 })
+    }
+  }
 
   if (!name) return NextResponse.json({ error: 'Tu nombre es requerido' }, { status: 400 })
   if (!phone) return NextResponse.json({ error: 'Tu teléfono es requerido' }, { status: 400 })
@@ -243,5 +264,5 @@ function toInt(v: unknown): number | undefined {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined
 }
 function toDate(v: unknown): string | undefined {
-  return typeof v === 'string' && ISO_DATE.test(v) ? v : undefined
+  return isValidHotelDate(v) ? v : undefined
 }

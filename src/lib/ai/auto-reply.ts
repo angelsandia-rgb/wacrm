@@ -426,18 +426,18 @@ export async function dispatchInboundToAiReply(
     let hotelStayEstimate: string | undefined
     let calendarContext: AutoReplyCalendarContext | null = null
     try {
-      // Ground the reply in the account's knowledge base.
-      knowledge = await retrieveKnowledge(db, accountId, config, latestUserMessage(messages))
-
-      // The contact's open deal (if any) + its pipeline's non-won stages,
-      // so the model can only ever pick a real stage, never invent one.
-      dealStageOptions = await loadDealStageOptions({ db, accountId, contactId })
-
-      // The account's active catalog — real products/prices to recommend.
-      catalog = await loadCatalogContext(db, accountId)
-
-      // The account's saved 'text' quick replies — human-approved wording.
-      quickReplies = await loadQuickReplyContext(db, accountId)
+      // Independent reads run concurrently. One failed enrichment must
+      // not prevent the other sources from grounding the reply.
+      const enrichment = await Promise.allSettled([
+        retrieveKnowledge(db, accountId, config, latestUserMessage(messages)),
+        loadDealStageOptions({ db, accountId, contactId }),
+        loadCatalogContext(db, accountId),
+        loadQuickReplyContext(db, accountId),
+      ])
+      if (enrichment[0].status === 'fulfilled') knowledge = enrichment[0].value
+      if (enrichment[1].status === 'fulfilled') dealStageOptions = enrichment[1].value
+      if (enrichment[2].status === 'fulfilled') catalog = enrichment[2].value
+      if (enrichment[3].status === 'fulfilled') quickReplies = enrichment[3].value
 
       // How the catalog is delivered (migration 068) + the vertical +
       // whether a restaurant menu PDF is on file (migration 114).
@@ -470,6 +470,8 @@ export async function dispatchInboundToAiReply(
       // Autonomous scheduling context — only non-null when the account
       // opted in AND has a connected Google Calendar.
       calendarContext = await loadCalendarContext({ db, accountId, contactId, config })
+      const failed = enrichment.find((result) => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
     } catch (err) {
       console.error('[ai auto-reply] context enrichment failed, replying with a minimal prompt:', err)
       void dispatchSystemAlert({

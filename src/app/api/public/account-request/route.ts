@@ -39,6 +39,12 @@ export async function POST(request: Request) {
   if (!limit.success) return rateLimitResponse(limit)
 
   const body = (await request.json().catch(() => null)) as RequestBody | null
+  for (const field of ['company_name', 'requester_name', 'daily_inquiries', 'phone', 'email'] as const) {
+    const value = body?.[field]
+    if (value != null && (typeof value !== 'string' || value.length > 1000)) {
+      return NextResponse.json({ error: 'Datos de solicitud inválidos' }, { status: 400 })
+    }
+  }
   const companyName = body?.company_name?.trim() ?? ''
   const requesterName = body?.requester_name?.trim() ?? ''
   const dailyInquiries = body?.daily_inquiries?.trim() ?? ''

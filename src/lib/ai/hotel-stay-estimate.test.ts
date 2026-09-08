@@ -64,6 +64,18 @@ const RESV = {
 }
 
 describe('loadHotelStayEstimate', () => {
+  it('does not quote an unavailable explicit product', async () => {
+    expect(await loadHotelStayEstimate(makeDb({ reservation: { ...RESV, product_id: 'inactive' },
+      rates: RATES, products: [],
+    }), 'acct-1', 'cv-1', 'GTQ')).toBeNull()
+  })
+  it('does not invent guests or pick an ambiguous room', async () => {
+    for (const reservation of [{ ...RESV, guests: null }, { ...RESV, service_name: 'Suite' }]) {
+      expect(await loadHotelStayEstimate(makeDb({ reservation, rates: RATES, products: [
+        { id: 'p1', name: 'Master Suite Deluxe' }, { id: 'p2', name: 'Suite Familiar' },
+      ] }), 'acct-1', 'cv-1', 'GTQ')).toBeNull()
+    }
+  })
   it('computes a 1-night couple stay from the published tariffs', async () => {
     const res = await loadHotelStayEstimate(
       makeDb({ reservation: RESV, rates: RATES, products: [{ id: 'p1', name: 'Master Suite Deluxe' }] }),
@@ -103,6 +115,8 @@ describe('loadHotelStayEstimate', () => {
       'GTQ',
     )
     expect(res).toContain('sin tarifa publicada')
+    expect(res).toContain('Subtotal de noches con tarifa')
+    expect(res).not.toContain('Total estimado:')
     expect(updates).toEqual([])
   })
 

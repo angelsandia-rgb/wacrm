@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { reservationLinksBelongToAccount } from '@/lib/reservations/validate-links'
+import { reservationFieldError } from '@/lib/reservations/validate-fields'
 
 // PATCH /api/reservations/[id] — extend a reservation request (any
 // subset of fields, incl. the hotel-set `status`). Re-fires
@@ -59,6 +61,23 @@ export async function PATCH(
   }
 
   const admin = supabaseAdmin()
+  let completePatch = patch
+  if ('check_in' in patch || 'check_out' in patch) {
+    const { data: current, error: currentError } = await admin
+      .from('reservation_requests')
+      .select('check_in, check_out')
+      .eq('id', id)
+      .eq('account_id', ctx.accountId)
+      .maybeSingle()
+    if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 })
+    if (!current) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    completePatch = { ...current, ...patch }
+  }
+  const fieldError = reservationFieldError(completePatch)
+  if (fieldError) return NextResponse.json({ error: fieldError }, { status: 400 })
+  if (!await reservationLinksBelongToAccount(admin, ctx.accountId, patch)) {
+    return NextResponse.json({ error: 'Invalid reservation reference' }, { status: 400 })
+  }
   const { data, error } = await admin
     .from('reservation_requests')
     .update(patch)

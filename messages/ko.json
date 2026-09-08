@@ -1,4 +1,8 @@
 {
+  "HotelMetricsError": {
+    "message": "호텔 지표를 모두 불러오지 못했습니다. 다시 시도하고 문제가 계속되면 관리자에게 문의하세요.",
+    "retry": "다시 시도"
+  },
   "LoginPage": {
     "titleAccept": "로그인하여 수락하기",
     "titleWelcome": "다시 오신 것을 환영합니다",

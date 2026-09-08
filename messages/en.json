@@ -1,4 +1,8 @@
 {
+  "HotelMetricsError": {
+    "message": "We could not load complete hotel metrics. Try again; if the problem continues, contact your administrator.",
+    "retry": "Retry"
+  },
   "LoginPage": {
     "titleAccept": "Sign in to accept",
     "titleWelcome": "Welcome back",

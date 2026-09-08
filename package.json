@@ -25,7 +25,7 @@
     "template"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "packageManager": "npm@10.9.9",
   "scripts": {
@@ -70,6 +70,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^26",
     "@types/nodemailer": "^8.0.1",
@@ -87,7 +88,10 @@
   "overrides": {
     "postcss": "^8.5.10",
     "ip-address": "^10.3.1",
-    "fast-uri": "^3.1.5",
+    "fast-uri": "^3.1.6",
+    "exceljs": {
+      "uuid": "11.1.1"
+    },
     "hono": "^4.12.34",
     "js-yaml": "^4.2.0",
     "@babel/core": "^7.29.6",
