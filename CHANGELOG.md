@@ -184,6 +184,18 @@ and polish.
   disponibles?"). Each is sent once. Requires migration 125; register
   the job with migration 126 + `CLINIC_REMINDERS_CRON_SECRET`.
 
+- **Clinic vertical — starter kit + acceptance coverage.** Applying the
+  `clinica` kit from the platform-admin panel now seeds a real starting
+  point: three service categories, a "Pacientes" pipeline separate from
+  the appointments workflow, two receptionist contact fields, two
+  knowledge-base scaffolds (services/schedule + policies) with
+  `[[placeholders]]`, and a restrictive AI system prompt (only when the
+  prompt is empty). Added the free-slot pipeline test (`getFreeSlots`
+  over availability − time off − the doctor's appointments, incl.
+  extra-hours and vacation blocks) and `docs/clinica_aceptacion.md`
+  mapping every spec §29 / §30 item to its implementation and test. No
+  migration.
+
 - **Clinic vertical — security hardening.** Fixed a latent bug that made
   every `visits` insert fail (the shared tenant-guard trigger planned a
   column only `appointments` has). Added an end-to-end RLS test that

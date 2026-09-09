@@ -50,17 +50,22 @@ describe('vertical registry', () => {
     expect(g.aiSystemPromptScaffold).toBeUndefined()
   })
 
-  it('clinica is a no-op kit for now (placeholder, generic-equivalent)', () => {
+  it('clinica kit is well-formed', () => {
     const c = getVertical('clinica')!
     expect(c.label).toBe('Clínica')
-    expect(c.customFields).toEqual([])
-    expect(c.productCategories).toEqual([])
-    expect(c.pipeline).toBeNull()
-    expect(c.flowTemplateSlugs).toEqual([])
+    expect(c.customFields.length).toBeGreaterThan(0)
+    expect(c.productCategories.length).toBeGreaterThan(0)
+    // a pipeline SEPARATE from the appointments workflow (spec §16),
+    // exactly one won stage and it's last
+    expect(c.pipeline?.name).toBe('Pacientes')
+    const won = c.pipeline!.stages.filter((s) => s.is_won)
+    expect(won).toHaveLength(1)
+    expect(c.pipeline!.stages.at(-1)?.is_won).toBe(true)
+    expect(c.knowledgeDocs.map((d) => d.title)).toEqual(['Servicios y horarios', 'Políticas de la clínica'])
+    expect(c.aiSystemPromptScaffold).toBeTruthy()
+    // the reminder cron (not the automations engine) drives clinic nudges
     expect(c.automationTemplateSlugs).toEqual([])
-    expect(c.knowledgeDocs).toEqual([])
-    expect(c.googleSheetsEvents).toEqual([])
-    expect(c.aiSystemPromptScaffold).toBeUndefined()
+    expect(c.accountSettings.catalog_delivery_mode).toBe('digital')
   })
 
   it('hotel kit is well-formed', () => {
