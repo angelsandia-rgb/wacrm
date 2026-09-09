@@ -52,8 +52,19 @@ and polish.
 > replaces the one-row-per-(conversation, category) unique index with one
 > scoped to the active row). Existing rows all read as active — unchanged
 > behaviour until a guest asks for a second booking in the same chat.
+>
+> **Migration required:** apply `supabase/migrations/121_vertical_clinica.sql`
+> (widens the `accounts.industry_vertical` CHECK to also allow
+> `'clinica'`). No effect until a company is set to that vertical; its
+> starter kit is currently a no-op, identical to `'generic'`.
 
 ### Added
+
+- **New industry vertical: `clinica` (Clínica).** Selectable in the
+  platform-admin company panel alongside Genérico and Hotel. For now a
+  clinic company behaves exactly like a generic one — the slug exists so
+  clinic-specific setup and behaviour can be built on top of it. Requires
+  migration 121.
 
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { requirePlatformAdmin, toErrorResponse } from '@/lib/auth/account'
 import { platformAdminClient } from '@/lib/platform/admin-client'
 import { applyVerticalKit } from '@/lib/verticals/seed'
-import { isVerticalSlug } from '@/lib/verticals'
+import { isVerticalSlug, VERTICAL_SLUGS } from '@/lib/verticals'
 
 /**
  * POST /api/admin/companies/[id]/apply-vertical
@@ -24,7 +24,7 @@ export async function POST(
     const body = (await request.json().catch(() => null)) as { vertical?: unknown } | null
     if (!body || !isVerticalSlug(body.vertical)) {
       return NextResponse.json(
-        { error: "El vertical debe ser 'generic' o 'hotel'." },
+        { error: `El vertical debe ser uno de: ${VERTICAL_SLUGS.join(', ')}.` },
         { status: 400 },
       )
     }
