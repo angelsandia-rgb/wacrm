@@ -38,6 +38,7 @@ import { KpiDonutChart } from '@/components/kpis/kpi-donut-chart'
 import { KpiFunnelChart } from '@/components/kpis/kpi-funnel-chart'
 import { SpendInputCard } from '@/components/kpis/spend-input-card'
 import { HotelKpis } from '@/components/kpis/hotel-kpis'
+import { ClinicKpis } from '@/components/kpis/clinic-kpis'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -61,6 +62,7 @@ export default function KpisPage() {
   const t = useTranslations('Kpis')
   const { user, accountId, canEditSettings, defaultCurrency, profileLoading, account } = useAuth()
   const isHotel = account?.industry_vertical === 'hotel'
+  const isClinic = account?.industry_vertical === 'clinica'
 
   const [range, setRange] = useState<RangeDays>(30)
   const [dataset, setDataset] = useState<KpiDataset | null>(null)
@@ -72,9 +74,9 @@ export default function KpisPage() {
   const granularity = granularityForRangeDays(range)
 
   const load = useCallback(() => {
-    if (isHotel) {
+    if (isHotel || isClinic) {
       setLoading(false)
-      return // hotel accounts render <HotelKpis/>, which loads its own data
+      return // hotel/clinic accounts render their own KPI view
     }
     setLoading(true)
     const db = createClient()
@@ -114,7 +116,7 @@ export default function KpisPage() {
         toast.error(t('loadFailed'))
       })
       .finally(() => setLoading(false))
-  }, [range, granularity, t, isHotel])
+  }, [range, granularity, t, isHotel, isClinic])
 
   useEffect(() => {
     load()
@@ -198,6 +200,7 @@ export default function KpisPage() {
   // / booking pace) instead of the sales-funnel KPIs. Rendered after all
   // hooks above so rules-of-hooks stays happy; `load` is a no-op for
   // hotels so the generic dataset query never fires.
+  if (isClinic) return <ClinicKpis />
   if (isHotel) return <HotelKpis />
 
   // ---- Access gate ------------------------------------------------

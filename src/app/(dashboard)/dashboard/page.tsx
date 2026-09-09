@@ -38,6 +38,7 @@ import { PipelinesOverview } from '@/components/dashboard/pipelines-overview'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
 import { HotelDashboard } from '@/components/dashboard/hotel-dashboard'
+import { ClinicDashboard } from '@/components/dashboard/clinic-dashboard'
 
 import { useTranslations } from 'next-intl'
 
@@ -47,6 +48,7 @@ export default function DashboardPage() {
   const t = useTranslations('Dashboard.page')
   const { defaultCurrency, account } = useAuth()
   const isHotel = account?.industry_vertical === 'hotel'
+  const isClinic = account?.industry_vertical === 'clinica'
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
 
@@ -134,6 +136,15 @@ export default function DashboardPage() {
     },
     [series],
   )
+
+  if (isClinic) {
+    return (
+      <div className="space-y-5">
+        <ClinicDashboard />
+        <ActivityFeed items={activity} loading={activityLoading} />
+      </div>
+    )
+  }
 
   if (isHotel) {
     return (
