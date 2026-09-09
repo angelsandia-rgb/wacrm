@@ -7,6 +7,7 @@ import {
   OCCUPANCY_LABEL_ES,
   type ProductRate,
 } from '@/lib/products/rates'
+import { resolveStayProductId } from '@/lib/reservations/price'
 
 // ============================================================
 // Pre-computed stay total for the auto-reply hotel bot.
@@ -61,7 +62,7 @@ export async function loadHotelStayEstimate(
     .maybeSingle<ReservationRow>()
   if (!rr || !rr.check_in || !rr.check_out) return null
 
-  const productId = await resolveProductId(db, accountId, rr)
+  const productId = await resolveStayProductId(db, accountId, rr)
   if (!productId) return null
 
   const { data: rateRows } = await db
@@ -106,36 +107,4 @@ export async function loadHotelStayEstimate(
   }
 
   return text
-}
-
-/** The AI's `record_reservation` marker rarely carries a product_id, so
- *  fall back to matching the captured `service_name` against an active
- *  product (exact, then contains either way). */
-async function resolveProductId(
-  db: SupabaseClient,
-  accountId: string,
-  rr: ReservationRow,
-): Promise<string | null> {
-  const name = rr.service_name?.trim().toLowerCase()
-  if (!rr.product_id && !name) return null
-
-  let query = db
-    .from('products')
-    .select('id, name')
-    .eq('account_id', accountId)
-    .eq('is_active', true)
-  if (rr.product_id) query = query.eq('id', rr.product_id)
-  const { data: products, error } = await query
-  if (error) return null
-  const list = (products ?? []) as { id: string; name: string }[]
-  if (rr.product_id) return list.find((p) => p.id === rr.product_id)?.id ?? null
-  if (!name || list.length >= 1000) return null // cannot establish uniqueness on a capped result
-
-  const exact = list.filter((p) => p.name.trim().toLowerCase() === name)
-  if (exact.length) return exact.length === 1 ? exact[0].id : null
-  const contains = list.filter((p) => {
-    const pn = p.name.trim().toLowerCase()
-    return pn.includes(name) || name.includes(pn)
-  })
-  return contains.length === 1 ? contains[0].id : null
 }

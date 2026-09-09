@@ -46,6 +46,12 @@ and polish.
 > **Migration required:** apply `supabase/migrations/115_conversation_ai_handoff_transient.sql`
 > (adds a nullable `conversations.ai_handoff_transient` flag used by the
 > AI auto-recovery below). Legacy handoffs read as non-transient.
+>
+> **Migration required:** apply `supabase/migrations/120_reservation_active_build.sql`
+> (adds `reservation_requests.is_active_build`, default `true`, and
+> replaces the one-row-per-(conversation, category) unique index with one
+> scoped to the active row). Existing rows all read as active — unchanged
+> behaviour until a guest asks for a second booking in the same chat.
 
 ### Added
 
@@ -296,6 +302,27 @@ and polish.
   DB-only.)
 
 ### Fixed
+
+- **A returning guest can now make a second booking in the same chat
+  without overwriting the first.** The hotel AI kept exactly one
+  `reservation_requests` row per (conversation, category), so when a
+  guest who had already booked a stay came back later in the same
+  WhatsApp thread and asked for another one, the bot *rewrote* the
+  earlier booking's dates and guest count in place — and left its
+  `estimated_price` (and Google Sheet row) showing the old stay's total.
+  Now: the model marks a genuinely separate request with `nueva=1`; the
+  first, completed booking is kept (with its Sheet line and metrics), and
+  a fresh row is started. A re-emitted marker with the same dates never
+  splits the row, and there's a hard per-thread cap. Requires migration
+  120.
+
+- **The estimated price follows the dates.** When the guest moves their
+  stay (a real date change, or a new booking as above) and the AI marker
+  carries no explicit price, the per-night total is recomputed from the
+  room's published rates and the stale figure is overwritten — so the
+  CRM, the hotel Panel and the Google Sheet stop disagreeing with the
+  number the bot quoted in chat. A stay that can't be fully priced is
+  left blank for a human rather than guessed.
 
 - **Catalog reservation now confirms on WhatsApp, not just on the page.**
   When a guest fills the hotel catalog's "Cotiza tu estadía" form from a
