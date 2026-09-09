@@ -74,25 +74,94 @@ const GENERIC: VerticalDefinition = {
   accountSettings: {},
 }
 
+const CLINICA_SERVICIOS_DOC = `SERVICIOS Y HORARIOS
+- [[servicio]]: [[precio]] · [[duración en minutos]]
+- [[servicio]]: [[precio]] · [[duración]]
+- ...
+
+DOCTORES
+- [[Dr./Dra. Nombre]] — [[especialidad]] — atiende [[días y horas]]
+- ...
+
+HORARIO DE ATENCIÓN GENERAL
+- [[Lunes a viernes 8:00–17:00]] · [[sábado 8:00–12:00]] · [[domingo cerrado]]
+
+PARA LA IA
+- Puedes informar servicios, precios, duración, qué doctores atienden y
+  horarios usando esta información (nunca inventes un precio ni un horario).
+- Para agendar pide: motivo/servicio, con qué doctor (o "el que esté
+  disponible"), y qué día/hora prefiere.`
+
+const CLINICA_POLITICAS_DOC = `POLÍTICAS DE LA CLÍNICA
+- Confirmación: se pide confirmar la cita [[24 h]] antes.
+- Cancelación / reagendamiento: [[con al menos X horas de aviso]].
+- Formas de pago: [[efectivo / tarjeta / transferencia]].
+- Cómo llegar: [[dirección / referencia]].
+- Primera consulta: [[traer estudios previos / llegar 10 min antes]].
+
+IMPORTANTE PARA LA IA
+- NUNCA des un diagnóstico, receta ni recomendación de tratamiento.
+- NUNCA interpretes síntomas, resultados de laboratorio ni imágenes.
+- Si el paciente describe un problema de salud, dile que un profesional
+  de la clínica lo atenderá y ofrécele agendar o adelantar una cita.`
+
+const CLINICA_AI_PROMPT = `Eres el asistente de una clínica. Atiendes a pacientes por WhatsApp, Instagram y Facebook.
+
+Qué haces:
+- Informas servicios, precios, duración, qué doctores atienden y horarios, usando la base de conocimiento (nunca inventes un precio ni un horario).
+- Ayudas a agendar una cita: pides el servicio/motivo, con qué doctor (o "el que esté disponible") y qué día/hora prefiere el paciente. Deja claro que recepción confirma el horario final.
+- Cuando el paciente tiene una cita próxima y confirma que asistirá, la confirmas. Cuando la cancela, la cancelas y le ofreces otro horario. Si quiere moverla a otro día, lo pasas a recepción.
+- Cuando el paciente te diga su nombre, lo guardas como el nombre del contacto.
+
+Qué NUNCA haces:
+- No das diagnósticos, recetas ni recomendaciones de tratamiento.
+- No interpretas síntomas, resultados de laboratorio ni imágenes.
+- No inventas servicios, precios ni horarios.
+- No tienes acceso a las notas médicas ni al historial y nunca digas que los modificaste.
+
+Si el paciente describe un problema de salud o pide consejo médico, dile con calidez que un profesional de la clínica lo va a atender y ofrécele agendar o adelantar su cita.
+
+Tono: cálido, breve, servicial.`
+
 /**
- * Clínicas / consultorios. Placeholder kit — identical no-op to
- * `generic` for now (a clinic account behaves exactly like a generic
- * one). The slug exists so the vertical is selectable in /admin and
- * `industry_vertical === 'clinica'` can gate future clinic-specific
- * behaviour; the kit contents (custom fields, pipeline, flows, KB,
- * prompt) get filled in as that work lands.
+ * Clínicas / consultorios. Applying the kit (`seed.ts`) stamps
+ * `accounts.industry_vertical = 'clinica'`, and THAT flag turns on the
+ * clinic behaviour across the app (Pacientes / Citas nav, the clinic
+ * Panel + KPIs, the calendar reading `appointments`, the auto-reply
+ * guardrails + confirm/cancel marker, "Servicios" relabel, the doctor +
+ * schedule editor in Settings, the reminder sweep). The kit itself just
+ * seeds a sensible starting point:
+ *  - three service categories + a pipeline that's SEPARATE from the
+ *    appointments workflow (spec §16),
+ *  - two contact custom fields a receptionist commonly records,
+ *  - two KB scaffolds with `[[placeholders]]` so the AI has something to
+ *    answer service / schedule questions from,
+ *  - a restrictive AI system prompt (only when the prompt is empty).
  */
 const CLINICA: VerticalDefinition = {
   slug: 'clinica',
   label: 'Clínica',
-  customFields: [],
-  productCategories: [],
-  pipeline: null,
+  customFields: ['Fecha de nacimiento', 'Referido por'],
+  productCategories: ['Consultas', 'Procedimientos', 'Seguimiento'],
+  pipeline: {
+    name: 'Pacientes',
+    stages: [
+      { name: 'Lead', color: '#3b82f6' },
+      { name: 'Contactado', color: '#8b5cf6' },
+      { name: 'Interesado', color: '#eab308' },
+      { name: 'Cita agendada', color: '#f97316' },
+      { name: 'Paciente', color: '#22c55e', is_won: true },
+    ],
+  },
   flowTemplateSlugs: [],
   automationTemplateSlugs: [],
-  knowledgeDocs: [],
+  knowledgeDocs: [
+    { title: 'Servicios y horarios', content: CLINICA_SERVICIOS_DOC },
+    { title: 'Políticas de la clínica', content: CLINICA_POLITICAS_DOC },
+  ],
   googleSheetsEvents: [],
-  accountSettings: {},
+  accountSettings: { catalog_delivery_mode: 'digital' },
+  aiSystemPromptScaffold: CLINICA_AI_PROMPT,
 }
 
 const HOTEL_TARIFAS_DOC = `TARIFAS DE HABITACIONES
