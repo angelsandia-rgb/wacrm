@@ -57,6 +57,14 @@ and polish.
 > (widens the `accounts.industry_vertical` CHECK to also allow
 > `'clinica'`). No effect until a company is set to that vertical; its
 > starter kit is currently a no-op, identical to `'generic'`.
+>
+> **Migration required:** apply `supabase/migrations/122_clinic_core.sql`
+> and `supabase/migrations/123_clinic_appointments_visits.sql` (the
+> clinic vertical's data model — `patient_profiles`, `doctor_profiles`,
+> `doctor_availability`, `doctor_time_off`, `appointments`,
+> `appointment_history`, `visits`, `visit_note_revisions`,
+> `note_templates`, plus `products.duration_minutes`). All new, isolated
+> by `account_id` + RLS; zero effect on non-clinic accounts. No UI yet.
 
 ### Added
 
@@ -65,6 +73,19 @@ and polish.
   clinic company behaves exactly like a generic one — the slug exists so
   clinic-specific setup and behaviour can be built on top of it. Requires
   migration 121.
+
+- **Clinic vertical — data model (no UI yet).** Nine new tables for
+  patients, doctors + their weekly availability and time off,
+  appointments (native in Postgres, with an optional Google Calendar
+  mirror) and their change history, visits (the clinical + financial
+  record, with append-only note revisions) and note templates. A
+  doctor-user linked to a `doctor_profiles` row with `restrict_to_own`
+  only sees their own appointments and visits (`clinic_doctor_scope`
+  drives the RLS); admins and reception see everything. Pure engines
+  land with it: the free-slot calculator (recurring availability −
+  time off − existing appointments, timezone-aware), the appointment
+  status/confirmation state machine, and recurring-appointment
+  expansion. Requires migrations 122 + 123.
 
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
