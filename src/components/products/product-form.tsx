@@ -205,6 +205,7 @@ export function ProductForm({
   const t = useTranslations('Products.form');
   const { account } = useAuth();
   const isHotel = account?.industry_vertical === 'hotel';
+  const isClinic = account?.industry_vertical === 'clinica';
   const isEdit = !!product;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -220,6 +221,7 @@ export function ProductForm({
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [baseInstallationCost, setBaseInstallationCost] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState('');
   // Product photo gallery — up to MAX_PRODUCT_IMAGES (migration 117).
   // First one is the "main" photo (mirrors the legacy `image_url`).
   const [imageUrls, setImageUrls] = useState<string[]>([]);
@@ -244,6 +246,9 @@ export function ProductForm({
     setPrice(product ? String(product.price) : '');
     setBaseInstallationCost(
       product?.installation_cost != null ? String(product.installation_cost) : ''
+    );
+    setDurationMinutes(
+      product?.duration_minutes != null ? String(product.duration_minutes) : ''
     );
     setImageUrls(
       product?.image_urls?.length
@@ -517,6 +522,20 @@ export function ProductForm({
         body.category_id = categoryId || null;
         body.rates = resolvedRates;
       }
+      if (isClinic) {
+        const trimmed = durationMinutes.trim();
+        if (trimmed === '') {
+          body.duration_minutes = null;
+        } else {
+          const parsed = Number(trimmed);
+          if (!Number.isFinite(parsed) || parsed < 1 || parsed > 1440) {
+            toast.error(t('toastDurationInvalid'));
+            setSaving(false);
+            return;
+          }
+          body.duration_minutes = Math.round(parsed);
+        }
+      }
       const res = await fetch(
         isEdit ? `/api/products/${product.id}` : '/api/products',
         {
@@ -605,6 +624,25 @@ export function ProductForm({
               />
             </div>
           </div>
+
+          {isClinic && (
+            <div className="space-y-1.5">
+              <Label className="text-muted-foreground">
+                {t('durationLabel')}{' '}
+                <span className="text-muted-foreground text-xs">{t('optional')}</span>
+              </Label>
+              <Input
+                type="number"
+                min={1}
+                max={1440}
+                step="5"
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(e.target.value)}
+                placeholder={t('durationPlaceholder')}
+                className="bg-muted border-border text-foreground"
+              />
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label className="text-muted-foreground">

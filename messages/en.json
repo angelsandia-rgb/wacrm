@@ -48,7 +48,8 @@
     "menuSettings": "Settings",
     "menuSignOut": "Sign out",
     "calendar": "Calendar",
-    "patients": "Patients"
+    "patients": "Patients",
+    "services": "Services"
   },
   "CommandMenu": {
     "placeholder": "Type a command or search…",
@@ -1028,7 +1029,9 @@
       "deleteProductTitle": "Delete this product?",
       "deleteProductDesc": "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
       "cancel": "Cancel",
-      "deleteBtn": "Delete"
+      "deleteBtn": "Delete",
+      "titleClinic": "Services",
+      "subtitleClinic": "Manage the services you offer, with their price and duration."
     },
     "catalog": {
       "title": "Catalog delivery",
@@ -1164,7 +1167,10 @@
       "moveLeft": "Move left",
       "moveRight": "Move right",
       "remove": "Remove",
-      "toastMaxImages": "Up to {max} photos."
+      "toastMaxImages": "Up to {max} photos.",
+      "durationLabel": "Duration (minutes)",
+      "durationPlaceholder": "e.g. 30",
+      "toastDurationInvalid": "Duration must be between 1 and 1440 minutes."
     },
     "quoteBuilder": {
       "title": "New quote",
@@ -2445,7 +2451,8 @@
       "billing": "Billing",
       "google-calendar": "Google Calendar",
       "google-sheets": "Google Sheets",
-      "support": "Tickets"
+      "support": "Tickets",
+      "clinic": "Clinic"
     },
     "groups": {
       "account": "Account",
@@ -2841,6 +2848,36 @@
       "view": "View patient",
       "done": "Contact converted to patient.",
       "error": "Could not convert the contact."
+    },
+    "settings": {
+      "title": "Clinic",
+      "desc": "Manage doctors and their working hours. This feeds the calendar, appointments and the AI assistant.",
+      "empty": "No doctors yet.",
+      "loadError": "Could not load doctors.",
+      "saveError": "Could not save.",
+      "addTitle": "Add a doctor",
+      "namePlaceholder": "Doctor name",
+      "specialtyPlaceholder": "Specialty (optional)",
+      "addBtn": "Add doctor",
+      "name": "Name",
+      "specialty": "Specialty",
+      "color": "Calendar colour",
+      "restrictToOwn": "Access",
+      "restrictHint": "Only sees their own appointments",
+      "active": "Active",
+      "delete": "Delete"
+    },
+    "schedule": {
+      "title": "Weekly hours",
+      "addBlock": "+ Add block",
+      "save": "Save hours",
+      "saved": "Hours saved.",
+      "saveError": "Could not save the hours.",
+      "timeOffTitle": "Time off / extra hours",
+      "timeOffEmpty": "None scheduled.",
+      "addTimeOff": "Add",
+      "reasonPlaceholder": "Reason (optional)",
+      "extraHours": "Extra hours"
     }
   }
 }

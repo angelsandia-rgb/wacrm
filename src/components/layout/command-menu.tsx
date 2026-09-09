@@ -63,6 +63,8 @@ interface NavEntry {
   icon: Icon;
   /** Only shown for accounts on this industry vertical. */
   vertical?: string;
+  /** Per-vertical label override (keyed by `industry_vertical`). */
+  labelKeyByVertical?: Record<string, string>;
 }
 
 const NAV: NavEntry[] = [
@@ -74,7 +76,12 @@ const NAV: NavEntry[] = [
   { href: "/contacts", labelKey: "contacts", icon: IconUsers },
   { href: "/pipelines", labelKey: "pipelines", icon: IconGitBranch },
   { href: "/calendar", labelKey: "calendar", icon: IconCalendarEvent },
-  { href: "/products", labelKey: "products", icon: IconPackage },
+  {
+    href: "/products",
+    labelKey: "products",
+    icon: IconPackage,
+    labelKeyByVertical: { clinica: "services" },
+  },
   { href: "/broadcasts", labelKey: "broadcasts", icon: IconSpeakerphone },
   { href: "/automations", labelKey: "automations", icon: IconBolt },
   { href: "/flows", labelKey: "flows", icon: IconSitemap },
@@ -90,11 +97,15 @@ export function CommandMenu() {
   const { mode, toggleMode } = useTheme();
   const [open, setOpen] = useState(false);
   const hiddenNav = resolveHiddenNavKeys(account);
+  const vertical = account?.industry_vertical ?? "generic";
   const navItems = NAV.filter(
     (item) =>
       !hiddenNav.includes(item.labelKey) &&
-      (!item.vertical || item.vertical === (account?.industry_vertical ?? "generic")),
-  );
+      (!item.vertical || item.vertical === vertical),
+  ).map((item) => ({
+    ...item,
+    labelKey: item.labelKeyByVertical?.[vertical] ?? item.labelKey,
+  }));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

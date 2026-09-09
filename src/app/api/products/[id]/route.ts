@@ -3,6 +3,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
 import { parseRates } from '@/lib/products/rates'
+import { parseDurationMinutes } from '@/lib/products/duration'
 import { resolveCategoryId } from '@/lib/products/categories'
 
 // Update / delete a single product. Products are account-shared, so
@@ -57,6 +58,13 @@ export async function PATCH(
   }
   if ('is_active' in body) {
     update.is_active = body.is_active === true
+  }
+  if ('duration_minutes' in body) {
+    const duration = parseDurationMinutes(body.duration_minutes)
+    if (!duration.ok) {
+      return NextResponse.json({ error: duration.error }, { status: 400 })
+    }
+    update.duration_minutes = duration.value
   }
 
   const admin = supabaseAdmin()

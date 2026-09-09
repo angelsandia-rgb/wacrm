@@ -11,6 +11,7 @@ import {
   PlugZap,
   Shield,
   Sheet,
+  Stethoscope,
   Tags,
   ThumbsUp,
   User,
@@ -40,6 +41,7 @@ export const SETTINGS_SECTIONS = [
   'quick-replies',
   'fields',
   'deals',
+  'clinic',
   'members',
   'api',
   'webhooks',
@@ -59,6 +61,9 @@ export interface SectionMeta {
   label: string;
   icon: LucideIcon;
   group: 'top' | 'account' | 'workspace';
+  /** When set, the rail only shows this section for accounts on that
+   *  industry vertical (migration 105). */
+  verticalOnly?: string;
 }
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
@@ -73,6 +78,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   'quick-replies': { id: 'quick-replies', label: 'Quick replies', icon: Zap, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
+  clinic: { id: 'clinic', label: 'Clinic', icon: Stethoscope, group: 'workspace', verticalOnly: 'clinica' },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
   webhooks: { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'workspace' },

@@ -100,6 +100,11 @@ interface NavItem {
    * (migration 105). Absent = shown for every vertical.
    */
   vertical?: string;
+  /**
+   * Per-vertical label override — e.g. Products reads "Servicios" for a
+   * clinic. Keyed by `industry_vertical`; falls back to `labelKey`.
+   */
+  labelKeyByVertical?: Record<string, string>;
 }
 
 const navItems: NavItem[] = [
@@ -111,7 +116,12 @@ const navItems: NavItem[] = [
   { href: "/contacts", labelKey: "contacts", icon: IconUsers },
   { href: "/pipelines", labelKey: "pipelines", icon: IconGitBranch },
   { href: "/calendar", labelKey: "calendar", icon: IconCalendarEvent },
-  { href: "/products", labelKey: "products", icon: IconPackage },
+  {
+    href: "/products",
+    labelKey: "products",
+    icon: IconPackage,
+    labelKeyByVertical: { clinica: "services" },
+  },
   { href: "/broadcasts", labelKey: "broadcasts", icon: IconSpeakerphone },
   { href: "/automations", labelKey: "automations", icon: IconBolt },
   { href: "/flows", labelKey: "flows", icon: IconSitemap, beta: true },
@@ -266,7 +276,13 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     )}
                   >
                     <item.icon className="h-4 w-4" />
-                    <span className="flex-1">{t(item.labelKey as string)}</span>
+                    <span className="flex-1">
+                      {t(
+                        (item.labelKeyByVertical?.[
+                          account?.industry_vertical ?? "generic"
+                        ] ?? item.labelKey) as string,
+                      )}
+                    </span>
                     {item.beta && (
                       <span
                         aria-label={t("beta")}

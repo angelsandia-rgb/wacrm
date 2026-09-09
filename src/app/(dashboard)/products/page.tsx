@@ -72,7 +72,8 @@ type QuoteWithContact = Omit<Quote, 'contact'> & {
 export default function ProductsPage() {
   const t = useTranslations('Products.page');
   const canManage = useCan('manage-products');
-  const { defaultCurrency } = useAuth();
+  const { defaultCurrency, account } = useAuth();
+  const isClinic = (account?.industry_vertical ?? 'generic') === 'clinica';
 
   const [tab, setTab] = useState<'products' | 'quotes' | 'catalog'>('products');
 
@@ -208,8 +209,12 @@ export default function ProductsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-foreground text-2xl font-bold">{t('title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{t('subtitle')}</p>
+          <h1 className="text-foreground text-2xl font-bold">
+            {isClinic ? t('titleClinic') : t('title')}
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {isClinic ? t('subtitleClinic') : t('subtitle')}
+          </p>
         </div>
         {tab === 'products' && (
           <div className="flex items-center gap-2">

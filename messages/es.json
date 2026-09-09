@@ -1683,7 +1683,9 @@
       "deleteProductTitle": "¿Eliminar este producto?",
       "deleteProductDesc": "¿Estás seguro de que quieres eliminar \"{name}\"? Esta acción no se puede deshacer.",
       "cancel": "Cancelar",
-      "deleteBtn": "Eliminar"
+      "deleteBtn": "Eliminar",
+      "titleClinic": "Servicios",
+      "subtitleClinic": "Administra los servicios que ofreces, con su precio y duración."
     },
     "catalog": {
       "title": "Entrega del catálogo",
@@ -1819,7 +1821,10 @@
       "moveLeft": "Mover a la izquierda",
       "moveRight": "Mover a la derecha",
       "remove": "Quitar",
-      "toastMaxImages": "Hasta {max} fotos."
+      "toastMaxImages": "Hasta {max} fotos.",
+      "durationLabel": "Duración (minutos)",
+      "durationPlaceholder": "ej. 30",
+      "toastDurationInvalid": "La duración debe estar entre 1 y 1440 minutos."
     },
     "quoteBuilder": {
       "title": "Nueva cotización",
@@ -2415,7 +2420,8 @@
       "billing": "Facturación",
       "google-calendar": "Google Calendar",
       "google-sheets": "Google Sheets",
-      "support": "Tickets"
+      "support": "Tickets",
+      "clinic": "Clínica"
     },
     "groups": {
       "account": "Cuenta",
@@ -2737,7 +2743,8 @@
     "menuSettings": "Configuración",
     "menuSignOut": "Cerrar sesión",
     "calendar": "Calendario",
-    "patients": "Pacientes"
+    "patients": "Pacientes",
+    "services": "Servicios"
   },
   "Calendar": {
     "title": "Calendario",
@@ -2841,6 +2848,36 @@
       "view": "Ver paciente",
       "done": "Contacto convertido en paciente.",
       "error": "No se pudo convertir el contacto."
+    },
+    "settings": {
+      "title": "Clínica",
+      "desc": "Administra los doctores y sus horarios. Esto alimenta el calendario, las citas y el asistente de IA.",
+      "empty": "Aún no hay doctores.",
+      "loadError": "No se pudieron cargar los doctores.",
+      "saveError": "No se pudo guardar.",
+      "addTitle": "Agregar un doctor",
+      "namePlaceholder": "Nombre del doctor",
+      "specialtyPlaceholder": "Especialidad (opcional)",
+      "addBtn": "Agregar doctor",
+      "name": "Nombre",
+      "specialty": "Especialidad",
+      "color": "Color en el calendario",
+      "restrictToOwn": "Acceso",
+      "restrictHint": "Solo ve sus propias citas",
+      "active": "Activo",
+      "delete": "Eliminar"
+    },
+    "schedule": {
+      "title": "Horario semanal",
+      "addBlock": "+ Agregar bloque",
+      "save": "Guardar horario",
+      "saved": "Horario guardado.",
+      "saveError": "No se pudo guardar el horario.",
+      "timeOffTitle": "Ausencias / horario extra",
+      "timeOffEmpty": "Nada programado.",
+      "addTimeOff": "Agregar",
+      "reasonPlaceholder": "Motivo (opcional)",
+      "extraHours": "Horario extra"
     }
   }
 }

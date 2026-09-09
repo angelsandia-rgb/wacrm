@@ -97,6 +97,16 @@ and polish.
   converted). A patient is a thin record over the contact — no
   duplicated phone / email / WhatsApp. No migration.
 
+- **Clinic vertical — Services + doctors + working hours.** For a
+  `clinica` account the Products section reads "Servicios" and the
+  product form gains a duration (minutes) field. A new Settings →
+  Clínica panel manages the clinic's doctors (name, specialty, calendar
+  colour, active flag, "only sees their own appointments" toggle, link
+  to a team member) and, per doctor, a weekly-hours grid and one-off
+  time off / extra-hours blocks — the data the calendar, appointments
+  and the AI assistant will read for real availability. No migration
+  (the tables + `products.duration_minutes` shipped with 122/123).
+
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
   account's own timezone, whether or not Google Calendar is connected.
