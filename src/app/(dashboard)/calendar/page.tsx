@@ -11,6 +11,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/hooks/use-auth'
 import { readResponseJson } from '@/lib/http/response-json'
 import type { CalendarEvent, CalendarEventsResponse } from '@/lib/google-calendar/types'
 import {
@@ -50,6 +51,8 @@ function visibleRange(view: View, anchor: Date): { start: Date; end: Date } {
 
 export default function CalendarPage() {
   const t = useTranslations('Calendar')
+  const { account } = useAuth()
+  const isClinic = (account?.industry_vertical ?? 'generic') === 'clinica'
 
   const [view, setView] = useState<View>('agenda')
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()))
@@ -89,8 +92,9 @@ export default function CalendarPage() {
       if (opts?.manual) setRefreshing(true)
       else setLoading(true)
       try {
+        const endpoint = isClinic ? '/api/appointments/calendar' : '/api/google-calendar/events'
         const res = await fetch(
-          `/api/google-calendar/events?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`,
+          `${endpoint}?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`,
         )
         const data = await readResponseJson<CalendarEventsResponse>(res)
         if (!res.ok) {
@@ -112,7 +116,7 @@ export default function CalendarPage() {
         lastFetched.current = rangeKey
       }
     },
-    [range.start, range.end, rangeKey, t],
+    [range.start, range.end, rangeKey, t, isClinic],
   )
 
   // Refetch whenever the visible window changes.
@@ -250,7 +254,7 @@ export default function CalendarPage() {
         <AgendaList events={events} from={range.start} onSelectEvent={setSelected} />
       )}
 
-      {state?.kind === 'ok' ? (
+      {state?.kind === 'ok' && !isClinic ? (
         <a
           href="https://calendar.google.com"
           target="_blank"

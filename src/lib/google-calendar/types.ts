@@ -29,6 +29,19 @@ export interface CalendarEvent {
   meetLink: string | null
   attendees: CalendarEventAttendee[]
   organizerEmail: string | null
+  /** Present only for clinic-vertical events — the CRM's own
+   *  `appointments` rendered on the calendar, not a Google event. */
+  clinic?: {
+    appointmentId: string
+    patientId: string
+    patientName: string | null
+    doctorName: string | null
+    doctorColor: string | null
+    serviceName: string | null
+    /** the appointment_status enum value */
+    apptStatus: string
+    confirmationStatus: string
+  }
 }
 
 /** Response of `GET /api/google-calendar/events`. `connected: false`
