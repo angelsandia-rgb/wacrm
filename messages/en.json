@@ -3031,6 +3031,13 @@
       "noShows": "No shows",
       "humanResponse": "Avg. human response",
       "appointments": "Appointments"
+    },
+    "inbox": {
+      "patient": "Patient",
+      "lastVisit": "Last visit",
+      "nextAppt": "Next appointment",
+      "viewPatient": "View patient",
+      "newAppt": "New appointment"
     }
   }
 }
