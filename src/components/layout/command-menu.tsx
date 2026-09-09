@@ -21,6 +21,7 @@ import {
   IconSpeakerphone,
   IconSun,
   IconTrendingUp,
+  IconUserHeart,
   IconUsers,
   type Icon,
 } from "@tabler/icons-react";
@@ -60,6 +61,8 @@ interface NavEntry {
   href: string;
   labelKey: string;
   icon: Icon;
+  /** Only shown for accounts on this industry vertical. */
+  vertical?: string;
 }
 
 const NAV: NavEntry[] = [
@@ -67,6 +70,7 @@ const NAV: NavEntry[] = [
   { href: "/kpis", labelKey: "kpis", icon: IconTrendingUp },
   { href: "/inbox", labelKey: "inbox", icon: IconMessage },
   { href: "/notifications", labelKey: "notifications", icon: IconBell },
+  { href: "/patients", labelKey: "patients", icon: IconUserHeart, vertical: "clinica" },
   { href: "/contacts", labelKey: "contacts", icon: IconUsers },
   { href: "/pipelines", labelKey: "pipelines", icon: IconGitBranch },
   { href: "/calendar", labelKey: "calendar", icon: IconCalendarEvent },
@@ -86,7 +90,11 @@ export function CommandMenu() {
   const { mode, toggleMode } = useTheme();
   const [open, setOpen] = useState(false);
   const hiddenNav = resolveHiddenNavKeys(account);
-  const navItems = NAV.filter((item) => !hiddenNav.includes(item.labelKey));
+  const navItems = NAV.filter(
+    (item) =>
+      !hiddenNav.includes(item.labelKey) &&
+      (!item.vertical || item.vertical === (account?.industry_vertical ?? "generic")),
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
