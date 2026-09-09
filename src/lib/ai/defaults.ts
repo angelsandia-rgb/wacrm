@@ -184,6 +184,17 @@ export const QUICK_REPLY_SENTINEL_SUFFIX = ']]'
 export const RECORD_RESERVATION_SENTINEL_PREFIX = '[[ACTION:record_reservation:'
 export const RECORD_RESERVATION_SENTINEL_SUFFIX = ']]'
 
+/**
+ * The patient replied in a way that confirms or cancels their one
+ * upcoming appointment (auto-reply mode, `clinica` vertical only, and
+ * only when `clinicAppointment` is passed). Value is `confirm` or
+ * `cancel`. `auto-reply.ts` applies the status transition on the
+ * appointment `loadClinicAppointmentContext` resolved. Reschedules are
+ * NOT handled here — the bot offers reception.
+ */
+export const APPOINTMENT_ACTION_SENTINEL_PREFIX = '[[ACTION:appointment:'
+export const APPOINTMENT_ACTION_SENTINEL_SUFFIX = ']]'
+
 /** The five hotel product categories a reservation marker may target. */
 export const RESERVATION_MARKER_CATEGORIES = [
   'habitaciones',
@@ -345,8 +356,18 @@ export function buildSystemPrompt(args: {
    *  the conversation here with a specific task; this is that task.
    *  Cleared after this reply. */
   flowDirective?: string
+  /** The account is on the `clinica` vertical — auto-reply mode. Adds
+   *  the "no diagnoses / no prescriptions / never touch clinical notes"
+   *  guardrails to the prompt. */
+  clinicGuardrails?: boolean
+  /** The patient's one upcoming appointment
+   *  (`loadClinicAppointmentContext`) — auto-reply, `clinica` vertical.
+   *  Lets the bot confirm or cancel it straight from the chat via
+   *  `APPOINTMENT_ACTION_SENTINEL_PREFIX`. Omitted = the marker is never
+   *  taught (nothing to act on). */
+  clinicAppointment?: { summary: string; confirmationStatus: string } | null
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelStayEstimate, currentDate, flowDirective } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelStayEstimate, currentDate, flowDirective, clinicGuardrails, clinicAppointment } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -372,6 +393,20 @@ export function buildSystemPrompt(args: {
     if (hotelStayEstimate && hotelStayEstimate.trim()) {
       parts.push(
         `COST ESTIMATE — the guest is asking about a room/package stay and the CRM has already priced it from the business's OWN published nightly tariffs: «${hotelStayEstimate.trim()}». This is a real, computed figure, NOT you inventing a price. When the guest asks "how much" / for a total / for a quote on THIS stay, give them this exact number, worded as an estimate ("el total estimado sería…"), and add that a person confirms final availability and price. Do NOT withhold it or defer the whole thing to a human just because another instruction says a person "confirms" — sharing a computed estimate and having a person confirm availability are not in conflict. If the guest then changes the dates or number of people, this figure no longer applies — say a person will re-quote.`,
+      )
+    }
+    if (clinicGuardrails) {
+      parts.push(
+        `This is a medical clinic. Hard limits, no exceptions: NEVER give a diagnosis, NEVER recommend or prescribe medication or treatment, NEVER interpret symptoms, lab results or images, and NEVER invent clinical information. You do not have access to and must never claim to change a patient's medical notes or history. If the person describes a health problem or asks for medical advice, say a professional at the clinic will help them and offer to book or bring forward an appointment. You CAN help with: services offered, prices, schedules, which doctors attend, and booking / confirming / cancelling / rescheduling appointments.`,
+      )
+    }
+    if (clinicAppointment && clinicAppointment.summary.trim()) {
+      parts.push(
+        `This patient has ONE upcoming appointment on file: «${clinicAppointment.summary.trim()}» (confirmation status: ${clinicAppointment.confirmationStatus}). ` +
+          `If in this turn the patient clearly CONFIRMS they will attend (e.g. "sí", "ahí estaré", "confirmado", "perfecto nos vemos"), append ${APPOINTMENT_ACTION_SENTINEL_PREFIX}confirm${APPOINTMENT_ACTION_SENTINEL_SUFFIX} at the very end of your reply and tell them the appointment is confirmed. ` +
+          `If they clearly CANCEL (e.g. "no puedo ir", "cancélala", "ya no voy a poder"), append ${APPOINTMENT_ACTION_SENTINEL_PREFIX}cancel${APPOINTMENT_ACTION_SENTINEL_SUFFIX} and tell them it's cancelled, then offer to help them book another time. ` +
+          `If they want to RESCHEDULE / move it to another day, do NOT use this marker — there is no reschedule marker; tell them you'll pass it to reception to find a new time, and hand off. ` +
+          `Emit AT MOST ONE ${APPOINTMENT_ACTION_SENTINEL_PREFIX}…${APPOINTMENT_ACTION_SENTINEL_SUFFIX} per reply, only for a CLEAR yes/no about THIS appointment — when unsure, ask, don't guess. Never mention this marker to the patient.`,
       )
     }
     parts.push(

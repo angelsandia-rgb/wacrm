@@ -7,6 +7,8 @@ import { makeInboundImageResolver, providerSupportsVision } from './inbound-imag
 import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
 import { loadHotelStayEstimate } from './hotel-stay-estimate'
+import { loadClinicAppointmentContext } from '@/lib/clinic/appointment-context'
+import { transitionAppointment } from '@/lib/clinic/appointments'
 import { loadQuickReplyContext } from './quick-reply-context'
 import { generateReply, isRetryableAiError, type GenerateArgs } from './generate'
 import { buildSystemPrompt, aiAutoReplyRetryDelayMs, type AutoReplyCalendarContext } from './defaults'
@@ -421,9 +423,11 @@ export async function dispatchInboundToAiReply(
     let quickReplies: Awaited<ReturnType<typeof loadQuickReplyContext>> = null
     let catalogDeliveryMode: 'digital' | 'pdf' | 'photos' = 'digital'
     let isHotel = false
+    let isClinic = false
     let hasRestaurantMenu = false
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
+    let clinicAppointment: Awaited<ReturnType<typeof loadClinicAppointmentContext>> = null
     let calendarContext: AutoReplyCalendarContext | null = null
     try {
       // Independent reads run concurrently. One failed enrichment must
@@ -449,6 +453,7 @@ export async function dispatchInboundToAiReply(
       catalogDeliveryMode =
         (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
       isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
+      isClinic = (catalogModeRow?.industry_vertical as string | undefined) === 'clinica'
       hasRestaurantMenu = Boolean(
         (catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim(),
       )
@@ -465,6 +470,17 @@ export async function dispatchInboundToAiReply(
             conversationId,
             (catalogModeRow?.default_currency as string | undefined) ?? 'USD',
           ).catch(() => null)) ?? undefined
+      }
+
+      // Clinic: the patient's one upcoming appointment, so the bot can
+      // confirm / cancel it straight from the chat.
+      if (isClinic) {
+        clinicAppointment = await loadClinicAppointmentContext(
+          db,
+          accountId,
+          conversationId,
+          businessTimeZone,
+        ).catch(() => null)
       }
 
       // Autonomous scheduling context — only non-null when the account
@@ -506,6 +522,13 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
       hotelStayEstimate,
+      clinicGuardrails: isClinic,
+      clinicAppointment: clinicAppointment
+        ? {
+            summary: clinicAppointment.summary,
+            confirmationStatus: clinicAppointment.confirmationStatus,
+          }
+        : null,
       currentDate: describeNowInZone(businessTimeZone),
       flowDirective,
     })
@@ -531,7 +554,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
     } = generation
 
     // The provider call succeeded, so the key is valid again — clear any
@@ -876,6 +899,36 @@ export async function dispatchInboundToAiReply(
         })
       } catch (err) {
         console.error('[ai auto-reply] autonomous record_reservation failed:', err)
+      }
+    }
+
+    // The patient confirmed or cancelled their appointment in chat.
+    // Clinic-only, and only against the one appointment the context
+    // resolved — re-verified here so a stray marker never acts.
+    if (appointmentAction && isClinic && clinicAppointment) {
+      try {
+        const next = appointmentAction === 'confirm' ? 'CONFIRMED' : 'CANCELLED'
+        const result = await transitionAppointment(
+          db,
+          accountId,
+          configOwnerUserId,
+          clinicAppointment.id,
+          next,
+          {
+            confirmation_status: appointmentAction === 'confirm' ? 'confirmed' : undefined,
+            reason: `patient ${appointmentAction} via chat`,
+          },
+        )
+        await db.from('ai_action_log').insert({
+          account_id: accountId,
+          actor_user_id: configOwnerUserId,
+          action: 'appointment_action',
+          target_id: clinicAppointment.id,
+          input: { action: appointmentAction, source: 'auto_reply_autonomous' },
+          result: result.ok ? { status: next } : { error: result.error },
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] autonomous appointment action failed:', err)
       }
     }
   } catch (err) {
