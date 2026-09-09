@@ -358,6 +358,52 @@ eso queda como trabajo aparte si se pide.
 la hoja "Requerimientos" y las métricas de la prueba). Cubre parcialmente
 "seguimiento pendiente" de la sección I.4 / J, resuelto **dentro** de SANDÍA.
 
+### 2026-09-08 — Varias reservaciones por conversación (vertical hotel)
+
+**Estado:** rama `fix/hotel-multi-reservation-per-thread`. Migración
+`120_reservation_active_build.sql` **aplicada a producción** (vía Supabase
+MCP); falta desplegar la app.
+
+**Qué resuelve.** `reservation_requests` tenía un índice único
+`(conversation_id, category)` (migración 112): exactamente una fila por
+conversación y categoría. Cuando un huésped que ya había reservado volvía a
+escribir en el mismo hilo de WhatsApp y pedía **otra** reservación, el
+`upsert` del marcador `record_reservation` de la IA **sobrescribía** la
+reservación anterior (fechas, personas) y dejaba su `estimated_price` — y la
+fila del Google Sheet — con el total de la estadía vieja. Detectado en una
+conversación real de la cuenta DEMO.
+
+**Cómo funciona.** Nueva columna `reservation_requests.is_active_build`
+(`boolean`, default `true`) = la fila que la IA está completando ahora para
+un `(conversation, category)`. El índice único pasa a ser parcial
+(`WHERE is_active_build`). El modelo marca una solicitud genuinamente nueva
+con `nueva=1` dentro del marcador; `upsertReservationRequest` entonces
+**retira** la reservación anterior (`is_active_build = false` — se conserva,
+con su fila de Sheet y su aporte a métricas) e **inserta** una fila fresca.
+Guardas anti-explosión: solo separa si la fila activa ya tiene fechas
+completas y las fechas de este turno **cambian** (un marcador reemitido con
+las mismas fechas nunca vuelve a separar), y hay un tope duro de 8 filas por
+`(conversation, category)`. Si el código corre por delante de la migración,
+degrada al comportamiento anterior (una sola fila) sin fallar.
+
+**Precio estimado.** Al mover fechas (cambio real o reserva nueva) sin
+`precio` explícito en el marcador, el total por noche se **recalcula** desde
+las tarifas publicadas de la habitación (`src/lib/reservations/price.ts`,
+misma lógica `quoteStay` del catálogo/cotizador) y se pisa el valor viejo;
+una estadía que no se puede cotizar por completo queda en blanco para una
+persona. Antes solo se rellenaba si el precio estaba en `NULL`.
+
+**Dónde vive.** `supabase/migrations/120_*.sql`,
+`src/lib/reservations/upsert.ts` (`startNew`, recálculo de precio, degradado),
+`src/lib/reservations/price.ts` (nuevo — `estimateStayPrice`,
+`resolveStayProductId`, extraído de `hotel-stay-estimate.ts`),
+`src/lib/ai/auto-reply.ts` (`autoRecordReservation` lee `nueva`),
+`src/lib/ai/defaults.ts` (prompt del vertical hotel), `src/lib/ai/types.ts`.
+
+**Relación con el diagnóstico.** Ajuste dentro del vertical hotel (secciones
+I / O). No toca cuentas `generic`. Mantiene la fórmula `account_id` + RLS y
+el patrón pg_cron/marcadores existente — "una entrada más", no rediseño.
+
 ---
 
 ## Nota final

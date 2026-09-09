@@ -5,6 +5,11 @@ const dispatch = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/webhooks/deliver', () => ({ dispatchWebhookEvent: dispatch }))
 // Link ownership is exercised separately with real validation and tenant-aware stubs.
 vi.mock('./validate-links', () => ({ reservationLinksBelongToAccount: vi.fn().mockResolvedValue(true) }))
+// Price recompute is wiring-only here; `price.test.ts` covers the calc.
+vi.mock('./price', () => ({
+  estimateStayPrice: vi.fn().mockResolvedValue(null),
+  resolveStayProductId: vi.fn().mockResolvedValue(null),
+}))
 
 import {
   upsertReservationRequest,
@@ -12,6 +17,7 @@ import {
   parseQuoteReservations,
 } from './upsert'
 import { reservationLinksBelongToAccount } from './validate-links'
+import { estimateStayPrice } from './price'
 
 describe('parseQuoteReservations', () => {
   it('maps a well-formed quote-builder entry, forcing source quote_builder', () => {
@@ -78,17 +84,25 @@ describe('categorySlugFromName', () => {
   })
 })
 
-beforeEach(() => dispatch.mockReset().mockResolvedValue(undefined))
+beforeEach(() => {
+  dispatch.mockReset().mockResolvedValue(undefined)
+  vi.mocked(estimateStayPrice).mockReset().mockResolvedValue(null)
+})
 
-/** Minimal admin-client stub. `existing` is what a `(conversation, category)`
- *  lookup returns; captures the insert/update payloads. `opts.readback` is
- *  the row `syncReservationToContactFields` re-reads by id; `opts.customFields`
- *  is the account's `custom_fields`. */
+/**
+ * Minimal admin-client stub. `existing` is the row a
+ * `(conversation, category, is_active_build)` lookup returns; `opts.readback`
+ * is the row `syncReservationToContactFields` re-reads by id (a lookup with a
+ * single `.eq()`); `opts.count` feeds a `head: true` count; captures the
+ * insert/update payloads.
+ */
 function makeAdmin(
-  existing: { id: string } | null,
+  existing: Record<string, unknown> | null,
   opts: {
     readback?: Record<string, unknown> | null
     customFields?: { id: string; field_name: string }[]
+    count?: number
+    insertId?: string
   } = {},
 ) {
   const calls = {
@@ -96,25 +110,47 @@ function makeAdmin(
     updated: [] as Record<string, unknown>[],
     customValueUpserts: [] as Record<string, unknown>[][],
   }
+  const insertId = opts.insertId ?? 'new-id'
+
+  function reservationSelect() {
+    let depth = 0
+    const chain: Record<string, unknown> = {
+      select: () => chain,
+      eq: () => {
+        depth += 1
+        return chain
+      },
+      in: () => chain,
+      not: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      is: () => chain,
+      // single `.eq('id', …)` → the by-id readback; the multi-`.eq()`
+      // build-row lookup → `existing`.
+      maybeSingle: () =>
+        Promise.resolve({ data: depth <= 1 ? opts.readback ?? null : existing, error: null }),
+      then: (resolve: (v: unknown) => unknown) =>
+        resolve({ data: null, error: null, count: opts.count ?? 0 }),
+    }
+    return chain
+  }
+
   const admin = {
     from(table: string) {
       if (table === 'reservation_requests') {
         return {
-          select: () => ({
-            // `(conversation, category)` lookup: .eq().eq().eq().maybeSingle()
-            // Readback by id: .eq().maybeSingle()
-            eq: () => ({
-              eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: existing, error: null }) }) }),
-              maybeSingle: () => Promise.resolve({ data: opts.readback ?? null, error: null }),
-            }),
-          }),
+          select: () => reservationSelect(),
           update: (p: Record<string, unknown>) => {
             calls.updated.push(p)
-            return { eq: () => Promise.resolve({ error: null }) }
+            const r: Record<string, unknown> = {
+              eq: () => r,
+              then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+            }
+            return r
           },
           insert: (p: Record<string, unknown>) => {
             calls.inserted.push(p)
-            return { select: () => ({ single: () => Promise.resolve({ data: { id: 'new-id' }, error: null }) }) }
+            return { select: () => ({ single: () => Promise.resolve({ data: { id: insertId }, error: null }) }) }
           },
         }
       }
@@ -164,6 +200,7 @@ describe('upsertReservationRequest', () => {
     expect(patches).toEqual([{ conversation_id: 'conv-1', duration_minutes: 60 }])
     expect(dispatch).toHaveBeenCalledOnce()
   })
+
   it('inserts when there is no conversation match, then fires reservation.updated', async () => {
     const { admin, calls } = makeAdmin(null)
     const id = await upsertReservationRequest(admin, 'acct-1', {
@@ -211,6 +248,142 @@ describe('upsertReservationRequest', () => {
     })
     expect(calls.updated[0]).not.toHaveProperty('check_out')
     expect(calls.updated[0]).not.toHaveProperty('guests')
+  })
+})
+
+describe('upsertReservationRequest — separate bookings (startNew)', () => {
+  const ROOM = {
+    id: 'r1',
+    check_in: '2026-09-14',
+    check_out: '2026-09-18',
+    use_date: null,
+    guests: 2,
+    service_name: 'Master Suite Deluxe',
+    product_id: null,
+  }
+
+  it('retires a completed booking and inserts a fresh one when the guest starts a new stay', async () => {
+    const { admin, calls } = makeAdmin(ROOM, { count: 1 })
+    const id = await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      contact_id: 'c1',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+      startNew: true,
+    })
+    expect(id).toBe('new-id')
+    // the old row was flipped inactive, not overwritten
+    expect(calls.updated).toContainEqual({ is_active_build: false })
+    expect(calls.inserted).toHaveLength(1)
+    expect(calls.inserted[0]).toMatchObject({
+      category: 'habitaciones',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+    })
+  })
+
+  it('does NOT split when startNew repeats with the dates it just created (idempotent re-emit)', async () => {
+    // model re-emits nueva=1 with the SAME dates already on the build row
+    const { admin, calls } = makeAdmin({ ...ROOM, check_in: '2026-09-09', check_out: '2026-09-10', guests: 1 }, { count: 2 })
+    const id = await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+      startNew: true,
+    })
+    expect(id).toBe('r1')
+    expect(calls.inserted).toHaveLength(0)
+    expect(calls.updated).not.toContainEqual({ is_active_build: false })
+  })
+
+  it('does NOT split when the current build row has no complete dates yet', async () => {
+    const { admin, calls } = makeAdmin({ ...ROOM, check_in: null, check_out: null }, { count: 1 })
+    await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-10-01',
+      check_out: '2026-10-03',
+      startNew: true,
+    })
+    expect(calls.inserted).toHaveLength(0)
+    expect(calls.updated).not.toContainEqual({ is_active_build: false })
+  })
+
+  it('stops splitting once the per-thread cap is reached', async () => {
+    const { admin, calls } = makeAdmin(ROOM, { count: 8 })
+    const id = await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-12-01',
+      check_out: '2026-12-03',
+      startNew: true,
+    })
+    expect(id).toBe('r1')
+    expect(calls.inserted).toHaveLength(0)
+    expect(calls.updated).not.toContainEqual({ is_active_build: false })
+  })
+})
+
+describe('upsertReservationRequest — estimated price recompute', () => {
+  const ROOM = {
+    id: 'r1',
+    check_in: '2026-09-14',
+    check_out: '2026-09-18',
+    use_date: null,
+    guests: 2,
+    service_name: 'Master Suite Deluxe',
+    product_id: null,
+  }
+
+  it('recomputes the stale price when the AI marker moves the dates and gives no price', async () => {
+    vi.mocked(estimateStayPrice).mockResolvedValueOnce(300)
+    const { admin, calls } = makeAdmin(ROOM)
+    await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+    })
+    expect(estimateStayPrice).toHaveBeenCalledWith(admin, 'acct-1', expect.objectContaining({
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+    }))
+    expect(calls.updated).toContainEqual({ estimated_price: 300 })
+  })
+
+  it('leaves the price alone when the caller pinned one explicitly (catalog / quote)', async () => {
+    const { admin, calls } = makeAdmin(ROOM)
+    await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+      estimated_price: 999,
+      source: 'catalog',
+    })
+    expect(estimateStayPrice).not.toHaveBeenCalled()
+    expect(calls.updated.some((p) => 'estimated_price' in p && p.estimated_price !== 999)).toBe(false)
+  })
+
+  it('does not write a price when the stay cannot be fully priced', async () => {
+    vi.mocked(estimateStayPrice).mockResolvedValueOnce(null)
+    const { admin, calls } = makeAdmin(ROOM)
+    await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-09-09',
+      check_out: '2026-09-10',
+      guests: 1,
+    })
+    expect(calls.updated).not.toContainEqual(expect.objectContaining({ estimated_price: expect.anything() }))
   })
 })
 

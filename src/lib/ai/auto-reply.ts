@@ -1562,12 +1562,17 @@ async function autoRecordReservation(args: {
   const toDate = (v?: string): string | undefined =>
     v && RESERVATION_ISO_DATE.test(v) ? v : undefined
 
+  const startNew = ['1', 'true', 'si', 'sí', 'yes', 'nueva'].includes(
+    (f.nueva ?? '').trim().toLowerCase(),
+  )
+
   const input: ReservationInput = {
     category: proposal.category as ReservationCategory,
     conversation_id: conversationId,
     contact_id: contactId,
     source: 'ai_chat',
   }
+  if (startNew) input.startNew = true
   if (f.servicio) input.service_name = f.servicio
   const guests = toInt(f.personas)
   if (guests !== undefined) input.guests = guests
@@ -1592,7 +1597,7 @@ async function autoRecordReservation(args: {
     actor_user_id: configOwnerUserId,
     action: 'record_reservation',
     target_id: id,
-    input: { category: proposal.category, fields: f, source: 'auto_reply_autonomous' },
+    input: { category: proposal.category, fields: f, start_new: startNew, source: 'auto_reply_autonomous' },
     result: { reservation_id: id },
   })
 }

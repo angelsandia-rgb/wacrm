@@ -1,8 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { nightsBetween, occupancyForGuests, isValidHotelDate } from '@/lib/products/rates'
+import { isUndefinedColumnError } from '@/lib/observability/describe-error'
 import { reservationLinksBelongToAccount } from './validate-links'
 import { reservationFieldError } from './validate-fields'
+import { estimateStayPrice } from './price'
+
+/** Hard ceiling on reservation rows the AI may accumulate for one
+ *  (conversation, category). A backstop: a model that keeps re-asserting
+ *  `nueva` can never spawn an unbounded number of rows — past this,
+ *  a "new booking" signal just extends the current row. */
+const MAX_RESERVATIONS_PER_CONV_CATEGORY = 8
 
 // ============================================================
 // Create-or-extend a hotel "solicitud" (reservation / service request),
@@ -65,6 +73,14 @@ export interface ReservationInput {
   status?: ReservationStatus
   notes?: string | null
   source?: ReservationSource
+  /** AI auto-reply only: the guest asked for a SEPARATE, additional
+   *  booking in a category they already completed earlier in this same
+   *  conversation. Retire the current build row (kept for history) and
+   *  start a fresh one instead of extending it. Ignored without a
+   *  `conversation_id`, when the current build row isn't date-complete,
+   *  when this turn brings no changed date (so a re-emitted marker never
+   *  splits the row again), or once the per-thread cap is hit. */
+  startNew?: boolean
 }
 
 /** Fields a caller may set. `undefined` = leave as-is; an explicit
@@ -142,11 +158,17 @@ export function parseQuoteReservations(raw: unknown): ReservationInput[] {
 /**
  * Upsert a reservation request and fire `reservation.updated`.
  *
- * With `conversation_id` set it matches on `(conversation_id, category)`
- * so the AI keeps building the same row across turns — only the fields
- * actually present in `input` are written, so a sparse later turn never
- * blanks an earlier fact. Without it (catalog / quote builder) it always
- * inserts.
+ * With `conversation_id` set it matches the current `is_active_build`
+ * row for `(conversation_id, category)` so the AI keeps building the same
+ * row across turns — only the fields actually present in `input` are
+ * written, so a sparse later turn never blanks an earlier fact. Pass
+ * `input.startNew` (the AI's `nueva=1`) to retire a completed booking and
+ * begin a fresh one instead of extending it. Without a `conversation_id`
+ * (catalog / quote builder) it always inserts.
+ *
+ * When the stay's dates or guest count change and the caller left
+ * `estimated_price` unset, the per-night total is recomputed from the
+ * room's published rates so the Sheet / Panel figure follows.
  *
  * `admin` must be a service-role client. Returns the reservation id, or
  * `null` on a write failure (best-effort, like the Sheets dispatch).
@@ -165,28 +187,120 @@ export async function upsertReservationRequest(
   }
 
   let id: string | null = null
+  const isStay = input.category === 'habitaciones' || input.category === 'paquetes'
+
+  // The stay after this turn's patch is applied — set when we know
+  // enough to (re)compute the estimated price below.
+  let effectiveStay: {
+    product_id?: string | null
+    service_name?: string | null
+    guests?: number | null
+    check_in?: string | null
+    check_out?: string | null
+  } | null = null
+  let stayFieldsChanged = false
 
   if (input.conversation_id) {
-    const { data: existing, error: lookupError } = await admin
-      .from('reservation_requests')
-      .select('id, check_in, check_out')
-      .eq('account_id', accountId)
-      .eq('conversation_id', input.conversation_id)
-      .eq('category', input.category)
-      .maybeSingle<{ id: string; check_in: string | null; check_out: string | null }>()
-    if (lookupError) return null
+    const LOOKUP_COLS = 'id, check_in, check_out, use_date, guests, service_name, product_id'
+    type ExistingRow = {
+      id: string
+      check_in: string | null
+      check_out: string | null
+      use_date: string | null
+      guests: number | null
+      service_name: string | null
+      product_id: string | null
+    }
+    // `is_active_build` (migration 120) narrows this to the one row the
+    // AI is currently building. If the code is running ahead of the
+    // migration, fall back to the single row the old unique index
+    // guaranteed — `startNew` is then a no-op until the column lands.
+    let existing: ExistingRow | null = null
+    let activeBuildColumn = true
+    {
+      const primary = await admin
+        .from('reservation_requests')
+        .select(LOOKUP_COLS)
+        .eq('account_id', accountId)
+        .eq('conversation_id', input.conversation_id)
+        .eq('category', input.category)
+        .eq('is_active_build', true)
+        .maybeSingle<ExistingRow>()
+      if (primary.error && isUndefinedColumnError(primary.error)) {
+        activeBuildColumn = false
+        const legacy = await admin
+          .from('reservation_requests')
+          .select(LOOKUP_COLS)
+          .eq('account_id', accountId)
+          .eq('conversation_id', input.conversation_id)
+          .eq('category', input.category)
+          .maybeSingle<ExistingRow>()
+        if (legacy.error) return null
+        existing = legacy.data
+      } else if (primary.error) {
+        return null
+      } else {
+        existing = primary.data
+      }
+    }
+
     if (existing) {
       if (reservationFieldError({ ...existing, ...patch })) return null
-      id = existing.id
-      if (Object.keys(patch).length > 0) {
-        const { error } = await admin
+
+      const dateComplete = isStay
+        ? Boolean(existing.check_in && existing.check_out)
+        : Boolean(existing.use_date)
+      const nextCheckIn = (patch.check_in as string | undefined) ?? existing.check_in
+      const nextCheckOut = (patch.check_out as string | undefined) ?? existing.check_out
+      const nextUseDate = (patch.use_date as string | undefined) ?? existing.use_date
+      const datesMoved =
+        nextCheckIn !== existing.check_in ||
+        nextCheckOut !== existing.check_out ||
+        nextUseDate !== existing.use_date
+
+      let atCap = false
+      if (input.startNew && activeBuildColumn && dateComplete && datesMoved) {
+        const { count } = await admin
           .from('reservation_requests')
-          .update(patch)
-          .eq('id', id)
-        if (error) {
-          console.error('[reservations] update failed:', error.message)
-          return null
+          .select('id', { count: 'exact', head: true })
+          .eq('account_id', accountId)
+          .eq('conversation_id', input.conversation_id)
+          .eq('category', input.category)
+        atCap = (count ?? 0) >= MAX_RESERVATIONS_PER_CONV_CATEGORY
+      }
+
+      if (input.startNew && activeBuildColumn && dateComplete && datesMoved && !atCap) {
+        // Retire the completed booking (kept, with its Sheet row and
+        // metrics contribution); fall through to insert a fresh one.
+        const { error: retireError } = await admin
+          .from('reservation_requests')
+          .update({ is_active_build: false })
+          .eq('id', existing.id)
+          .eq('account_id', accountId)
+        if (retireError) return null
+      } else {
+        id = existing.id
+        if (Object.keys(patch).length > 0) {
+          const { error } = await admin
+            .from('reservation_requests')
+            .update(patch)
+            .eq('id', id)
+          if (error) {
+            console.error('[reservations] update failed:', error.message)
+            return null
+          }
         }
+        effectiveStay = {
+          product_id: (patch.product_id as string | undefined) ?? existing.product_id,
+          service_name: (patch.service_name as string | undefined) ?? existing.service_name,
+          guests: (patch.guests as number | undefined) ?? existing.guests,
+          check_in: nextCheckIn,
+          check_out: nextCheckOut,
+        }
+        stayFieldsChanged =
+          datesMoved ||
+          (patch.guests !== undefined && patch.guests !== existing.guests) ||
+          (patch.service_name !== undefined && patch.service_name !== existing.service_name)
       }
     }
   }
@@ -205,11 +319,23 @@ export async function upsertReservationRequest(
     if (error?.code === '23505' && input.conversation_id) {
       // Another inbound/catalog request inserted the same key while we
       // were reading. Merge our sparse patch into that winner once.
-      const { data: winner, error: winnerError } = await admin
+      type WinnerRow = { id: string; check_in: string | null; check_out: string | null }
+      const winnerLookup = await admin
         .from('reservation_requests').select('id, check_in, check_out')
         .eq('account_id', accountId).eq('conversation_id', input.conversation_id)
-        .eq('category', input.category)
-        .maybeSingle<{ id: string; check_in: string | null; check_out: string | null }>()
+        .eq('category', input.category).eq('is_active_build', true)
+        .maybeSingle<WinnerRow>()
+      let winner = winnerLookup.data
+      let winnerError = winnerLookup.error
+      if (winnerError && isUndefinedColumnError(winnerError)) {
+        const legacy = await admin
+          .from('reservation_requests').select('id, check_in, check_out')
+          .eq('account_id', accountId).eq('conversation_id', input.conversation_id)
+          .eq('category', input.category)
+          .maybeSingle<WinnerRow>()
+        winner = legacy.data
+        winnerError = legacy.error
+      }
       if (winnerError || !winner) return null
       if (reservationFieldError({ ...winner, ...patch })) return null
       const { error: mergeError } = await admin.from('reservation_requests')
@@ -221,6 +347,37 @@ export async function upsertReservationRequest(
       return null
     } else {
       id = data.id as string
+      effectiveStay = {
+        product_id: input.product_id ?? null,
+        service_name: input.service_name ?? null,
+        guests: input.guests ?? null,
+        check_in: input.check_in ?? null,
+        check_out: input.check_out ?? null,
+      }
+      stayFieldsChanged = true
+    }
+  }
+
+  // Keep the estimated price in step with the stay when the caller
+  // didn't pin one (the AI marker almost never does; the catalog form
+  // and quote builder always do). A moved date or guest count that
+  // prices cleanly overwrites a now-stale figure; one that can't be
+  // fully priced is left for a human rather than guessed at.
+  if (
+    isStay &&
+    input.estimated_price === undefined &&
+    stayFieldsChanged &&
+    effectiveStay?.check_in &&
+    effectiveStay.check_out &&
+    effectiveStay.guests
+  ) {
+    const priced = await estimateStayPrice(admin, accountId, effectiveStay).catch(() => null)
+    if (priced != null) {
+      await admin
+        .from('reservation_requests')
+        .update({ estimated_price: priced })
+        .eq('id', id)
+        .eq('account_id', accountId)
     }
   }
 

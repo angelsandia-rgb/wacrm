@@ -149,7 +149,8 @@ export interface GenerateResult {
    *  (auto-reply mode, `hotel` vertical only) — see
    *  `RECORD_RESERVATION_SENTINEL_PREFIX`. `fields` is a partial,
    *  Spanish-keyed bag (`servicio`, `personas`, `entrada`, `salida`,
-   *  `fecha`, `minutos`, `salon`, `decoracion`, `precio`);
+   *  `fecha`, `minutos`, `salon`, `decoracion`, `precio`, and `nueva=1`
+   *  to start a separate booking rather than extend the current one);
    *  `auto-reply.ts` maps and upserts it into `reservation_requests`. */
   reservationProposal: {
     category: 'habitaciones' | 'spa' | 'actividades' | 'paquetes' | 'eventos'
