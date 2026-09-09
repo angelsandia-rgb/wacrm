@@ -107,6 +107,18 @@ and polish.
   and the AI assistant will read for real availability. No migration
   (the tables + `products.duration_minutes` shipped with 122/123).
 
+- **Clinic vertical — Appointments.** A `clinica` account gets a "Citas"
+  section: a filterable table (today / tomorrow / this week / this
+  month / all · doctor · service · status · patient search) with
+  columns date, time, patient, doctor, service, status and confirmation.
+  "Nueva cita" walks doctor → service → date → a real free slot
+  (recurring availability − time off − the doctor's other appointments)
+  → patient, with the price pre-filled from the service and an optional
+  "repeat" for weekly / fortnightly / monthly series. Per-row actions
+  confirm, complete, mark no-show, cancel, or reschedule — the last
+  records the previous time in an append-only history. Bookings are
+  conflict-checked against the doctor's calendar. No migration.
+
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
   account's own timezone, whether or not Google Calendar is connected.

@@ -156,7 +156,13 @@ export default function PatientProfilePage() {
                 {t('actionWhatsapp')}
               </Link>
             )}
-            {[t('actionNewAppt'), t('actionAddVisit'), t('actionAddNote')].map((label) => (
+            <Link
+              href={`/appointments?patient=${data.patient.id}`}
+              className="border-border text-foreground hover:bg-muted inline-flex h-8 items-center rounded-md border px-2.5 text-sm"
+            >
+              {t('actionNewAppt')}
+            </Link>
+            {[t('actionAddVisit'), t('actionAddNote')].map((label) => (
               <button
                 key={label}
                 type="button"
