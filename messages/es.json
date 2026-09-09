@@ -2771,7 +2771,8 @@
     "rsvpAccepted": "aceptó",
     "rsvpDeclined": "rechazó",
     "rsvpTentative": "quizás",
-    "rsvpPending": "sin responder"
+    "rsvpPending": "sin responder",
+    "viewPatient": "Ver paciente"
   },
   "HotelMetrics": {
     "cat": {

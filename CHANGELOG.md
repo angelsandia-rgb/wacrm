@@ -119,6 +119,15 @@ and polish.
   records the previous time in an append-only history. Bookings are
   conflict-checked against the doctor's calendar. No migration.
 
+- **Clinic vertical — Calendar.** For a `clinica` account the Calendar
+  page (month / week / agenda) now renders the clinic's own
+  appointments — patient, doctor, service and status — instead of a
+  connected Google Calendar; the event details show a link to the
+  patient. Separately, when a Google Calendar *is* connected, creating,
+  rescheduling or cancelling an appointment is mirrored to it
+  best-effort (`appointments.google_event_id`), so the doctor sees the
+  same schedule in their Google Calendar app. No migration.
+
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
   account's own timezone, whether or not Google Calendar is connected.

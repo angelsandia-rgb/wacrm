@@ -8,6 +8,11 @@ import {
 } from './appointment-status'
 import { expandRecurrence, RECURRENCE_MAX_COUNT, RECURRENCE_MIN_COUNT } from './recurrence'
 import { isRecurrenceFrequency, type RecurrenceFrequency } from './types'
+import {
+  mirrorAppointmentsCreated,
+  mirrorAppointmentRescheduled,
+  mirrorAppointmentCancelled,
+} from './calendar-sync'
 
 // ============================================================
 // Appointment operations — create (with optional recurrence), status
@@ -251,7 +256,10 @@ export async function createAppointment(
     updated_by: userId,
   }))
 
-  const { data, error } = await supabase.from('appointments').insert(rows).select('id, scheduled_at')
+  const { data, error } = await supabase
+    .from('appointments')
+    .insert(rows)
+    .select('id, scheduled_at, ends_at')
   if (error) {
     if (error.code === '23514') return fail('Datos de la cita inválidos', 400)
     return fail(error.message, 500)
@@ -271,6 +279,20 @@ export async function createAppointment(
         changed_by: userId,
       })),
     )
+
+    // best-effort Google Calendar mirror
+    await mirrorAppointmentsCreated(
+      supabase,
+      accountId,
+      created.map((c) => ({
+        id: c.id as string,
+        patient_id: input.patient_id,
+        doctor_id: input.doctor_id,
+        service_id: input.service_id ?? null,
+        scheduled_at: c.scheduled_at as string,
+        ends_at: c.ends_at as string,
+      })),
+    )
   }
 
   return { ok: true, ids: created.map((c) => c.id as string), recurrence_group_id: recurrenceGroupId }
@@ -287,7 +309,7 @@ export async function transitionAppointment(
 ): Promise<{ ok: true; appointment: Record<string, unknown> } | OpError> {
   const { data: current, error: readErr } = await supabase
     .from('appointments')
-    .select('id, status, confirmation_status, scheduled_at')
+    .select('id, status, confirmation_status, scheduled_at, google_event_id')
     .eq('account_id', accountId)
     .eq('id', appointmentId)
     .maybeSingle()
@@ -327,6 +349,13 @@ export async function transitionAppointment(
     changed_by: userId,
   })
 
+  if (next === 'CANCELLED') {
+    await mirrorAppointmentCancelled(supabase, accountId, {
+      id: appointmentId,
+      google_event_id: (current.google_event_id as string | null) ?? null,
+    })
+  }
+
   return { ok: true, appointment: data }
 }
 
@@ -344,7 +373,9 @@ export async function rescheduleAppointment(
 ): Promise<{ ok: true; appointment: Record<string, unknown> } | OpError> {
   const { data: current, error: readErr } = await supabase
     .from('appointments')
-    .select('id, status, scheduled_at, ends_at, doctor_id, service_id, confirmation_status')
+    .select(
+      'id, status, scheduled_at, ends_at, doctor_id, patient_id, service_id, confirmation_status, google_event_id',
+    )
     .eq('account_id', accountId)
     .eq('id', appointmentId)
     .maybeSingle()
@@ -404,6 +435,16 @@ export async function rescheduleAppointment(
     new_scheduled_at: start.toISOString(),
     reason: input.reason ?? 'rescheduled',
     changed_by: userId,
+  })
+
+  await mirrorAppointmentRescheduled(supabase, accountId, {
+    id: appointmentId,
+    google_event_id: (current.google_event_id as string | null) ?? null,
+    patient_id: current.patient_id as string,
+    doctor_id: current.doctor_id as string,
+    service_id: (current.service_id as string | null) ?? null,
+    scheduled_at: start.toISOString(),
+    ends_at: end.toISOString(),
   })
 
   return { ok: true, appointment: data }

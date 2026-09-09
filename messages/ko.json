@@ -2771,7 +2771,8 @@
     "rsvpAccepted": "수락함",
     "rsvpDeclined": "거절함",
     "rsvpTentative": "미정",
-    "rsvpPending": "응답 없음"
+    "rsvpPending": "응답 없음",
+    "viewPatient": "환자 보기"
   },
   "HotelMetrics": {
     "cat": {

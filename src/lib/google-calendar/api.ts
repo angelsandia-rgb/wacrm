@@ -65,8 +65,15 @@ export interface CreateEventArgs {
   description?: string
   startISO: string
   endISO: string
-  attendeeEmail: string
+  /** Optional — the AI's `schedule_appointment` always sets it (Google
+   *  emails the invite); the clinic appointment mirror usually has no
+   *  patient email and omits it. */
+  attendeeEmail?: string
   timeZone?: string
+  /** Attach a Google Meet link (default true — preserves the AI path). */
+  withMeet?: boolean
+  /** Whether Google emails attendees (default 'all'). */
+  sendUpdates?: 'all' | 'none'
 }
 
 export interface CreatedEvent {
@@ -75,11 +82,11 @@ export interface CreatedEvent {
   meetLink: string | null
 }
 
-/** Creates the real calendar event with `sendUpdates: 'all'` — Google
+/** Creates the real calendar event. With `sendUpdates: 'all'` Google
  *  itself emails the invite (accept/decline buttons, correct calendar
  *  format) to `attendeeEmail`; nothing in this project's own email
- *  sender is involved. `conferenceDataVersion=1` + a Hangouts Meet
- *  createRequest attaches a real Google Meet link to the event. */
+ *  sender is involved. `withMeet` (+ `conferenceDataVersion=1`) attaches
+ *  a real Google Meet link. */
 export async function createEvent(
   db: SupabaseClient,
   accountId: string,
@@ -88,33 +95,99 @@ export async function createEvent(
   const accessToken = await getValidAccessToken(db, accountId)
   const calendarId = await loadCalendarId(db, accountId)
   const timeZone = args.timeZone ?? 'UTC'
+  const withMeet = args.withMeet !== false
+  const sendUpdates = args.sendUpdates ?? 'all'
+
+  const body: Record<string, unknown> = {
+    summary: args.summary,
+    description: args.description,
+    start: { dateTime: args.startISO, timeZone },
+    end: { dateTime: args.endISO, timeZone },
+  }
+  if (args.attendeeEmail) body.attendees = [{ email: args.attendeeEmail }]
+  if (withMeet) {
+    body.conferenceData = {
+      createRequest: {
+        requestId: randomUUID(),
+        conferenceSolutionKey: { type: 'hangoutsMeet' },
+      },
+    }
+  }
 
   const res = await googleFetch(
-    `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=all&conferenceDataVersion=1`,
+    `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=${sendUpdates}&conferenceDataVersion=1`,
     {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        summary: args.summary,
-        description: args.description,
-        start: { dateTime: args.startISO, timeZone },
-        end: { dateTime: args.endISO, timeZone },
-        attendees: [{ email: args.attendeeEmail }],
-        conferenceData: {
-          createRequest: {
-            requestId: randomUUID(),
-            conferenceSolutionKey: { type: 'hangoutsMeet' },
-          },
-        },
-      }),
+      body: JSON.stringify(body),
     },
   )
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new GoogleCalendarError(`Google Calendar event creation failed: ${body}`, 502)
+    const text = await res.text().catch(() => '')
+    throw new GoogleCalendarError(`Google Calendar event creation failed: ${text}`, 502)
   }
   const data = (await res.json()) as GoogleEventResource
   return { eventId: data.id, htmlLink: data.htmlLink ?? null, meetLink: meetLinkOf(data) }
+}
+
+export interface UpdateEventArgs {
+  summary?: string
+  description?: string
+  startISO?: string
+  endISO?: string
+  timeZone?: string
+}
+
+/** PATCH an existing event (used by the clinic appointment mirror when
+ *  a booking is rescheduled). Throws `GoogleCalendarError` on failure —
+ *  callers treat the mirror as best-effort and swallow it. */
+export async function updateEvent(
+  db: SupabaseClient,
+  accountId: string,
+  eventId: string,
+  args: UpdateEventArgs,
+): Promise<void> {
+  const accessToken = await getValidAccessToken(db, accountId)
+  const calendarId = await loadCalendarId(db, accountId)
+  const timeZone = args.timeZone ?? 'UTC'
+
+  const patch: Record<string, unknown> = {}
+  if (args.summary != null) patch.summary = args.summary
+  if (args.description != null) patch.description = args.description
+  if (args.startISO) patch.start = { dateTime: args.startISO, timeZone }
+  if (args.endISO) patch.end = { dateTime: args.endISO, timeZone }
+
+  const res = await googleFetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  )
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new GoogleCalendarError(`Google Calendar event update failed: ${text}`, 502)
+  }
+}
+
+/** DELETE an event. A 404/410 (already gone) is treated as success. */
+export async function deleteEvent(
+  db: SupabaseClient,
+  accountId: string,
+  eventId: string,
+): Promise<void> {
+  const accessToken = await getValidAccessToken(db, accountId)
+  const calendarId = await loadCalendarId(db, accountId)
+
+  const res = await googleFetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    const text = await res.text().catch(() => '')
+    throw new GoogleCalendarError(`Google Calendar event delete failed: ${text}`, 502)
+  }
 }
 
 // ============================================================

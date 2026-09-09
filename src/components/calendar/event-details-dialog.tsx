@@ -1,7 +1,8 @@
 'use client'
 
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { CalendarClock, MapPin, Users, Video, ExternalLink } from 'lucide-react'
+import { CalendarClock, MapPin, Users, Video, ExternalLink, Stethoscope, UserRound } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -10,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import type { CalendarEvent } from '@/lib/google-calendar/types'
 import { eventEdges } from '@/lib/calendar/grid'
+import { APPOINTMENT_STATUS_LABEL_ES } from '@/lib/clinic/appointment-status'
 import { formatEventRange } from './format'
 
 const dayFmt = new Intl.DateTimeFormat(undefined, {
@@ -61,6 +63,37 @@ export function EventDetailsDialog({
                 <div className="flex items-start gap-3">
                   <MapPin className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
                   <span className="text-foreground">{event.location}</span>
+                </div>
+              ) : null}
+
+              {event.clinic ? (
+                <div className="border-border space-y-2 border-t pt-3">
+                  <div className="flex items-start gap-3">
+                    <UserRound className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="text-foreground">{event.clinic.patientName || '—'}</span>
+                  </div>
+                  {event.clinic.doctorName || event.clinic.serviceName ? (
+                    <div className="flex items-start gap-3">
+                      <Stethoscope className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+                      <span className="text-foreground">
+                        {[event.clinic.doctorName, event.clinic.serviceName].filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="text-muted-foreground pl-7 text-xs">
+                    {APPOINTMENT_STATUS_LABEL_ES[
+                      event.clinic.apptStatus as keyof typeof APPOINTMENT_STATUS_LABEL_ES
+                    ] ?? event.clinic.apptStatus}
+                  </div>
+                  <div className="pl-7">
+                    <Link
+                      href={`/patients/${event.clinic.patientId}`}
+                      onClick={onClose}
+                      className="text-primary text-xs hover:underline"
+                    >
+                      {t('viewPatient')}
+                    </Link>
+                  </div>
                 </div>
               ) : null}
 
