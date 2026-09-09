@@ -145,6 +145,19 @@ and polish.
   to a patient or a visit — stored in a **private** bucket, downloaded
   through signed URLs. Requires migration 124.
 
+- **Clinic vertical — Panel & KPIs.** A `clinica` account's dashboard
+  and KPIs pages become a clinic view. One backend call
+  (`GET /api/clinic-dashboard`) returns everything: revenue for the
+  period vs. the previous one, new vs. returning patients (and the
+  revenue each brought), appointments / confirmation rate / no-shows,
+  the conversation → appointment → confirmed → completed funnel, average
+  human first-response time, an "Atención requerida" list (unconfirmed
+  appointments, recent no-shows, patients pending follow-up,
+  conversations waiting for a human — each links straight to the right
+  screen), the next appointments, and an appointments-per-day chart.
+  Period picker: today / this week / this month / last month / last 30
+  days. The frontend does no business math. No migration.
+
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
   account's own timezone, whether or not Google Calendar is connected.

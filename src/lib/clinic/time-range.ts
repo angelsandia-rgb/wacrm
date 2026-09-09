@@ -110,3 +110,38 @@ export function rangeBounds(range: AppointmentRange, tz: string, now: Date = new
     to: addDaysUTC(todayStart, 366).toISOString(),
   }
 }
+
+// ── Dashboard period picker ─────────────────────────────────
+export type DashboardPeriod = 'today' | 'week' | 'month' | 'last_month' | 'last_30'
+
+export const DASHBOARD_PERIODS: readonly DashboardPeriod[] = [
+  'today',
+  'week',
+  'month',
+  'last_month',
+  'last_30',
+] as const
+
+export function isDashboardPeriod(v: unknown): v is DashboardPeriod {
+  return typeof v === 'string' && (DASHBOARD_PERIODS as readonly string[]).includes(v)
+}
+
+/** `{ from, to }` (ISO, `to` exclusive) for a clinic dashboard period. */
+export function dashboardPeriodBounds(period: DashboardPeriod, tz: string, now: Date = new Date()): {
+  from: string
+  to: string
+} {
+  const [y, m, d] = ymdInTz(now, tz)
+  const todayStart = localMidnightUTC(y, m, d, tz)
+
+  if (period === 'today') return { from: todayStart.toISOString(), to: addDaysUTC(todayStart, 1).toISOString() }
+  if (period === 'week') return rangeBounds('week', tz, now)
+  if (period === 'month') return rangeBounds('month', tz, now)
+  if (period === 'last_30') {
+    return { from: addDaysUTC(todayStart, -30).toISOString(), to: addDaysUTC(todayStart, 1).toISOString() }
+  }
+  // last_month — the previous calendar month
+  const monthStart = localMidnightUTC(y, m, 1, tz)
+  const prevMonthStart = m === 1 ? localMidnightUTC(y - 1, 12, 1, tz) : localMidnightUTC(y, m - 1, 1, tz)
+  return { from: prevMonthStart.toISOString(), to: monthStart.toISOString() }
+}
