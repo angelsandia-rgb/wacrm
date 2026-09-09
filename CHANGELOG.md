@@ -65,6 +65,12 @@ and polish.
 > `appointment_history`, `visits`, `visit_note_revisions`,
 > `note_templates`, plus `products.duration_minutes`). All new, isolated
 > by `account_id` + RLS; zero effect on non-clinic accounts. No UI yet.
+>
+> **Migration required:** apply `supabase/migrations/124_clinic_files.sql`
+> (adds the `clinic_files` metadata table and a **private**
+> `clinic-files` Storage bucket for patient / visit attachments —
+> downloads go through short-lived signed URLs). Zero effect on
+> non-clinic accounts.
 
 ### Added
 
@@ -127,6 +133,17 @@ and polish.
   rescheduling or cancelling an appointment is mirrored to it
   best-effort (`appointments.google_event_id`), so the doctor sees the
   same schedule in their Google Calendar app. No migration.
+
+- **Clinic vertical — Visits, doctor's notes, files.** "Registrar
+  visita" (from the patient profile or when an appointment is marked
+  realizada) records a completed consultation — doctor, date, service,
+  amount (pre-filled from the service), notes and observations, with a
+  recommended follow-up date. Editing a visit's notes keeps the
+  previous text in an append-only revision log, so a medical note is
+  never silently lost. Reusable note templates (Settings → Clínica) can
+  be dropped into a note. PDF / image / document files can be attached
+  to a patient or a visit — stored in a **private** bucket, downloaded
+  through signed URLs. Requires migration 124.
 
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the

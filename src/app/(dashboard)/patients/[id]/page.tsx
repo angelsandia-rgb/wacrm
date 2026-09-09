@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { IconArrowLeft, IconBrandWhatsapp } from '@tabler/icons-react'
 import { useAuth } from '@/hooks/use-auth'
+import { useCan } from '@/hooks/use-can'
 import { readResponseJson } from '@/lib/http/response-json'
 import { formatCurrency } from '@/lib/currency'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -15,6 +16,8 @@ import {
   type StatusTone,
 } from '@/lib/clinic/appointment-status'
 import { PATIENT_SOURCES } from '@/lib/clinic/types'
+import { VisitDialog, type VisitDraft } from '@/components/clinic/visit-dialog'
+import { ClinicFiles } from '@/components/clinic/clinic-files'
 
 interface ProfileResponse {
   patient: {
@@ -43,6 +46,8 @@ interface ProfileResponse {
     notes: string | null
     observations: string | null
     follow_up_date: string | null
+    doctor_id: string | null
+    service_id: string | null
     created_at: string
   }>
   appointments: Array<{
@@ -67,12 +72,14 @@ export default function PatientProfilePage() {
   const params = useParams<{ id: string }>()
   const id = params?.id
   const { account } = useAuth()
+  const canWrite = useCan('send-messages')
   const currency = account?.default_currency || 'GTQ'
   const tz = account?.timezone || undefined
 
   const [data, setData] = useState<ProfileResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [visitDraft, setVisitDraft] = useState<VisitDraft | null>(null)
 
   const load = useCallback(async (patientId: string, alive: () => boolean) => {
     setLoading(true)
@@ -89,6 +96,10 @@ export default function PatientProfilePage() {
       if (alive()) setLoading(false)
     }
   }, [])
+
+  const reload = useCallback(() => {
+    if (id) void load(id, () => true)
+  }, [id, load])
 
   useEffect(() => {
     if (!id) return
@@ -162,17 +173,15 @@ export default function PatientProfilePage() {
             >
               {t('actionNewAppt')}
             </Link>
-            {[t('actionAddVisit'), t('actionAddNote')].map((label) => (
+            {canWrite && (
               <button
-                key={label}
                 type="button"
-                disabled
-                title={t('comingSoon')}
-                className="border-border text-muted-foreground inline-flex h-8 cursor-not-allowed items-center rounded-md border px-2.5 text-sm opacity-60"
+                onClick={() => setVisitDraft({ patient_id: data.patient.id })}
+                className="border-border text-foreground hover:bg-muted inline-flex h-8 items-center rounded-md border px-2.5 text-sm"
               >
-                {label}
+                {t('actionAddVisit')}
               </button>
-            ))}
+            )}
           </div>
         </div>
 
@@ -244,11 +253,34 @@ export default function PatientProfilePage() {
                 <li key={v.id} className="border-border bg-card rounded-lg border p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-foreground text-sm font-medium">{day(v.visit_date)}</span>
-                    {v.amount != null && Number(v.amount) > 0 && (
-                      <span className="text-muted-foreground text-sm tabular-nums">
-                        {t('visitAmount')}: {formatCurrency(Number(v.amount), currency)}
-                      </span>
-                    )}
+                    <span className="flex items-center gap-3">
+                      {v.amount != null && Number(v.amount) > 0 && (
+                        <span className="text-muted-foreground text-sm tabular-nums">
+                          {t('visitAmount')}: {formatCurrency(Number(v.amount), currency)}
+                        </span>
+                      )}
+                      {canWrite && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVisitDraft({
+                              id: v.id,
+                              patient_id: data.patient.id,
+                              doctor_id: v.doctor_id,
+                              service_id: v.service_id,
+                              visit_date: v.visit_date,
+                              amount: v.amount,
+                              notes: v.notes,
+                              observations: v.observations,
+                              follow_up_date: v.follow_up_date,
+                            })
+                          }
+                          className="text-primary text-xs hover:underline"
+                        >
+                          {t('edit')}
+                        </button>
+                      )}
+                    </span>
                   </div>
                   {v.notes && <p className="text-foreground mt-2 whitespace-pre-wrap text-sm">{v.notes}</p>}
                   {v.observations && (
@@ -259,6 +291,9 @@ export default function PatientProfilePage() {
                       {t('visitFollowUp')}: {day(v.follow_up_date)}
                     </p>
                   )}
+                  <div className="mt-3">
+                    <ClinicFiles visitId={v.id} canEdit={canWrite} />
+                  </div>
                 </li>
               ))}
             </ol>
@@ -266,9 +301,15 @@ export default function PatientProfilePage() {
         </TabsContent>
 
         <TabsContent value="files" className="pt-4">
-          <EmptyState text={t('filesComingSoon')} />
+          <ClinicFiles patientId={data.patient.id} canEdit={canWrite} />
         </TabsContent>
       </Tabs>
+
+      <VisitDialog
+        draft={visitDraft}
+        onOpenChange={(v) => !v && setVisitDraft(null)}
+        onSaved={reload}
+      />
     </div>
   )
 }

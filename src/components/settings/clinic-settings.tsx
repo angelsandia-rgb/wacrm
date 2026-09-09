@@ -195,6 +195,8 @@ export function ClinicSettings() {
           )}
         </div>
       )}
+
+      <NoteTemplatesManager />
     </div>
   )
 }
@@ -577,5 +579,169 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-muted-foreground mb-1 block text-xs">{label}</span>
       {children}
     </label>
+  )
+}
+
+interface NoteTemplate {
+  id: string
+  name: string
+  body: string
+}
+
+export function NoteTemplatesManager() {
+  const t = useTranslations('Clinic.noteTemplates')
+  const canEdit = useCan('send-messages')
+  const [templates, setTemplates] = useState<NoteTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('')
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/note-templates')
+      const b = await readResponseJson<{ templates: NoteTemplate[] }>(res)
+      setTemplates(res.ok ? b.templates ?? [] : [])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const add = async () => {
+    if (name.trim().length < 2) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/note-templates', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), body }),
+      })
+      if (!res.ok) {
+        const e = await readResponseJson<{ error?: string }>(res)
+        throw new Error(e.error)
+      }
+      setName('')
+      setBody('')
+      await load()
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : t('saveError'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveEdit = async (id: string, patch: Partial<NoteTemplate>) => {
+    const res = await fetch(`/api/note-templates/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (res.ok) {
+      setEditing(null)
+      await load()
+    } else toast.error(t('saveError'))
+  }
+
+  const remove = async (id: string) => {
+    const res = await fetch(`/api/note-templates/${id}`, { method: 'DELETE' })
+    if (res.ok) await load()
+  }
+
+  return (
+    <div className="border-border mt-8 border-t pt-6">
+      <h3 className="text-foreground text-sm font-semibold">{t('title')}</h3>
+      <p className="text-muted-foreground mt-1 text-sm">{t('desc')}</p>
+
+      {loading ? (
+        <div className="bg-muted/40 mt-3 h-20 animate-pulse rounded" />
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {templates.map((tpl) => (
+            <li key={tpl.id} className="border-border bg-card rounded-lg border p-3">
+              {editing === tpl.id ? (
+                <EditTemplate tpl={tpl} onSave={(p) => saveEdit(tpl.id, p)} onCancel={() => setEditing(null)} />
+              ) : (
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-foreground text-sm font-medium">{tpl.name}</span>
+                    {canEdit && (
+                      <span className="flex items-center gap-2">
+                        <button onClick={() => setEditing(tpl.id)} className="text-primary text-xs hover:underline">
+                          {t('edit')}
+                        </button>
+                        <button
+                          onClick={() => remove(tpl.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  {tpl.body && (
+                    <p className="text-muted-foreground mt-1 line-clamp-3 whitespace-pre-wrap text-xs">{tpl.body}</p>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canEdit && (
+        <div className="border-border bg-card mt-3 space-y-2 rounded-lg border p-3">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={4}
+            placeholder={t('bodyPlaceholder')}
+            className="border-border bg-background w-full rounded-md border px-2 py-1 text-sm"
+          />
+          <Button size="sm" onClick={add} disabled={busy || name.trim().length < 2}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+            {t('addBtn')}
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EditTemplate({
+  tpl,
+  onSave,
+  onCancel,
+}: {
+  tpl: NoteTemplate
+  onSave: (p: Partial<NoteTemplate>) => void
+  onCancel: () => void
+}) {
+  const t = useTranslations('Clinic.noteTemplates')
+  const [name, setName] = useState(tpl.name)
+  const [body, setBody] = useState(tpl.body)
+  return (
+    <div className="space-y-2">
+      <Input value={name} onChange={(e) => setName(e.target.value)} />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={4}
+        className="border-border bg-background w-full rounded-md border px-2 py-1 text-sm"
+      />
+      <div className="flex gap-2">
+        <Button size="xs" onClick={() => onSave({ name: name.trim(), body })} disabled={name.trim().length < 2}>
+          {t('save')}
+        </Button>
+        <Button size="xs" variant="outline" onClick={onCancel}>
+          {t('cancel')}
+        </Button>
+      </div>
+    </div>
   )
 }
