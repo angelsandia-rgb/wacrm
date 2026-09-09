@@ -65,6 +65,7 @@ interface Interval {
 
 const MIN = 60_000
 const DAY = 86_400_000
+const MAX_SLOT_RESULTS = 2_000
 const HHMM_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/
 
 /** Offset (minutes) of `tz` from UTC at instant `at`. East of UTC is
@@ -237,6 +238,7 @@ export function computeFreeSlots(q: FreeSlotQuery): FreeSlot[] {
       if (t < floor) continue
       if (t >= toMs) break
       slots.push({ start: new Date(t).toISOString(), end: new Date(t + durMs).toISOString() })
+      if (slots.length >= MAX_SLOT_RESULTS) return slots
     }
   }
   // free intervals are already sorted & disjoint, so slots are sorted; dedupe defensively

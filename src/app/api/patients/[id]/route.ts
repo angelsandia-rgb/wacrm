@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { dateKeyInZone } from '@/lib/timezone'
 import { isPatientSource } from '@/lib/clinic/types'
 import { buildPatientAggregates } from '@/lib/clinic/patients'
@@ -26,15 +26,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     if (error) throw error
     if (!patient) return NextResponse.json({ error: 'Paciente no encontrado' }, { status: 404 })
 
-    const { data: acct } = await supabase
+    const { data: acct, error: accountError } = await supabase
       .from('accounts')
       .select('timezone')
       .eq('id', accountId)
       .maybeSingle()
+    if (accountError) throw accountError
     const tz = (acct?.timezone as string | null) || 'UTC'
     const now = new Date()
 
-    const [{ data: visits }, { data: appointments }] = await Promise.all([
+    const [visitsResult, appointmentsResult] = await Promise.all([
       supabase
         .from('visits')
         .select('id, visit_date, amount, notes, observations, follow_up_date, doctor_id, service_id, appointment_id, created_at')
@@ -50,6 +51,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         .order('scheduled_at', { ascending: false })
         .limit(200),
     ])
+    if (visitsResult.error) throw visitsResult.error
+    if (appointmentsResult.error) throw appointmentsResult.error
+    const visits = visitsResult.data
+    const appointments = appointmentsResult.data
 
     const aggMap = buildPatientAggregates(
       (visits ?? []).map((v) => ({

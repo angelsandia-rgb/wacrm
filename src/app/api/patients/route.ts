@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { dateKeyInZone } from '@/lib/timezone'
 import { isPatientSource } from '@/lib/clinic/types'
 import { listPatients, isPatientFilter } from '@/lib/clinic/patients'
@@ -22,12 +22,13 @@ export async function GET(request: Request) {
     // profile?"), used by the "Convertir en paciente" button in Contactos.
     const contactId = url.searchParams.get('contact_id')
     if (contactId) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('patient_profiles')
         .select('id, contact_id, source, created_at')
         .eq('account_id', accountId)
         .eq('contact_id', contactId)
         .maybeSingle()
+      if (error) throw error
       return NextResponse.json({ patient: data ?? null })
     }
 
@@ -37,11 +38,12 @@ export async function GET(request: Request) {
     const limit = Number(url.searchParams.get('limit') ?? '50')
     const offset = Number(url.searchParams.get('offset') ?? '0')
 
-    const { data: acct } = await supabase
+    const { data: acct, error: accountError } = await supabase
       .from('accounts')
       .select('timezone')
       .eq('id', accountId)
       .maybeSingle()
+    if (accountError) throw accountError
     const tz = (acct?.timezone as string | null) || 'UTC'
     const now = new Date()
 
@@ -79,22 +81,24 @@ export async function POST(request: Request) {
 
     // contact must belong to this account (the tenant guard trigger also
     // enforces it, but a clean 404 is friendlier than a 23514).
-    const { data: contact } = await supabase
+    const { data: contact, error: contactError } = await supabase
       .from('contacts')
       .select('id')
       .eq('id', contactId)
       .eq('account_id', accountId)
       .maybeSingle()
+    if (contactError) throw contactError
     if (!contact) {
       return NextResponse.json({ error: 'Contacto no encontrado' }, { status: 404 })
     }
 
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('patient_profiles')
       .select('*')
       .eq('account_id', accountId)
       .eq('contact_id', contactId)
       .maybeSingle()
+    if (existingError) throw existingError
     if (existing) return NextResponse.json({ patient: existing, created: false })
 
     const { data, error } = await supabase
@@ -105,15 +109,16 @@ export async function POST(request: Request) {
     if (error) {
       // unique(contact_id) race → fetch the winner
       if (error.code === '23505') {
-        const { data: winner } = await supabase
+        const { data: winner, error: winnerError } = await supabase
           .from('patient_profiles')
           .select('*')
           .eq('account_id', accountId)
           .eq('contact_id', contactId)
           .maybeSingle()
+        if (winnerError) throw winnerError
         if (winner) return NextResponse.json({ patient: winner, created: false })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      throw error
     }
     return NextResponse.json({ patient: data, created: true }, { status: 201 })
   } catch (err) {

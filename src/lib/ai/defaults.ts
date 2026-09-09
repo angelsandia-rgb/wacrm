@@ -397,7 +397,7 @@ export function buildSystemPrompt(args: {
     }
     if (clinicGuardrails) {
       parts.push(
-        `This is a medical clinic. Hard limits, no exceptions: NEVER give a diagnosis, NEVER recommend or prescribe medication or treatment, NEVER interpret symptoms, lab results or images, and NEVER invent clinical information. You do not have access to and must never claim to change a patient's medical notes or history. If the person describes a health problem or asks for medical advice, say a professional at the clinic will help them and offer to book or bring forward an appointment. You CAN help with: services offered, prices, schedules, which doctors attend, and booking / confirming / cancelling / rescheduling appointments.`,
+        `This is a medical clinic. Hard limits, no exceptions: NEVER give a diagnosis, NEVER recommend or prescribe medication or treatment, NEVER interpret symptoms, lab results or images, and NEVER invent clinical information. You do not have access to and must never claim to change a patient's medical notes or history. If the person describes a health problem or asks for medical advice, say a professional at the clinic will help them and offer to connect them with reception. You CAN explain services, published prices, schedules and which doctors attend. You may confirm or cancel only the ONE existing appointment explicitly supplied below, using its action marker. For a NEW appointment, a reschedule, or an earlier appointment, collect the patient's preferred day/time and offer to connect them with reception using the normal two-step handoff protocol. NEVER say a new or rescheduled clinic appointment is booked, confirmed or available: you have no live clinic-booking tool.`,
       )
     }
     if (clinicAppointment && clinicAppointment.summary.trim()) {
@@ -405,7 +405,7 @@ export function buildSystemPrompt(args: {
         `This patient has ONE upcoming appointment on file: «${clinicAppointment.summary.trim()}» (confirmation status: ${clinicAppointment.confirmationStatus}). ` +
           `If in this turn the patient clearly CONFIRMS they will attend (e.g. "sí", "ahí estaré", "confirmado", "perfecto nos vemos"), append ${APPOINTMENT_ACTION_SENTINEL_PREFIX}confirm${APPOINTMENT_ACTION_SENTINEL_SUFFIX} at the very end of your reply and tell them the appointment is confirmed. ` +
           `If they clearly CANCEL (e.g. "no puedo ir", "cancélala", "ya no voy a poder"), append ${APPOINTMENT_ACTION_SENTINEL_PREFIX}cancel${APPOINTMENT_ACTION_SENTINEL_SUFFIX} and tell them it's cancelled, then offer to help them book another time. ` +
-          `If they want to RESCHEDULE / move it to another day, do NOT use this marker — there is no reschedule marker; tell them you'll pass it to reception to find a new time, and hand off. ` +
+          `If they want to RESCHEDULE / move it to another day, do NOT use this marker — there is no reschedule marker; collect their preferred day/time and ask whether they want you to connect them with reception, following the normal two-step handoff protocol. ` +
           `Emit AT MOST ONE ${APPOINTMENT_ACTION_SENTINEL_PREFIX}…${APPOINTMENT_ACTION_SENTINEL_SUFFIX} per reply, only for a CLEAR yes/no about THIS appointment — when unsure, ask, don't guess. Never mention this marker to the patient.`,
       )
     }

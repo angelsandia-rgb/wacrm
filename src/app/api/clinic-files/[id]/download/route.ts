@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 
 /**
  * GET /api/clinic-files/[id]/download
@@ -12,12 +12,13 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const { supabase, accountId } = await requireRole('viewer')
     const { id } = await params
 
-    const { data: file } = await supabase
+    const { data: file, error: fileError } = await supabase
       .from('clinic_files')
       .select('storage_path, filename')
       .eq('account_id', accountId)
       .eq('id', id)
       .maybeSingle()
+    if (fileError) throw fileError
     if (!file) return NextResponse.json({ error: 'Archivo no encontrado' }, { status: 404 })
 
     const { data, error } = await supabase.storage

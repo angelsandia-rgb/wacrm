@@ -42,11 +42,11 @@ export async function loadClinicDashboard(
   const apptTo = new Date(Date.parse(to) + 60 * DAY_MS).toISOString()
 
   const [
-    { data: allVisits },
-    { data: appts },
+    visitsResult,
+    appointmentsResult,
     convCountRes,
-    { data: waitingConvs },
-    { data: messages },
+    waitingResult,
+    messagesResult,
   ] = await Promise.all([
     // every visit for the account — needed for first-visit-per-patient
     supabase
@@ -87,6 +87,17 @@ export async function loadClinicDashboard(
       .lt('created_at', to)
       .limit(5000),
   ])
+  const queryError =
+    visitsResult.error ??
+    appointmentsResult.error ??
+    convCountRes.error ??
+    waitingResult.error ??
+    messagesResult.error
+  if (queryError) throw queryError
+  const allVisits = visitsResult.data
+  const appts = appointmentsResult.data
+  const waitingConvs = waitingResult.data
+  const messages = messagesResult.data
   const conversationsInWindow = convCountRes.count ?? 0
 
   const visitRows = (allVisits ?? []) as VisitRow[]

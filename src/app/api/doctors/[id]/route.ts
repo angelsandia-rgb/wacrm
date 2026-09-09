@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { parseDoctorInput } from '@/lib/clinic/doctors'
 
 /** PATCH /api/doctors/[id] — admin only. Partial update. */
@@ -14,12 +14,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
 
     if (parsed.value.user_id) {
-      const { data: member } = await supabase
+      const { data: member, error: memberError } = await supabase
         .from('profiles')
         .select('user_id')
         .eq('account_id', accountId)
         .eq('user_id', parsed.value.user_id)
         .maybeSingle()
+      if (memberError) throw memberError
       if (!member) {
         return NextResponse.json({ error: 'El usuario no pertenece a esta cuenta' }, { status: 400 })
       }
@@ -55,11 +56,12 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     const { supabase, accountId } = await requireRole('admin')
     const { id } = await params
 
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
       .from('appointments')
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
       .eq('doctor_id', id)
+    if (countError) throw countError
     if ((count ?? 0) > 0) {
       return NextResponse.json(
         { error: 'El doctor tiene citas registradas. Archívalo en vez de eliminarlo.' },

@@ -26,24 +26,26 @@ export async function loadClinicAppointmentContext(
   timezone: string,
 ): Promise<ClinicAppointmentContext | null> {
   // conversation -> contact -> patient profile
-  const { data: conv } = await db
+  const { data: conv, error: conversationError } = await db
     .from('conversations')
     .select('contact_id')
     .eq('account_id', accountId)
     .eq('id', conversationId)
     .maybeSingle()
+  if (conversationError) throw conversationError
   const contactId = conv?.contact_id as string | undefined
   if (!contactId) return null
 
-  const { data: patient } = await db
+  const { data: patient, error: patientError } = await db
     .from('patient_profiles')
     .select('id')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
     .maybeSingle()
+  if (patientError) throw patientError
   if (!patient) return null
 
-  const { data: appt } = await db
+  const { data: appt, error: appointmentError } = await db
     .from('appointments')
     .select('id, scheduled_at, status, confirmation_status, doctor_profiles(display_name), products(name)')
     .eq('account_id', accountId)
@@ -53,6 +55,7 @@ export async function loadClinicAppointmentContext(
     .order('scheduled_at', { ascending: true })
     .limit(1)
     .maybeSingle()
+  if (appointmentError) throw appointmentError
   if (!appt) return null
 
   const when = new Intl.DateTimeFormat('es-GT', {

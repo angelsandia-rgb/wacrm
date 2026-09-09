@@ -101,6 +101,14 @@ export function stripCatalogUrls(text: string): string {
 const FAKE_APPOINTMENT_FALLBACK_TEXT =
   'Ya casi tengo todo lo tuyo — dame un momento para confirmar el espacio con el equipo y te aviso apenas quede agendado. 🙌'
 
+/** Sent when the model requested a real clinic appointment mutation but
+ * the database rejected it. The original success claim is never sent. */
+const CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT =
+  'No pude actualizar tu cita en este momento. Ya avisé a recepción para que lo revise y te confirme por este chat.'
+
+const AI_PROVIDER_FALLBACK_TEXT =
+  'Estoy teniendo una dificultad temporal para procesar tu mensaje. Ya avisé al equipo para que te dé seguimiento por este chat.'
+
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
   accountId: string
@@ -109,6 +117,21 @@ interface DispatchArgs {
   /** The account's WhatsApp config owner, used for the outbound send's
    *  audit columns (mirrors how the flow runner passes it through). */
   configOwnerUserId: string
+}
+
+async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
+  try {
+    await engineSendText({
+      accountId: args.accountId,
+      userId: args.configOwnerUserId,
+      conversationId: args.conversationId,
+      contactId: args.contactId,
+      text: AI_PROVIDER_FALLBACK_TEXT,
+      aiGenerated: true,
+    })
+  } catch (error) {
+    console.error('[ai auto-reply] continuity fallback send failed:', error)
+  }
 }
 
 interface ConvEligibility {
@@ -294,6 +317,12 @@ export async function dispatchInboundToAiReply(
           handoffAt: (conv.ai_handoff_at as string | null) ?? null,
         })
         if (!recovered) return
+        // Keep this in-memory eligibility snapshot aligned with the guarded
+        // recovery update below. Otherwise a cap-triggered handoff recovers
+        // in Postgres but immediately sees the old capped count here and
+        // pauses itself again forever.
+        conv.ai_autoreply_disabled = false
+        conv.ai_reply_count = 0
         // fall through: the bot is re-enabled, handle this inbound normally.
       } else {
         return // explicit handoff / manual pause — leave it to a human.
@@ -307,6 +336,7 @@ export async function dispatchInboundToAiReply(
     // of auto-reply budget the same as the bot being unable to help,
     // and hand off instead of going quiet.
     if ((conv.ai_reply_count ?? 0) >= config.autoReplyMaxPerConversation) {
+      await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
       await handOffToHuman({
         db,
         conversationId,
@@ -354,6 +384,7 @@ export async function dispatchInboundToAiReply(
         // Reading the thread twice failed — don't leave the guest in
         // silence. Route the conversation to a human (transient: the
         // dispatcher may auto-recover the bot once the blip passes).
+        await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
         await handOffToHuman({
           db,
           conversationId,
@@ -399,16 +430,27 @@ export async function dispatchInboundToAiReply(
     // Account-wide throttle on the shared BYO key. The per-conversation
     // cap bounds one thread; this bounds a burst across many threads (a
     // marketing blast landing 200 replies at once) so we never run the
-    // owner's key past the provider's rate limit. Over the limit → skip
-    // the auto-reply; the inbound still sits in the inbox for a human.
+    // owner's key past the provider's rate limit. Over the limit, send a
+    // deterministic reply that does not call the provider and route the
+    // conversation for human follow-up instead of leaving it silent.
     const acctLimit = await checkSharedRateLimit(
       `ai-autoreply:${accountId}`,
       RATE_LIMITS.aiAutoReplyAccount,
     )
     if (!acctLimit.success) {
       console.warn(
-        `[ai auto-reply] account ${accountId} hit the per-account rate limit — skipping this inbound.`,
+        `[ai auto-reply] account ${accountId} hit the per-account rate limit — using continuity fallback.`,
       )
+      await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
+      await handOffToHuman({
+        db,
+        conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary:
+          '🤖 La cuenta alcanzó temporalmente el límite de generación de IA. Se envió una respuesta de contingencia y el bot intentará recuperarse automáticamente.',
+        transient: true,
+      })
       return
     }
 
@@ -424,6 +466,10 @@ export async function dispatchInboundToAiReply(
     let catalogDeliveryMode: 'digital' | 'pdf' | 'photos' = 'digital'
     let isHotel = false
     let isClinic = false
+    // If account metadata is temporarily unreadable, retain the strict
+    // medical prompt. It is safer for a generic account to get one
+    // conservative turn than for a clinic bot to diagnose or prescribe.
+    let clinicSafetyMode = false
     let hasRestaurantMenu = false
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
@@ -445,15 +491,20 @@ export async function dispatchInboundToAiReply(
 
       // How the catalog is delivered (migration 068) + the vertical +
       // whether a restaurant menu PDF is on file (migration 114).
-      const { data: catalogModeRow } = await db
+      const { data: catalogModeRow, error: accountMetadataError } = await db
         .from('accounts')
         .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency')
         .eq('id', accountId)
         .maybeSingle()
+      if (accountMetadataError) {
+        clinicSafetyMode = true
+        throw accountMetadataError
+      }
       catalogDeliveryMode =
         (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
       isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
       isClinic = (catalogModeRow?.industry_vertical as string | undefined) === 'clinica'
+      clinicSafetyMode = isClinic
       hasRestaurantMenu = Boolean(
         (catalogModeRow?.restaurant_menu_url as string | null | undefined)?.trim(),
       )
@@ -483,9 +534,14 @@ export async function dispatchInboundToAiReply(
         ).catch(() => null)
       }
 
-      // Autonomous scheduling context — only non-null when the account
-      // opted in AND has a connected Google Calendar.
-      calendarContext = await loadCalendarContext({ db, accountId, contactId, config })
+      // Autonomous Google Calendar scheduling is a generic sales/demo
+      // feature. A clinic's source of truth is `appointments`; creating a
+      // Google event here would tell the patient they are booked while the
+      // clinical calendar remains empty. Keep it disabled for clinics until
+      // native appointment creation is wired into the bot.
+      calendarContext = isClinic
+        ? null
+        : await loadCalendarContext({ db, accountId, contactId, config })
       const failed = enrichment.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') throw failed.reason
     } catch (err) {
@@ -522,7 +578,7 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
       hotelStayEstimate,
-      clinicGuardrails: isClinic,
+      clinicGuardrails: clinicSafetyMode,
       clinicAppointment: clinicAppointment
         ? {
             summary: clinicAppointment.summary,
@@ -547,6 +603,8 @@ export async function dispatchInboundToAiReply(
         db,
         accountId,
         conversationId,
+        contactId,
+        configOwnerUserId,
         config,
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         err,
@@ -620,7 +678,16 @@ export async function dispatchInboundToAiReply(
     // safe holding message instead and hand off so a human actually
     // books it, rather than the customer believing a Meet link is
     // coming that nobody will ever send.
-    if (calendarContext && !appointmentProposal && !handoff && looksLikeFakeAppointmentConfirmation(outboundText)) {
+    const hasActionableClinicAppointment = Boolean(
+      appointmentAction && isClinic && clinicAppointment,
+    )
+    if (
+      (calendarContext || clinicSafetyMode) &&
+      !appointmentProposal &&
+      !hasActionableClinicAppointment &&
+      !handoff &&
+      looksLikeFakeAppointmentConfirmation(outboundText)
+    ) {
       console.error(
         `[ai auto-reply] conversation ${conversationId}: reply looks like a fabricated appointment confirmation with no schedule_appointment marker — withholding it and handing off:`,
         outboundText,
@@ -659,18 +726,19 @@ export async function dispatchInboundToAiReply(
     }
 
     if (!outboundText && !handoff) {
-      // The model produced no usable reply text but didn't ask for a
-      // human either — most likely it emitted only a marker (e.g. the
-      // temperature sentinel) with no actual customer-facing message,
-      // a generation glitch rather than a real "I can't help" signal.
-      // Skip this inbound silently rather than forcing an unrequested
-      // handoff (previously `!text` alone triggered the same handoff
-      // path as an explicit request, which handed real conversations
-      // to a human even though the customer never asked and no sale
-      // closed). The next inbound message gets a fresh attempt.
       console.warn(
-        `[ai auto-reply] empty reply text for conversation ${conversationId}, skipping without handoff`,
+        `[ai auto-reply] empty reply text for conversation ${conversationId}; sending continuity fallback`,
       )
+      await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
+      await handOffToHuman({
+        db,
+        conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary:
+          '🤖 El proveedor devolvió una respuesta vacía. Se envió una respuesta de contingencia y la conversación quedó visible para seguimiento.',
+        transient: true,
+      })
       return
     }
 
@@ -727,6 +795,58 @@ export async function dispatchInboundToAiReply(
       return // genuinely lost the per-conversation cap race
     }
 
+    // A clinic confirmation/cancellation changes the database BEFORE the
+    // success wording reaches the patient. Previously this ran after the
+    // send, so a stale appointment or Supabase failure left the customer
+    // believing a change that never happened. On failure, replace the
+    // model's claim with a truthful holding message and route the thread to
+    // reception; the transient handoff auto-recovers if nobody engages.
+    let clinicActionNeedsHandoff = false
+    if (appointmentAction && isClinic && clinicAppointment) {
+      const next = appointmentAction === 'confirm' ? 'CONFIRMED' : 'CANCELLED'
+      let actionResult: Awaited<ReturnType<typeof transitionAppointment>>
+      try {
+        actionResult = await transitionAppointment(
+          db,
+          accountId,
+          configOwnerUserId,
+          clinicAppointment.id,
+          next,
+          {
+            confirmation_status: appointmentAction === 'confirm' ? 'confirmed' : undefined,
+            reason: `patient ${appointmentAction} via chat`,
+          },
+        )
+      } catch (err) {
+        console.error('[ai auto-reply] autonomous appointment action threw:', err)
+        actionResult = { ok: false, error: describeError(err), status: 500 }
+      }
+
+      try {
+        await db.from('ai_action_log').insert({
+          account_id: accountId,
+          actor_user_id: configOwnerUserId,
+          action: 'appointment_action',
+          target_id: clinicAppointment.id,
+          input: { action: appointmentAction, source: 'auto_reply_autonomous' },
+          result: actionResult.ok ? { status: next } : { error: actionResult.error },
+        })
+      } catch (err) {
+        // Audit logging must not turn a successful patient action into a
+        // failed customer turn; the mutation itself remains authoritative.
+        console.error('[ai auto-reply] appointment action audit log failed:', err)
+      }
+
+      if (!actionResult.ok) {
+        console.error(
+          `[ai auto-reply] clinic appointment ${clinicAppointment.id} action failed; withholding success text:`,
+          actionResult.error,
+        )
+        outboundText = CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT
+        clinicActionNeedsHandoff = true
+      }
+    }
+
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
@@ -735,6 +855,19 @@ export async function dispatchInboundToAiReply(
       text: outboundText,
       aiGenerated: true,
     })
+
+    if (clinicActionNeedsHandoff) {
+      await handOffToHuman({
+        db,
+        conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary:
+          '🤖 La IA intentó confirmar o cancelar una cita clínica, pero la base de datos rechazó el cambio. Al paciente se le envió un mensaje seguro, sin afirmar que el cambio se completó. Recepción debe revisar la cita.',
+        transient: true,
+      })
+      return
+    }
 
     // A flow "handoff → AI" directive is one-shot: the reply that just
     // acted on it has gone out, so clear it (guarded so a concurrent
@@ -902,35 +1035,6 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    // The patient confirmed or cancelled their appointment in chat.
-    // Clinic-only, and only against the one appointment the context
-    // resolved — re-verified here so a stray marker never acts.
-    if (appointmentAction && isClinic && clinicAppointment) {
-      try {
-        const next = appointmentAction === 'confirm' ? 'CONFIRMED' : 'CANCELLED'
-        const result = await transitionAppointment(
-          db,
-          accountId,
-          configOwnerUserId,
-          clinicAppointment.id,
-          next,
-          {
-            confirmation_status: appointmentAction === 'confirm' ? 'confirmed' : undefined,
-            reason: `patient ${appointmentAction} via chat`,
-          },
-        )
-        await db.from('ai_action_log').insert({
-          account_id: accountId,
-          actor_user_id: configOwnerUserId,
-          action: 'appointment_action',
-          target_id: clinicAppointment.id,
-          input: { action: appointmentAction, source: 'auto_reply_autonomous' },
-          result: result.ok ? { status: next } : { error: result.error },
-        })
-      } catch (err) {
-        console.error('[ai auto-reply] autonomous appointment action failed:', err)
-      }
-    }
   } catch (err) {
     // Last-resort safety net. A provider/generation failure is caught at
     // the `generateReplyWithOneRetry` call site; a config/context/read
@@ -1003,7 +1107,11 @@ async function tryRecoverTransientHandoff(args: {
   // cleared the flag.
   const { data: updated, error } = await db
     .from('conversations')
-    .update({ ai_autoreply_disabled: false, ai_handoff_transient: null })
+    .update({
+      ai_autoreply_disabled: false,
+      ai_handoff_transient: null,
+      ai_reply_count: 0,
+    })
     .eq('id', conversationId)
     .eq('ai_handoff_transient', true)
     .select('id')
@@ -1104,11 +1212,9 @@ async function generateReplyWithOneRetry(args: GenerateArgs): Promise<GenerateRe
  * Terminal handler for a provider call that failed even after
  * `generateReplyWithOneRetry`'s single retry. Two paths:
  *
- *   - `invalid_key` — the account's BYO key is being rejected. Notify
- *     the account's admins/owners (throttled 6h) + open the
- *     `ai_key_invalid` system alert, same as before. No per-conversation
- *     handoff: the whole account is down, so handing off every open
- *     thread helps nobody — fixing the key is the one real remedy.
+ *   - `invalid_key` — notify admins/owners, send a deterministic holding
+ *     reply that needs no AI, and route the thread to a human while the
+ *     key is repaired.
  *
  *   - anything else (timeout / 429 / 5xx / network / empty completion)
  *     that outlived the retry — a transient provider problem. The
@@ -1122,11 +1228,22 @@ async function handleAiGenerationFailure(args: {
   db: SupabaseClient
   accountId: string
   conversationId: string
+  contactId: string
+  configOwnerUserId: string
   config: AiConfig
   alreadyAssigned: boolean
   err: unknown
 }): Promise<void> {
-  const { db, accountId, conversationId, config, alreadyAssigned, err } = args
+  const {
+    db,
+    accountId,
+    conversationId,
+    contactId,
+    configOwnerUserId,
+    config,
+    alreadyAssigned,
+    err,
+  } = args
 
   if (err instanceof AiError && err.code === 'invalid_key') {
     // A broken BYO key used to fail exactly like any other AI error —
@@ -1134,10 +1251,20 @@ async function handleAiGenerationFailure(args: {
     // nothing in the product itself ever surfaced it (confirmed live
     // 2026-08-21: an account's bot went silently dead for hours,
     // discovered only because a customer complained). Now: owner
-    // notification + a critical ops alert (see `surfaceInvalidKey`). No
-    // per-conversation handoff — the whole account is down, fixing the
-    // key is the one real remedy.
+    // notification + a critical ops alert (see `surfaceInvalidKey`). A
+    // deterministic reply still works because WhatsApp delivery does not
+    // depend on the AI provider key.
     await surfaceInvalidKey(db, accountId, err.message)
+    await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
+    await handOffToHuman({
+      db,
+      conversationId,
+      handoffAgentId: config.handoffAgentId,
+      alreadyAssigned,
+      summary:
+        '🤖 La clave del proveedor de IA fue rechazada. Se envió una respuesta de contingencia y la conversación necesita seguimiento mientras un administrador corrige la clave.',
+      transient: true,
+    })
     return
   }
 
@@ -1159,6 +1286,8 @@ async function handleAiGenerationFailure(args: {
     accountId,
     throttleMinutes: 60,
   })
+
+  await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
 
   await handOffToHuman({
     db,

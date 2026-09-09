@@ -38,7 +38,14 @@ function cleanAmount(v: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null
 }
 function cleanDate(v: unknown): string | null {
-  return typeof v === 'string' && ISO_DATE.test(v) ? v : null
+  if (typeof v !== 'string' || !ISO_DATE.test(v)) return null
+  const [year, month, day] = v.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+    ? v
+    : null
 }
 
 /**
@@ -53,18 +60,26 @@ export async function createVisit(
   input: CreateVisitInput,
 ): Promise<{ ok: true; visit: Record<string, unknown> } | OpError> {
   if (!input.patient_id) return fail('patient_id es obligatorio')
+  if (input.amount != null && cleanAmount(input.amount) == null) return fail('amount inválido')
   const visitDate = cleanDate(input.visit_date)
+  if (input.follow_up_date != null && !cleanDate(input.follow_up_date)) {
+    return fail('follow_up_date inválida (yyyy-mm-dd)')
+  }
   if (!visitDate) return fail('visit_date inválida (yyyy-mm-dd)')
 
   // resolve amount from service if not given
   let amount = cleanAmount(input.amount)
   if (amount == null && input.service_id) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('price')
       .eq('account_id', accountId)
       .eq('id', input.service_id)
       .maybeSingle()
+    if (error) {
+      console.error('[clinic visits] could not resolve service amount:', error)
+      return fail('No se pudo validar el precio del servicio', 503)
+    }
     const p = Number(data?.price)
     if (Number.isFinite(p) && p >= 0) amount = p
   }
@@ -86,6 +101,9 @@ export async function createVisit(
 
   const { data, error } = await supabase.from('visits').insert(row).select('*').single()
   if (error) {
+    if (error.code === '23505' && input.appointment_id) {
+      return fail('Ya existe una visita para esta cita', 409)
+    }
     if (error.code === '23514') return fail('Datos de la visita inválidos')
     return fail(error.message, 500)
   }
@@ -152,7 +170,7 @@ export async function updateVisit(
 ): Promise<{ ok: true; visit: Record<string, unknown> } | OpError> {
   const { data: current, error: readErr } = await supabase
     .from('visits')
-    .select('id, notes, observations')
+    .select('id, notes, observations, updated_at')
     .eq('account_id', accountId)
     .eq('id', visitId)
     .maybeSingle()
@@ -169,13 +187,21 @@ export async function updateVisit(
     patch.observations = cleanText(input.observations)
     if ((patch.observations ?? null) !== (current.observations ?? null)) notesChanged = true
   }
-  if ('amount' in input) patch.amount = cleanAmount(input.amount)
+  if ('amount' in input) {
+    if (input.amount != null && cleanAmount(input.amount) == null) return fail('amount inválido')
+    patch.amount = cleanAmount(input.amount)
+  }
   if ('visit_date' in input) {
     const d = cleanDate(input.visit_date)
     if (!d) return fail('visit_date inválida')
     patch.visit_date = d
   }
-  if ('follow_up_date' in input) patch.follow_up_date = cleanDate(input.follow_up_date)
+  if ('follow_up_date' in input) {
+    if (input.follow_up_date != null && !cleanDate(input.follow_up_date)) {
+      return fail('follow_up_date inválida')
+    }
+    patch.follow_up_date = cleanDate(input.follow_up_date)
+  }
   if ('doctor_id' in input) patch.doctor_id = input.doctor_id || null
   if ('service_id' in input) patch.service_id = input.service_id || null
 
@@ -183,13 +209,17 @@ export async function updateVisit(
 
   // snapshot the OLD note text before it changes
   if (notesChanged) {
-    await supabase.from('visit_note_revisions').insert({
+    const { error: revisionError } = await supabase.from('visit_note_revisions').insert({
       account_id: accountId,
       visit_id: visitId,
       notes: current.notes,
       observations: current.observations,
       edited_by: userId,
     })
+    if (revisionError) {
+      console.error('[clinic visits] note revision insert failed:', revisionError)
+      return fail('No se pudo preservar la versión anterior de la nota', 503)
+    }
   }
 
   const { data, error } = await supabase
@@ -197,12 +227,13 @@ export async function updateVisit(
     .update(patch)
     .eq('account_id', accountId)
     .eq('id', visitId)
+    .eq('updated_at', current.updated_at as string)
     .select('*')
     .maybeSingle()
   if (error) {
     if (error.code === '23514') return fail('Datos de la visita inválidos')
     return fail(error.message, 500)
   }
-  if (!data) return fail('Visita no encontrada', 404)
+  if (!data) return fail('La visita cambió mientras se procesaba la solicitud', 409)
   return { ok: true, visit: data }
 }

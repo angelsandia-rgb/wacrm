@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { parseTimeOff } from '@/lib/clinic/doctors'
 
 /** POST /api/doctors/[id]/time-off  { starts_at, ends_at, reason?, is_extra_hours? } — admin. */
@@ -10,12 +10,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const parsed = parseTimeOff(await request.json().catch(() => null))
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
-    const { data: doctor } = await supabase
+    const { data: doctor, error: doctorError } = await supabase
       .from('doctor_profiles')
       .select('id')
       .eq('account_id', accountId)
       .eq('id', id)
       .maybeSingle()
+    if (doctorError) throw doctorError
     if (!doctor) return NextResponse.json({ error: 'Doctor no encontrado' }, { status: 404 })
 
     const { data, error } = await supabase

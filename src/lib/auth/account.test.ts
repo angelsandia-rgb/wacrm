@@ -103,6 +103,7 @@ describe("getCurrentAccount", () => {
     expect(calls[0].columns).not.toMatch(/accounts!/);
     expect(calls[0].eqArgs).toEqual([["user_id", "user-1"]]);
     expect(calls[1].columns).not.toMatch(/accounts!/);
+    expect(calls[1].columns).toContain('industry_vertical');
     expect(calls[1].eqArgs).toEqual([["id", "acct-1"]]);
   });
 

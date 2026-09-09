@@ -17,10 +17,11 @@ ve todo (no está limitado).
 
 ## Aislamiento por doctor — `clinic_doctor_scope(account)`
 
-Función `SECURITY DEFINER` (migración 122). Devuelve el `doctor_profiles.id`
+Función `SECURITY DEFINER` (migración 122), complementada por
+`clinic_can_access_patient` (migración 129). Devuelve el `doctor_profiles.id`
 al que el usuario actual está limitado, o `NULL` si ve todo. La usan las
-policies RLS de `appointments`, `appointment_history`, `visits` y
-`visit_note_revisions`:
+policies RLS de `patient_profiles`, `appointments`, `appointment_history`,
+`visits`, `visit_note_revisions`, `clinic_files` y `storage.objects`:
 
 ```
 is_account_member(account_id) AND
@@ -36,13 +37,15 @@ como superusuario, para que las policies apliquen de verdad).
 1. **RLS (Postgres)** — toda tabla clínica tiene `account_id` + policies
    `is_account_member(...)`; las de citas/visitas suman el scope de doctor.
 2. **Guardas de endpoint** — cada ruta de `/api/{patients,doctors,appointments,visits,note-templates,clinic-files,clinic-dashboard}`
-   llama `requireRole('viewer'|'agent'|'admin')` **antes** de cualquier
-   mutación. Lecturas = `viewer`; escrituras = `agent`; configuración de
-   doctores/horarios y borrados = `admin`.
+   llama `requireClinicRole('viewer'|'agent'|'admin')` **antes** de cualquier
+   consulta o mutación. Además del rol, exige que la cuenta tenga
+   `industry_vertical = 'clinica'`. Lecturas = `viewer`; escrituras =
+   `agent`; configuración de doctores/horarios y borrados = `admin`.
 3. **Triggers tenant-guard** (`SECURITY DEFINER`, `REVOKE` de `PUBLIC`/
    `authenticated`) — `guard_clinic_*` rechazan (`23514`) cualquier FK
    (`patient_id` / `doctor_id` / `service_id` / `conversation_id` /
-   `visit_id`) que apunte a otra cuenta. RLS no acota FKs.
+   `visit_id` / `appointment_id`) que apunte a otra cuenta o paciente.
+   RLS no acota FKs por sí solo.
 
 ## Auditoría
 
@@ -66,14 +69,18 @@ recetar o recomendar tratamiento, interpretar síntomas / resultados /
 imágenes, e inventar información clínica. El bot **no puede** modificar
 notas ni historial (no hay marcador ni herramienta para ello). Solo
 puede: informar servicios / precios / horarios / doctores y
-confirmar / cancelar la cita del paciente (reagendar lo deriva a
-recepción).
+confirmar / cancelar la cita existente que el servidor suministró
+(crear o reagendar lo deriva a recepción). La mutación se confirma en
+Postgres antes de enviar un texto de éxito. El agendamiento genérico de
+Google Calendar está deshabilitado para clínicas porque no crea una fila
+en `appointments`.
 
 ## Datos sensibles
 
-- Bucket `clinic-files` es **privado**; las descargas pasan por
+- El bucket `clinic-files` es **privado**; las descargas pasan por
   `/api/clinic-files/[id]/download` que genera una URL firmada de 120 s
-  tras verificar la cuenta. No hay lectura pública.
+  tras verificar la empresa, el rol y el alcance del doctor. No hay
+  lectura pública. Un `viewer` no puede subir ni borrar objetos.
 - El código clínico registra en logs mensajes de error, nunca contenido
   de notas ni nombres de pacientes.
 - Nada de información clínica en `localStorage` (el perfil del paciente y
