@@ -2842,7 +2842,8 @@
       "filesComingSoon": "환자 파일은 다음 단계에서 활성화됩니다.",
       "visitAmount": "금액",
       "visitFollowUp": "권장 후속 조치",
-      "apptOn": ""
+      "apptOn": "",
+      "edit": "편집"
     },
     "convert": {
       "button": "환자로 전환",
@@ -2934,6 +2935,44 @@
       "colStatus": "상태",
       "colConfirmation": "확인",
       "colActions": "작업"
+    },
+    "visit": {
+      "newTitle": "방문 등록",
+      "editTitle": "방문 편집",
+      "created": "방문이 등록되었습니다.",
+      "saved": "방문이 업데이트되었습니다.",
+      "saveError": "방문을 저장하지 못했습니다.",
+      "doctor": "의사",
+      "service": "서비스",
+      "date": "날짜",
+      "amount": "금액",
+      "notes": "메모",
+      "observations": "소견",
+      "followUp": "권장 후속 조치",
+      "insertTemplate": "템플릿 삽입…",
+      "cancel": "취소",
+      "save": "저장"
+    },
+    "files": {
+      "upload": "파일 업로드",
+      "empty": "파일 없음.",
+      "tooBig": "파일이 너무 큽니다 (최대 15MB).",
+      "uploadError": "파일을 업로드하지 못했습니다.",
+      "download": "다운로드",
+      "downloadError": "파일을 열지 못했습니다.",
+      "delete": "삭제",
+      "deleteError": "파일을 삭제하지 못했습니다."
+    },
+    "noteTemplates": {
+      "title": "메모 템플릿",
+      "desc": "의사가 방문 메모에 삽입할 수 있는 짧은 양식입니다.",
+      "edit": "편집",
+      "save": "저장",
+      "cancel": "취소",
+      "namePlaceholder": "템플릿 이름 (예: 일반 진료)",
+      "bodyPlaceholder": "사유\n관련 병력\n평가\n소견\n권장 후속 조치",
+      "addBtn": "템플릿 추가",
+      "saveError": "템플릿을 저장하지 못했습니다."
     }
   }
 }

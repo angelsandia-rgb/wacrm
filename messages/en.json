@@ -2842,7 +2842,8 @@
       "filesComingSoon": "Patient files will be enabled in a later step.",
       "visitAmount": "Amount",
       "visitFollowUp": "Recommended follow-up",
-      "apptOn": "on"
+      "apptOn": "on",
+      "edit": "Edit"
     },
     "convert": {
       "button": "Convert to patient",
@@ -2934,6 +2935,44 @@
       "colStatus": "Status",
       "colConfirmation": "Confirmation",
       "colActions": "Actions"
+    },
+    "visit": {
+      "newTitle": "Register visit",
+      "editTitle": "Edit visit",
+      "created": "Visit registered.",
+      "saved": "Visit updated.",
+      "saveError": "Could not save the visit.",
+      "doctor": "Doctor",
+      "service": "Service",
+      "date": "Date",
+      "amount": "Amount",
+      "notes": "Notes",
+      "observations": "Observations",
+      "followUp": "Recommended follow-up",
+      "insertTemplate": "Insert template…",
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "files": {
+      "upload": "Upload file",
+      "empty": "No files.",
+      "tooBig": "File is too large (max 15 MB).",
+      "uploadError": "Could not upload the file.",
+      "download": "Download",
+      "downloadError": "Could not open the file.",
+      "delete": "Delete",
+      "deleteError": "Could not delete the file."
+    },
+    "noteTemplates": {
+      "title": "Note templates",
+      "desc": "Short scaffolds a doctor can drop into a visit note.",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "namePlaceholder": "Template name (e.g. General consultation)",
+      "bodyPlaceholder": "Reason\nRelevant history\nAssessment\nObservations\nRecommended follow-up",
+      "addBtn": "Add template",
+      "saveError": "Could not save the template."
     }
   }
 }

@@ -2842,7 +2842,8 @@
       "filesComingSoon": "Los archivos del paciente se habilitarán en un paso posterior.",
       "visitAmount": "Monto",
       "visitFollowUp": "Seguimiento recomendado",
-      "apptOn": "el"
+      "apptOn": "el",
+      "edit": "Editar"
     },
     "convert": {
       "button": "Convertir en paciente",
@@ -2934,6 +2935,44 @@
       "colStatus": "Estado",
       "colConfirmation": "Confirmación",
       "colActions": "Acciones"
+    },
+    "visit": {
+      "newTitle": "Registrar visita",
+      "editTitle": "Editar visita",
+      "created": "Visita registrada.",
+      "saved": "Visita actualizada.",
+      "saveError": "No se pudo guardar la visita.",
+      "doctor": "Doctor",
+      "service": "Servicio",
+      "date": "Fecha",
+      "amount": "Monto",
+      "notes": "Notas",
+      "observations": "Observaciones",
+      "followUp": "Seguimiento recomendado",
+      "insertTemplate": "Insertar plantilla…",
+      "cancel": "Cancelar",
+      "save": "Guardar"
+    },
+    "files": {
+      "upload": "Subir archivo",
+      "empty": "Sin archivos.",
+      "tooBig": "El archivo es muy grande (máx. 15 MB).",
+      "uploadError": "No se pudo subir el archivo.",
+      "download": "Descargar",
+      "downloadError": "No se pudo abrir el archivo.",
+      "delete": "Eliminar",
+      "deleteError": "No se pudo eliminar el archivo."
+    },
+    "noteTemplates": {
+      "title": "Plantillas de nota",
+      "desc": "Estructuras cortas que un doctor puede insertar en la nota de una visita.",
+      "edit": "Editar",
+      "save": "Guardar",
+      "cancel": "Cancelar",
+      "namePlaceholder": "Nombre de la plantilla (ej. Consulta general)",
+      "bodyPlaceholder": "Motivo\nAntecedentes relevantes\nEvaluación\nObservaciones\nSeguimiento recomendado",
+      "addBtn": "Agregar plantilla",
+      "saveError": "No se pudo guardar la plantilla."
     }
   }
 }

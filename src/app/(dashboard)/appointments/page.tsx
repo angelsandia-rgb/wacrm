@@ -42,6 +42,7 @@ import {
 } from '@/lib/clinic/time-range'
 import { AppointmentDialog } from '@/components/clinic/appointment-dialog'
 import { RescheduleDialog, type RescheduleTarget } from '@/components/clinic/reschedule-dialog'
+import { VisitDialog, type VisitDraft } from '@/components/clinic/visit-dialog'
 
 interface Row {
   id: string
@@ -105,6 +106,7 @@ function AppointmentsPageInner() {
   const [services, setServices] = useState<{ id: string; name: string }[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null)
+  const [visitDraft, setVisitDraft] = useState<VisitDraft | null>(null)
 
   useEffect(() => {
     const h = setTimeout(() => setDebounced(search.trim()), 300)
@@ -158,8 +160,8 @@ function AppointmentsPageInner() {
     [tz],
   )
 
-  const act = async (id: string, to: AppointmentStatus, confirm?: 'confirmed' | 'declined') => {
-    const res = await fetch(`/api/appointments/${id}`, {
+  const act = async (row: Row, to: AppointmentStatus, confirm?: 'confirmed' | 'declined') => {
+    const res = await fetch(`/api/appointments/${row.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: to, confirmation_status: confirm }),
@@ -170,6 +172,16 @@ function AppointmentsPageInner() {
       return
     }
     await load()
+    // marking realizada → offer to register the visit right away
+    if (to === 'COMPLETED') {
+      setVisitDraft({
+        patient_id: row.patient_id,
+        appointment_id: row.id,
+        doctor_id: row.doctor_id,
+        service_id: row.service_id,
+        amount: row.amount,
+      })
+    }
   }
 
   return (
@@ -307,7 +319,7 @@ function AppointmentsPageInner() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               {ACTIONS.map((a) => (
-                                <DropdownMenuItem key={a.to} onClick={() => act(r.id, a.to, a.confirm)}>
+                                <DropdownMenuItem key={a.to} onClick={() => act(r, a.to, a.confirm)}>
                                   {APPOINTMENT_STATUS_LABEL_ES[a.to]}
                                 </DropdownMenuItem>
                               ))}
@@ -348,6 +360,7 @@ function AppointmentsPageInner() {
         onOpenChange={(v) => !v && setReschedule(null)}
         onDone={load}
       />
+      <VisitDialog draft={visitDraft} onOpenChange={(v) => !v && setVisitDraft(null)} onSaved={load} />
     </div>
   )
 }
