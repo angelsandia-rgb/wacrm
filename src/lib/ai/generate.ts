@@ -25,6 +25,8 @@ import {
   RECORD_RESERVATION_SENTINEL_PREFIX,
   RECORD_RESERVATION_SENTINEL_SUFFIX,
   RESERVATION_MARKER_CATEGORIES,
+  APPOINTMENT_ACTION_SENTINEL_PREFIX,
+  APPOINTMENT_ACTION_SENTINEL_SUFFIX,
   aiRequestTimeoutMs,
 } from './defaults'
 import type { LeadTemperature } from '@/types'
@@ -229,6 +231,16 @@ export function parseGeneration(
     }
   }
 
+  const apptActionMatch = raw.match(
+    new RegExp(
+      `${escapeRegExp(APPOINTMENT_ACTION_SENTINEL_PREFIX)}(confirm|cancel)${escapeRegExp(APPOINTMENT_ACTION_SENTINEL_SUFFIX)}`,
+      'i',
+    ),
+  )
+  const appointmentAction: GenerateResult['appointmentAction'] = apptActionMatch
+    ? (apptActionMatch[1].toLowerCase() as 'confirm' | 'cancel')
+    : null
+
   let text = raw
     .split(HANDOFF_SENTINEL)
     .join('')
@@ -245,6 +257,7 @@ export function parseGeneration(
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
     .replace(reservationMatch ? reservationMatch[0] : '', '')
+    .replace(apptActionMatch ? apptActionMatch[0] : '', '')
     .trim()
 
   // --- second-pass cleanup, in order of increasing severity ---
@@ -266,7 +279,7 @@ export function parseGeneration(
   //      `QUICK_REPLY`). Strip it SILENTLY — never a reason to park the
   //      conversation on a human.
   const SAFE_KNOWN_MARKER_RE =
-    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_restaurant_menu|set_temperature|set_contact_name|record_reservation)(?::[^\]]{0,600})?)\s*\]\]/gi
+    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_restaurant_menu|set_temperature|set_contact_name|record_reservation|appointment)(?::[^\]]{0,600})?)\s*\]\]/gi
   const straySafe = text.match(SAFE_KNOWN_MARKER_RE)
   if (straySafe) {
     console.warn('[ai generate] stripped stray/duplicate low-stakes marker(s) from reply text:', straySafe)
@@ -311,6 +324,7 @@ export function parseGeneration(
     quoteProposal,
     quickReplyId,
     reservationProposal,
+    appointmentAction,
     usage,
   }
 }

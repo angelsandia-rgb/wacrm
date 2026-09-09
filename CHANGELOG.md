@@ -77,6 +77,11 @@ and polish.
 > `visits.follow_up_nudged_at` — "sent once" stamps for the clinic
 > reminder sweep). Zero effect on non-clinic accounts.
 >
+> **Migration required:** apply `supabase/migrations/127_ai_action_appointment.sql`
+> (widens the `ai_action_log.action` CHECK to allow `appointment_action`
+> — the clinic auto-reply bot logging a patient's in-chat confirm /
+> cancel). Zero effect on non-clinic accounts.
+>
 > **Scheduler (optional):** apply `supabase/migrations/126_schedule_clinic_reminders_cron.sql`
 > (with your base URL + cron secret, like migration 100) to register the
 > `clinic-reminders-sweep` pg_cron job. Also set
@@ -172,6 +177,16 @@ and polish.
   upcoming appointment ("¿Quieres que te muestre horarios
   disponibles?"). Each is sent once. Requires migration 125; register
   the job with migration 126 + `CLINIC_REMINDERS_CRON_SECRET`.
+
+- **Clinic vertical — the AI confirms / cancels appointments from chat.**
+  On a `clinica` account the auto-reply bot is told about the patient's
+  one upcoming appointment; when the patient clearly says they'll come,
+  it confirms it (status + confirmation), and when they clearly cancel,
+  it cancels it (and offers to book another time). A reschedule request
+  is handed to reception — the bot never moves an appointment itself.
+  The bot also gets hard medical guardrails: no diagnoses, no
+  prescriptions, no interpreting symptoms / results, and it can never
+  touch clinical notes or history. Requires migration 127.
 
 - **Clinic vertical — Panel & KPIs.** A `clinica` account's dashboard
   and KPIs pages become a clinic view. One backend call

@@ -56,6 +56,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -75,6 +76,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
     expect(parseGeneration('Let me get a human [[HANDOFF]]')).toEqual({
@@ -91,6 +93,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -110,6 +113,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -136,6 +140,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -170,6 +175,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -198,6 +204,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: null,
     })
   })
@@ -245,6 +252,20 @@ describe('parseGeneration', () => {
     expect(res.text).toBe('Listo.  extra')
   })
 
+  it('parses and strips the clinic appointment confirm / cancel marker', () => {
+    const c = parseGeneration('¡Perfecto, tu cita queda confirmada! [[ACTION:appointment:confirm]]')
+    expect(c.appointmentAction).toBe('confirm')
+    expect(c.text).toBe('¡Perfecto, tu cita queda confirmada!')
+
+    const x = parseGeneration('Listo, la cancelé. [[ACTION:appointment:cancel]]')
+    expect(x.appointmentAction).toBe('cancel')
+    expect(x.text).toBe('Listo, la cancelé.')
+
+    expect(parseGeneration('sin marcador').appointmentAction).toBeNull()
+    // an unknown value is not accepted
+    expect(parseGeneration('x [[ACTION:appointment:reschedule]]').appointmentAction).toBeNull()
+  })
+
   it('passes usage straight through', () => {
     const usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
     expect(parseGeneration('Hi', usage)).toEqual({
@@ -261,6 +282,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage,
     })
   })
@@ -526,6 +548,7 @@ describe('generateReply — OpenAI', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 },
     })
     const [url, opts] = fetchMock.mock.calls[0]
@@ -596,6 +619,7 @@ describe('generateReply — Anthropic', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      appointmentAction: null,
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
     })
     const [url, opts] = fetchMock.mock.calls[0]

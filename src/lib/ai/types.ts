@@ -156,6 +156,12 @@ export interface GenerateResult {
     category: 'habitaciones' | 'spa' | 'actividades' | 'paquetes' | 'eventos'
     fields: Record<string, string>
   } | null
+  /** The patient confirmed or cancelled their upcoming appointment this
+   *  turn (auto-reply, `clinica` vertical only) — see
+   *  `APPOINTMENT_ACTION_SENTINEL_PREFIX`. `auto-reply.ts` applies the
+   *  status transition on the appointment `loadClinicAppointmentContext`
+   *  resolved. */
+  appointmentAction: 'confirm' | 'cancel' | null
   /** True when `parseGeneration`'s last-resort safety net had to
    *  force-strip a `[[...]]`-shaped marker that no named sentinel
    *  recognized (real incident, 2026-08-25 — a create_quote_chat
