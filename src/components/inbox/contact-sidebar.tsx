@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useCan } from '@/hooks/use-can';
+import { InboxPatientCard } from '@/components/clinic/inbox-patient-card';
 import { formatCurrency, CURRENCIES } from '@/lib/currency';
 import type {
   Contact,
@@ -616,6 +617,8 @@ export function ContactSidebar({
               <p className="text-muted-foreground text-xs">{contact.company}</p>
             )}
           </div>
+
+          <InboxPatientCard contactId={contact.id} />
 
           {/* Phone — always shown and editable, even for an
               Instagram/Facebook contact with no phone identity yet, so

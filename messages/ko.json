@@ -3031,6 +3031,13 @@
       "noShows": "노쇼",
       "humanResponse": "평균 사람 응답",
       "appointments": "예약"
+    },
+    "inbox": {
+      "patient": "환자",
+      "lastVisit": "최근 방문",
+      "nextAppt": "다음 예약",
+      "viewPatient": "환자 보기",
+      "newAppt": "새 예약"
     }
   }
 }

@@ -145,6 +145,13 @@ and polish.
   to a patient or a visit — stored in a **private** bucket, downloaded
   through signed URLs. Requires migration 124.
 
+- **Clinic vertical — patient context in the inbox.** When a `clinica`
+  conversation belongs to a patient, the conversation panel shows a
+  discreet card — last visit, next appointment, and "Ver paciente" /
+  "Nueva cita" buttons; no clinical history in the inbox. If the contact
+  isn't a patient yet, the card offers "Convertir en paciente". No
+  migration.
+
 - **Clinic vertical — Panel & KPIs.** A `clinica` account's dashboard
   and KPIs pages become a clinic view. One backend call
   (`GET /api/clinic-dashboard`) returns everything: revenue for the

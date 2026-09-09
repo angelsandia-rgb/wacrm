@@ -3031,6 +3031,13 @@
       "noShows": "No Shows",
       "humanResponse": "Respuesta humana prom.",
       "appointments": "Citas"
+    },
+    "inbox": {
+      "patient": "Paciente",
+      "lastVisit": "Última visita",
+      "nextAppt": "Próxima cita",
+      "viewPatient": "Ver paciente",
+      "newAppt": "Nueva cita"
     }
   }
 }
