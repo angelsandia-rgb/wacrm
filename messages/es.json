@@ -2951,7 +2951,9 @@
       "followUp": "Seguimiento recomendado",
       "insertTemplate": "Insertar plantilla…",
       "cancel": "Cancelar",
-      "save": "Guardar"
+      "save": "Guardar",
+      "noteHistory": "Historial de ediciones",
+      "noHistory": "Sin versiones anteriores."
     },
     "files": {
       "upload": "Subir archivo",

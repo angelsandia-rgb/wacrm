@@ -260,6 +260,8 @@ export function VisitDialog({
             <Label className="text-muted-foreground text-xs">{t('followUp')}</Label>
             <Input type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} className="mt-1 max-w-[200px]" />
           </div>
+
+          {isEdit && draft?.id && <NoteHistory visitId={draft.id} tz={tz} />}
         </div>
 
         <DialogFooter>
@@ -273,5 +275,70 @@ export function VisitDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+interface Revision {
+  id: string
+  notes: string | null
+  observations: string | null
+  created_at: string
+}
+
+/** Read-only view of a visit's note edit history (`visit_note_revisions`).
+ *  Loaded on demand — the audit trail exists to be inspectable, not
+ *  hidden. */
+function NoteHistory({ visitId, tz }: { visitId: string; tz?: string }) {
+  const t = useTranslations('Clinic.visit')
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<Revision[] | null>(null)
+
+  const toggle = async () => {
+    const next = !open
+    setOpen(next)
+    if (next && rows == null) {
+      try {
+        const res = await fetch(`/api/visits/${visitId}/revisions`)
+        const b = await readResponseJson<{ revisions: Revision[] }>(res)
+        setRows(res.ok ? b.revisions ?? [] : [])
+      } catch {
+        setRows([])
+      }
+    }
+  }
+
+  const fmt = new Intl.DateTimeFormat('es-GT', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: tz,
+  })
+
+  return (
+    <div className="border-border border-t pt-2">
+      <button type="button" onClick={toggle} className="text-muted-foreground hover:text-foreground text-xs">
+        {open ? '▾' : '▸'} {t('noteHistory')}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {rows == null ? (
+            <p className="text-muted-foreground text-xs">…</p>
+          ) : rows.length === 0 ? (
+            <p className="text-muted-foreground text-xs">{t('noHistory')}</p>
+          ) : (
+            rows.map((r) => (
+              <div key={r.id} className="border-border rounded border p-2 text-xs">
+                <p className="text-muted-foreground">{fmt.format(new Date(r.created_at))}</p>
+                {r.notes && <p className="text-foreground mt-1 whitespace-pre-wrap">{r.notes}</p>}
+                {r.observations && (
+                  <p className="text-muted-foreground mt-1 whitespace-pre-wrap">{r.observations}</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   )
 }

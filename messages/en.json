@@ -2951,7 +2951,9 @@
       "followUp": "Recommended follow-up",
       "insertTemplate": "Insert template…",
       "cancel": "Cancel",
-      "save": "Save"
+      "save": "Save",
+      "noteHistory": "Edit history",
+      "noHistory": "No previous versions."
     },
     "files": {
       "upload": "Upload file",
