@@ -21,6 +21,7 @@ export const HEARTBEATS = {
   automations_cron: { expectedIntervalSeconds: 300 },
   flows_cron: { expectedIntervalSeconds: 300 },
   followups_cron: { expectedIntervalSeconds: 300 },
+  clinic_reminders_cron: { expectedIntervalSeconds: 300 },
   conversations_cron: { expectedIntervalSeconds: 300 },
   webhooks_cron: { expectedIntervalSeconds: 300 },
   retention_cron: { expectedIntervalSeconds: 86_400 },

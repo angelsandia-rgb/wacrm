@@ -71,6 +71,18 @@ and polish.
 > `clinic-files` Storage bucket for patient / visit attachments —
 > downloads go through short-lived signed URLs). Zero effect on
 > non-clinic accounts.
+>
+> **Migration required:** apply `supabase/migrations/125_clinic_reminder_tracking.sql`
+> (adds `appointments.confirmation_reminder_sent_at` and
+> `visits.follow_up_nudged_at` — "sent once" stamps for the clinic
+> reminder sweep). Zero effect on non-clinic accounts.
+>
+> **Scheduler (optional):** apply `supabase/migrations/126_schedule_clinic_reminders_cron.sql`
+> (with your base URL + cron secret, like migration 100) to register the
+> `clinic-reminders-sweep` pg_cron job. Also set
+> `CLINIC_REMINDERS_CRON_SECRET` (or reuse `AUTOMATION_CRON_SECRET`) in
+> the app env. Until then the `clinic_reminders_cron` heartbeat reads
+> "never" and the watchdog raises a warning — expected.
 
 ### Added
 
@@ -151,6 +163,15 @@ and polish.
   "Nueva cita" buttons; no clinical history in the inbox. If the contact
   isn't a patient yet, the card offers "Convertir en paciente". No
   migration.
+
+- **Clinic vertical — automatic confirmations & follow-ups.** A cron
+  sweep (`/api/clinic/reminders/cron`) sends a WhatsApp/IG/FB
+  "¿Confirmas tu asistencia?" ~24h before an appointment, flips its
+  confirmation to "no response" when the reply never comes, and nudges
+  patients whose recommended follow-up date has passed and who have no
+  upcoming appointment ("¿Quieres que te muestre horarios
+  disponibles?"). Each is sent once. Requires migration 125; register
+  the job with migration 126 + `CLINIC_REMINDERS_CRON_SECRET`.
 
 - **Clinic vertical — Panel & KPIs.** A `clinica` account's dashboard
   and KPIs pages become a clinic view. One backend call
