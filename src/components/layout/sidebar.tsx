@@ -10,6 +10,7 @@ import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import {
   IconBell,
+  IconCalendarClock,
   IconCalendarEvent,
   IconRobot,
   IconCrown,
@@ -113,6 +114,7 @@ const navItems: NavItem[] = [
   { href: "/inbox", labelKey: "inbox", icon: IconMessage },
   { href: "/notifications", labelKey: "notifications", icon: IconBell },
   { href: "/patients", labelKey: "patients", icon: IconUserHeart, vertical: "clinica" },
+  { href: "/appointments", labelKey: "appointments", icon: IconCalendarClock, vertical: "clinica" },
   { href: "/contacts", labelKey: "contacts", icon: IconUsers },
   { href: "/pipelines", labelKey: "pipelines", icon: IconGitBranch },
   { href: "/calendar", labelKey: "calendar", icon: IconCalendarEvent },

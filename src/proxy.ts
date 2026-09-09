@@ -108,6 +108,7 @@ export async function proxy(request: NextRequest) {
     '/dashboard',
     '/inbox',
     '/patients',
+    '/appointments',
     '/contacts',
     '/pipelines',
     '/broadcasts',
