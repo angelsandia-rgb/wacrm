@@ -2951,7 +2951,9 @@
       "followUp": "권장 후속 조치",
       "insertTemplate": "템플릿 삽입…",
       "cancel": "취소",
-      "save": "저장"
+      "save": "저장",
+      "noteHistory": "편집 기록",
+      "noHistory": "이전 버전 없음."
     },
     "files": {
       "upload": "파일 업로드",

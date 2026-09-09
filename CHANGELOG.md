@@ -82,6 +82,12 @@ and polish.
 > — the clinic auto-reply bot logging a patient's in-chat confirm /
 > cancel). Zero effect on non-clinic accounts.
 >
+> **Migration required:** apply `supabase/migrations/128_fix_clinic_tenant_guard.sql`
+> (fixes `guard_clinic_appt_visit_tenant` — the shared trigger
+> referenced `NEW.conversation_id`, which PL/pgSQL must plan even on the
+> `visits` branch, so every `visits` INSERT/UPDATE failed with
+> `record "new" has no field "conversation_id"`). Clinic-only.
+>
 > **Scheduler (optional):** apply `supabase/migrations/126_schedule_clinic_reminders_cron.sql`
 > (with your base URL + cron secret, like migration 100) to register the
 > `clinic-reminders-sweep` pg_cron job. Also set
@@ -177,6 +183,17 @@ and polish.
   upcoming appointment ("¿Quieres que te muestre horarios
   disponibles?"). Each is sent once. Requires migration 125; register
   the job with migration 126 + `CLINIC_REMINDERS_CRON_SECRET`.
+
+- **Clinic vertical — security hardening.** Fixed a latent bug that made
+  every `visits` insert fail (the shared tenant-guard trigger planned a
+  column only `appointments` has). Added an end-to-end RLS test that
+  runs the real migrations and queries as a non-superuser role, proving
+  a restricted doctor-user can only read and edit their own
+  appointments and visits while an admin sees everything. A visit's
+  note edit history is now viewable in the visit dialog. The security
+  model — roles, doctor scope, the three authz layers, the audit
+  trails, the AI's hard limits, PHI handling — is written up in
+  `docs/clinica_seguridad.md`. Requires migration 128.
 
 - **Clinic vertical — the AI confirms / cancels appointments from chat.**
   On a `clinica` account the auto-reply bot is told about the patient's
