@@ -3,6 +3,7 @@ import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/acco
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
 import { parseRates } from '@/lib/products/rates'
+import { parseDurationMinutes } from '@/lib/products/duration'
 import { resolveCategoryId } from '@/lib/products/categories'
 
 // Product catalog — account-shared, no inventory tracking. GET lists;
@@ -100,6 +101,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsedRates.error }, { status: 400 })
   }
 
+  const duration = parseDurationMinutes(body.duration_minutes)
+  if (!duration.ok) {
+    return NextResponse.json({ error: duration.error }, { status: 400 })
+  }
+
   const admin = supabaseAdmin()
 
   const category = await resolveCategoryId(admin, ctx.accountId, body.category_id)
@@ -116,6 +122,7 @@ export async function POST(request: Request) {
       description,
       price,
       installation_cost: installationCost.value,
+      duration_minutes: duration.value,
       image_url: imageUrl,
       image_urls: imageUrls,
       is_active: isActive,

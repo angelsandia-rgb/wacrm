@@ -48,7 +48,8 @@
     "menuSettings": "설정",
     "menuSignOut": "로그아웃",
     "calendar": "캘린더",
-    "patients": "환자"
+    "patients": "환자",
+    "services": "서비스"
   },
   "CommandMenu": {
     "placeholder": "명령어를 입력하거나 검색하세요…",
@@ -1028,7 +1029,9 @@
       "deleteProductTitle": "이 제품을 삭제하시겠습니까?",
       "deleteProductDesc": "\"{name}\"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
       "cancel": "취소",
-      "deleteBtn": "삭제"
+      "deleteBtn": "삭제",
+      "titleClinic": "서비스",
+      "subtitleClinic": "제공하는 서비스를 가격 및 소요 시간과 함께 관리합니다."
     },
     "catalog": {
       "title": "카탈로그 전달 방식",
@@ -1164,7 +1167,10 @@
       "moveLeft": "왼쪽으로 이동",
       "moveRight": "오른쪽으로 이동",
       "remove": "삭제",
-      "toastMaxImages": "사진은 최대 {max}장입니다."
+      "toastMaxImages": "사진은 최대 {max}장입니다.",
+      "durationLabel": "소요 시간 (분)",
+      "durationPlaceholder": "예: 30",
+      "toastDurationInvalid": "소요 시간은 1~1440분 사이여야 합니다."
     },
     "quoteBuilder": {
       "title": "새 견적서",
@@ -2445,7 +2451,8 @@
       "billing": "청구",
       "google-calendar": "Google Calendar",
       "google-sheets": "Google Sheets",
-      "support": "티켓"
+      "support": "티켓",
+      "clinic": "클리닉"
     },
     "groups": {
       "account": "계정",
@@ -2841,6 +2848,36 @@
       "view": "환자 보기",
       "done": "연락처가 환자로 전환되었습니다.",
       "error": "연락처를 전환하지 못했습니다."
+    },
+    "settings": {
+      "title": "클리닉",
+      "desc": "의사와 근무 시간을 관리합니다. 캘린더, 예약, AI 어시스턴트에 반영됩니다.",
+      "empty": "아직 의사가 없습니다.",
+      "loadError": "의사를 불러오지 못했습니다.",
+      "saveError": "저장하지 못했습니다.",
+      "addTitle": "의사 추가",
+      "namePlaceholder": "의사 이름",
+      "specialtyPlaceholder": "전문 분야 (선택)",
+      "addBtn": "의사 추가",
+      "name": "이름",
+      "specialty": "전문 분야",
+      "color": "캘린더 색상",
+      "restrictToOwn": "접근 권한",
+      "restrictHint": "본인 예약만 표시",
+      "active": "활성",
+      "delete": "삭제"
+    },
+    "schedule": {
+      "title": "주간 근무 시간",
+      "addBlock": "+ 블록 추가",
+      "save": "근무 시간 저장",
+      "saved": "근무 시간이 저장되었습니다.",
+      "saveError": "근무 시간을 저장하지 못했습니다.",
+      "timeOffTitle": "휴무 / 추가 근무",
+      "timeOffEmpty": "예정된 항목 없음.",
+      "addTimeOff": "추가",
+      "reasonPlaceholder": "사유 (선택)",
+      "extraHours": "추가 근무"
     }
   }
 }

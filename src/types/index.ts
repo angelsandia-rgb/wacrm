@@ -457,6 +457,9 @@ export interface Product {
   price: number;
   /** Optional flat installation fee for the base price (migration 076). */
   installation_cost?: number | null;
+  /** Default slot length in minutes for a clinic service (migration
+   *  122). Null for non-clinic products. */
+  duration_minutes?: number | null;
   /** First photo of `image_urls` — kept in sync by the write routes so
    *  older readers (catalog send, quote PDF, AI context) need no change. */
   image_url?: string | null;
