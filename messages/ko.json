@@ -47,7 +47,8 @@
     "menuProfile": "프로필",
     "menuSettings": "설정",
     "menuSignOut": "로그아웃",
-    "calendar": "캘린더"
+    "calendar": "캘린더",
+    "patients": "환자"
   },
   "CommandMenu": {
     "placeholder": "명령어를 입력하거나 검색하세요…",
@@ -2781,6 +2782,65 @@
       "revenue": "예상 매출",
       "guests": "투숙객",
       "total": "합계"
+    }
+  },
+  "Clinic": {
+    "patients": {
+      "title": "환자",
+      "searchPlaceholder": "이름, 전화번호 또는 이메일로 검색",
+      "new": "새 환자",
+      "filterAll": "전체",
+      "filterNew": "신규",
+      "filterReturning": "재방문",
+      "filterUpcoming": "예정된 예약 있음",
+      "filterNoFuture": "향후 예약 없음",
+      "filterFollowUpDue": "후속 조치 필요",
+      "colName": "환자",
+      "colPhone": "전화번호",
+      "colLastVisit": "최근 방문",
+      "colNextAppt": "다음 예약",
+      "colVisits": "방문 횟수",
+      "colValue": "발생 금액",
+      "none": "—",
+      "empty": "아직 환자가 없습니다. 연락처를 환자로 전환하여 시작하세요.",
+      "emptyFiltered": "이 필터에 해당하는 환자가 없습니다.",
+      "followUpBadge": "후속 조치 필요",
+      "loadError": "환자를 불러오지 못했습니다."
+    },
+    "profile": {
+      "back": "환자",
+      "notFound": "환자를 찾을 수 없습니다.",
+      "lastVisit": "최근 방문",
+      "nextAppt": "다음 예약",
+      "totalVisits": "총 방문 횟수",
+      "lifetimeValue": "누적 발생 금액",
+      "actionWhatsapp": "WhatsApp 보내기",
+      "actionNewAppt": "새 예약",
+      "actionAddVisit": "방문 추가",
+      "actionAddNote": "메모 추가",
+      "comingSoon": "준비 중",
+      "tabSummary": "요약",
+      "tabAppointments": "예약",
+      "tabVisits": "방문",
+      "tabFiles": "파일",
+      "contactInfo": "연락처 정보",
+      "phone": "전화번호",
+      "email": "이메일",
+      "source": "유입 경로",
+      "patientSince": "환자 등록일",
+      "noVisits": "기록된 방문이 없습니다.",
+      "noAppts": "예약이 없습니다.",
+      "filesComingSoon": "환자 파일은 다음 단계에서 활성화됩니다.",
+      "visitAmount": "금액",
+      "visitFollowUp": "권장 후속 조치",
+      "apptOn": ""
+    },
+    "convert": {
+      "button": "환자로 전환",
+      "badge": "환자",
+      "view": "환자 보기",
+      "done": "연락처가 환자로 전환되었습니다.",
+      "error": "연락처를 전환하지 못했습니다."
     }
   }
 }

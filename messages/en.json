@@ -47,7 +47,8 @@
     "menuProfile": "Profile",
     "menuSettings": "Settings",
     "menuSignOut": "Sign out",
-    "calendar": "Calendar"
+    "calendar": "Calendar",
+    "patients": "Patients"
   },
   "CommandMenu": {
     "placeholder": "Type a command or search…",
@@ -2781,6 +2782,65 @@
       "revenue": "Est. revenue",
       "guests": "Guests",
       "total": "Total"
+    }
+  },
+  "Clinic": {
+    "patients": {
+      "title": "Patients",
+      "searchPlaceholder": "Search by name, phone or email",
+      "new": "New patient",
+      "filterAll": "All",
+      "filterNew": "New",
+      "filterReturning": "Returning",
+      "filterUpcoming": "With upcoming appointment",
+      "filterNoFuture": "No future appointment",
+      "filterFollowUpDue": "Follow-up due",
+      "colName": "Patient",
+      "colPhone": "Phone",
+      "colLastVisit": "Last visit",
+      "colNextAppt": "Next appointment",
+      "colVisits": "Visits",
+      "colValue": "Value generated",
+      "none": "—",
+      "empty": "No patients yet. Convert a contact into a patient to get started.",
+      "emptyFiltered": "No patient matches this filter.",
+      "followUpBadge": "Follow-up due",
+      "loadError": "Could not load patients."
+    },
+    "profile": {
+      "back": "Patients",
+      "notFound": "Patient not found.",
+      "lastVisit": "Last visit",
+      "nextAppt": "Next appointment",
+      "totalVisits": "Total visits",
+      "lifetimeValue": "Lifetime value",
+      "actionWhatsapp": "Send WhatsApp",
+      "actionNewAppt": "New appointment",
+      "actionAddVisit": "Add visit",
+      "actionAddNote": "Add note",
+      "comingSoon": "Coming soon",
+      "tabSummary": "Summary",
+      "tabAppointments": "Appointments",
+      "tabVisits": "Visits",
+      "tabFiles": "Files",
+      "contactInfo": "Contact information",
+      "phone": "Phone",
+      "email": "Email",
+      "source": "Source",
+      "patientSince": "Patient since",
+      "noVisits": "No visits recorded.",
+      "noAppts": "No appointments.",
+      "filesComingSoon": "Patient files will be enabled in a later step.",
+      "visitAmount": "Amount",
+      "visitFollowUp": "Recommended follow-up",
+      "apptOn": "on"
+    },
+    "convert": {
+      "button": "Convert to patient",
+      "badge": "Patient",
+      "view": "View patient",
+      "done": "Contact converted to patient.",
+      "error": "Could not convert the contact."
     }
   }
 }

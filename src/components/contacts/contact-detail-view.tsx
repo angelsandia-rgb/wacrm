@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client';
 import { addContactTag, deleteContactTag } from '@/lib/contacts/tag-api';
 import { useAuth } from '@/hooks/use-auth';
 import { useCan } from '@/hooks/use-can';
+import { ConvertToPatientButton } from '@/components/clinic/convert-to-patient-button';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type {
@@ -550,7 +551,7 @@ export function ContactDetailView({
                     </div>
                   </div>
                 </div>
-                <div className="mt-3">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Button
                     size="sm"
                     onClick={() => setTemplatePickerOpen(true)}
@@ -564,6 +565,7 @@ export function ContactDetailView({
                     )}
                     {t('sendTemplateBtn')}
                   </Button>
+                  <ConvertToPatientButton contactId={contact.id} />
                 </div>
               </SheetHeader>
 

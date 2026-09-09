@@ -87,6 +87,16 @@ and polish.
   status/confirmation state machine, and recurring-appointment
   expansion. Requires migrations 122 + 123.
 
+- **Clinic vertical — Patients module.** A `clinica` account gets a
+  "Pacientes" section in the sidebar (and ⌘K): a searchable, filterable
+  list (all / new / returning / with upcoming appointment / no future
+  appointment / follow-up due) where each row shows last visit, next
+  appointment, visit count and lifetime value, and a patient profile
+  with Summary / Appointments / Visits / Files tabs. Contactos gains a
+  "Convertir en paciente" button (and a link to the profile once
+  converted). A patient is a thin record over the contact — no
+  duplicated phone / email / WhatsApp. No migration.
+
 - **The AI always knows what day it is now.** Every AI reply (auto-reply,
   draft, playground) is grounded with the current date + time in the
   account's own timezone, whether or not Google Calendar is connected.

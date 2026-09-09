@@ -2736,7 +2736,8 @@
     "menuProfile": "Perfil",
     "menuSettings": "Configuración",
     "menuSignOut": "Cerrar sesión",
-    "calendar": "Calendario"
+    "calendar": "Calendario",
+    "patients": "Pacientes"
   },
   "Calendar": {
     "title": "Calendario",
@@ -2781,6 +2782,65 @@
       "revenue": "Ingreso est.",
       "guests": "Huéspedes",
       "total": "Total"
+    }
+  },
+  "Clinic": {
+    "patients": {
+      "title": "Pacientes",
+      "searchPlaceholder": "Buscar por nombre, teléfono o correo",
+      "new": "Paciente nuevo",
+      "filterAll": "Todos",
+      "filterNew": "Nuevos",
+      "filterReturning": "Frecuentes",
+      "filterUpcoming": "Con cita próxima",
+      "filterNoFuture": "Sin cita futura",
+      "filterFollowUpDue": "Pendientes de seguimiento",
+      "colName": "Paciente",
+      "colPhone": "Teléfono",
+      "colLastVisit": "Última visita",
+      "colNextAppt": "Próxima cita",
+      "colVisits": "Visitas",
+      "colValue": "Valor generado",
+      "none": "—",
+      "empty": "Aún no hay pacientes. Convierte un contacto en paciente para empezar.",
+      "emptyFiltered": "Ningún paciente coincide con este filtro.",
+      "followUpBadge": "Seguimiento pendiente",
+      "loadError": "No se pudieron cargar los pacientes."
+    },
+    "profile": {
+      "back": "Pacientes",
+      "notFound": "Paciente no encontrado.",
+      "lastVisit": "Última visita",
+      "nextAppt": "Próxima cita",
+      "totalVisits": "Total de visitas",
+      "lifetimeValue": "Valor histórico generado",
+      "actionWhatsapp": "Enviar WhatsApp",
+      "actionNewAppt": "Nueva cita",
+      "actionAddVisit": "Agregar visita",
+      "actionAddNote": "Agregar nota",
+      "comingSoon": "Próximamente",
+      "tabSummary": "Resumen",
+      "tabAppointments": "Citas",
+      "tabVisits": "Visitas",
+      "tabFiles": "Archivos",
+      "contactInfo": "Información de contacto",
+      "phone": "Teléfono",
+      "email": "Correo",
+      "source": "Origen",
+      "patientSince": "Paciente desde",
+      "noVisits": "Sin visitas registradas.",
+      "noAppts": "Sin citas.",
+      "filesComingSoon": "Los archivos del paciente se habilitarán en un paso posterior.",
+      "visitAmount": "Monto",
+      "visitFollowUp": "Seguimiento recomendado",
+      "apptOn": "el"
+    },
+    "convert": {
+      "button": "Convertir en paciente",
+      "badge": "Paciente",
+      "view": "Ver paciente",
+      "done": "Contacto convertido en paciente.",
+      "error": "No se pudo convertir el contacto."
     }
   }
 }

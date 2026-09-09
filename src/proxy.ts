@@ -107,6 +107,7 @@ export async function proxy(request: NextRequest) {
   const protectedPaths = [
     '/dashboard',
     '/inbox',
+    '/patients',
     '/contacts',
     '/pipelines',
     '/broadcasts',

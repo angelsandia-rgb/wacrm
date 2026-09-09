@@ -26,6 +26,7 @@ import {
   IconTrendingUp,
   IconUser,
   IconUserCog,
+  IconUserHeart,
   IconUsers,
   IconUsersGroup,
   IconSitemap,
@@ -94,6 +95,11 @@ interface NavItem {
    * Purely informational — doesn't affect routing or access.
    */
   beta?: boolean;
+  /**
+   * When set, the row only shows for accounts on this industry vertical
+   * (migration 105). Absent = shown for every vertical.
+   */
+  vertical?: string;
 }
 
 const navItems: NavItem[] = [
@@ -101,6 +107,7 @@ const navItems: NavItem[] = [
   { href: "/kpis", labelKey: "kpis", icon: IconTrendingUp },
   { href: "/inbox", labelKey: "inbox", icon: IconMessage },
   { href: "/notifications", labelKey: "notifications", icon: IconBell },
+  { href: "/patients", labelKey: "patients", icon: IconUserHeart, vertical: "clinica" },
   { href: "/contacts", labelKey: "contacts", icon: IconUsers },
   { href: "/pipelines", labelKey: "pipelines", icon: IconGitBranch },
   { href: "/calendar", labelKey: "calendar", icon: IconCalendarEvent },
@@ -226,6 +233,11 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           <ul className="flex flex-col gap-1">
             {navItems
               .filter((item) => !hiddenNav.includes(item.labelKey))
+              .filter(
+                (item) =>
+                  !item.vertical ||
+                  item.vertical === (account?.industry_vertical ?? "generic"),
+              )
               .map((item) => {
               const isActive =
                 pathname === item.href ||
