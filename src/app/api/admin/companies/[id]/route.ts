@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { requirePlatformAdmin, toErrorResponse } from '@/lib/auth/account';
 import { platformAdminClient } from '@/lib/platform/admin-client';
 import { markAccountPaid } from '@/lib/admin/subscriptions';
-import { isVerticalSlug, NAV_SECTION_KEYS } from '@/lib/verticals';
+import { isVerticalSlug, NAV_SECTION_KEYS, VERTICAL_SLUGS } from '@/lib/verticals';
 
 export async function PATCH(
   request: Request,
@@ -142,7 +142,7 @@ export async function PATCH(
       // Relabel only — does NOT seed. Use POST .../apply-vertical to seed.
       if (!isVerticalSlug(body.set_vertical)) {
         return NextResponse.json(
-          { error: "El vertical debe ser 'generic' o 'hotel'" },
+          { error: `El vertical debe ser uno de: ${VERTICAL_SLUGS.join(', ')}` },
           { status: 400 }
         );
       }

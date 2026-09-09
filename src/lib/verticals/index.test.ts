@@ -14,12 +14,13 @@ import { validateFlowForActivation } from '@/lib/flows/validate'
 
 describe('vertical registry', () => {
   it('exposes exactly the slugs in the CHECK constraint', () => {
-    expect([...VERTICAL_SLUGS].sort()).toEqual(['generic', 'hotel'])
+    expect([...VERTICAL_SLUGS].sort()).toEqual(['clinica', 'generic', 'hotel'])
   })
 
   it('isVerticalSlug narrows correctly', () => {
     expect(isVerticalSlug('hotel')).toBe(true)
     expect(isVerticalSlug('generic')).toBe(true)
+    expect(isVerticalSlug('clinica')).toBe(true)
     expect(isVerticalSlug('restaurant')).toBe(false)
     expect(isVerticalSlug(null)).toBe(false)
     expect(isVerticalSlug(42)).toBe(false)
@@ -47,6 +48,19 @@ describe('vertical registry', () => {
     expect(g.flowTemplateSlugs).toEqual([])
     expect(g.knowledgeDocs).toEqual([])
     expect(g.aiSystemPromptScaffold).toBeUndefined()
+  })
+
+  it('clinica is a no-op kit for now (placeholder, generic-equivalent)', () => {
+    const c = getVertical('clinica')!
+    expect(c.label).toBe('Clínica')
+    expect(c.customFields).toEqual([])
+    expect(c.productCategories).toEqual([])
+    expect(c.pipeline).toBeNull()
+    expect(c.flowTemplateSlugs).toEqual([])
+    expect(c.automationTemplateSlugs).toEqual([])
+    expect(c.knowledgeDocs).toEqual([])
+    expect(c.googleSheetsEvents).toEqual([])
+    expect(c.aiSystemPromptScaffold).toBeUndefined()
   })
 
   it('hotel kit is well-formed', () => {

@@ -22,9 +22,9 @@
  * the `industry_vertical` CHECK constraint in a new migration.
  */
 
-export type VerticalSlug = 'generic' | 'hotel'
+export type VerticalSlug = 'generic' | 'hotel' | 'clinica'
 
-export const VERTICAL_SLUGS: readonly VerticalSlug[] = ['generic', 'hotel'] as const
+export const VERTICAL_SLUGS: readonly VerticalSlug[] = ['generic', 'hotel', 'clinica'] as const
 
 export interface VerticalPipelineStage {
   name: string
@@ -64,6 +64,27 @@ export interface VerticalDefinition {
 const GENERIC: VerticalDefinition = {
   slug: 'generic',
   label: 'Genérico',
+  customFields: [],
+  productCategories: [],
+  pipeline: null,
+  flowTemplateSlugs: [],
+  automationTemplateSlugs: [],
+  knowledgeDocs: [],
+  googleSheetsEvents: [],
+  accountSettings: {},
+}
+
+/**
+ * Clínicas / consultorios. Placeholder kit — identical no-op to
+ * `generic` for now (a clinic account behaves exactly like a generic
+ * one). The slug exists so the vertical is selectable in /admin and
+ * `industry_vertical === 'clinica'` can gate future clinic-specific
+ * behaviour; the kit contents (custom fields, pipeline, flows, KB,
+ * prompt) get filled in as that work lands.
+ */
+const CLINICA: VerticalDefinition = {
+  slug: 'clinica',
+  label: 'Clínica',
   customFields: [],
   productCategories: [],
   pipeline: null,
@@ -217,6 +238,7 @@ const HOTEL: VerticalDefinition = {
 const VERTICALS: Record<VerticalSlug, VerticalDefinition> = {
   generic: GENERIC,
   hotel: HOTEL,
+  clinica: CLINICA,
 }
 
 export function getVertical(slug: string): VerticalDefinition | null {
