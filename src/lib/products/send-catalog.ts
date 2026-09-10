@@ -24,6 +24,24 @@ function siteBaseUrl(): string {
   return explicit.replace(/\/+$/, '')
 }
 
+/**
+ * The account's canonical public-catalog link for a conversation — the
+ * short `/c/<slug>` alias when a slug is set, else `/catalog/<uuid>`,
+ * always carrying the HMAC-signed conversation token so the catalog
+ * page can hand the thread straight back on a quote request. Exported so
+ * the auto-reply path can rewrite a stale catalog URL the model pasted
+ * (a `/c/<slug>` the account has since renamed) to the live one instead
+ * of sending the customer a dead link.
+ */
+export function catalogUrlForConversation(
+  accountId: string,
+  catalogSlug: string | null,
+  conversationId: string,
+): string {
+  const path = catalogSlug ? `/c/${catalogSlug}` : `/catalog/${accountId}`
+  return `${siteBaseUrl()}${path}?c=${signCatalogConversation(conversationId)}`
+}
+
 interface CatalogDeliveryRow {
   catalog_delivery_mode: 'digital' | 'pdf' | 'photos'
   catalog_pdf_url: string | null
@@ -129,8 +147,11 @@ export async function sendCatalogToConversation(
   // Prefer the short /c/<slug> alias (migration 116) when the account
   // has a slug; fall back to /catalog/<uuid>. Both resolve to the same
   // page and the signed `?c=` token works through the rewrite.
-  const catalogPath = account?.catalog_slug ? `/c/${account.catalog_slug}` : `/catalog/${accountId}`
-  const catalogUrl = `${siteBaseUrl()}${catalogPath}?c=${signCatalogConversation(conversationId)}`
+  const catalogUrl = catalogUrlForConversation(
+    accountId,
+    account?.catalog_slug ?? null,
+    conversationId,
+  )
 
   try {
     await sendMessageToConversation(db, accountId, {
