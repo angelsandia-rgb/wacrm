@@ -25,6 +25,10 @@ import {
 /** Statuses that still block a time slot on a doctor's calendar. */
 const BLOCKING_STATUSES: AppointmentStatus[] = ['SCHEDULED', 'CONFIRMED', 'RESCHEDULED', 'NO_RESPONSE']
 
+export const APPOINTMENT_MIN_DURATION_MINUTES = 5
+export const APPOINTMENT_MAX_DURATION_MINUTES = 24 * 60
+const MAX_APPOINTMENT_AMOUNT = 9_999_999_999.99
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export interface CreateAppointmentInput {
@@ -73,7 +77,8 @@ export async function loadDoctorBusy(
     .lt('scheduled_at', toISO)
     .gt('ends_at', fromISO)
   if (excludeAppointmentId) q = q.neq('id', excludeAppointmentId)
-  const { data } = await q
+  const { data, error } = await q
+  if (error) throw error
   return (data ?? [])
     .filter((r) => BLOCKING_STATUSES.includes(r.status as AppointmentStatus))
     .map((r) => ({ start: r.scheduled_at as string, end: r.ends_at as string }))
@@ -93,7 +98,7 @@ export async function getFreeSlots(
     nowISO?: string
   },
 ) {
-  const [{ data: doctor }, { data: availability }, { data: timeOff }] = await Promise.all([
+  const [doctorResult, availabilityResult, timeOffResult] = await Promise.all([
     supabase
       .from('doctor_profiles')
       .select('id, is_active')
@@ -113,6 +118,12 @@ export async function getFreeSlots(
       .lt('starts_at', args.to)
       .gt('ends_at', args.from),
   ])
+  if (doctorResult.error) throw doctorResult.error
+  if (availabilityResult.error) throw availabilityResult.error
+  if (timeOffResult.error) throw timeOffResult.error
+  const doctor = doctorResult.data
+  const availability = availabilityResult.data
+  const timeOff = timeOffResult.data
   if (!doctor || doctor.is_active === false) return []
 
   const busy = await loadDoctorBusy(supabase, accountId, args.doctorId, args.from, args.to)
@@ -144,14 +155,15 @@ async function resolveDuration(
   serviceId: string | null | undefined,
   explicit: number | null | undefined,
 ): Promise<number> {
-  if (explicit && Number.isFinite(explicit) && explicit > 0) return Math.round(explicit)
+  if (explicit != null) return Math.round(explicit)
   if (serviceId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('duration_minutes')
       .eq('account_id', accountId)
       .eq('id', serviceId)
       .maybeSingle()
+    if (error) throw error
     const d = Number(data?.duration_minutes)
     if (Number.isFinite(d) && d > 0) return Math.round(d)
   }
@@ -164,12 +176,13 @@ async function resolveServiceAmount(
   serviceId: string | null | undefined,
 ): Promise<number | null> {
   if (!serviceId) return null
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('products')
     .select('price')
     .eq('account_id', accountId)
     .eq('id', serviceId)
     .maybeSingle()
+  if (error) throw error
   const p = Number(data?.price)
   return Number.isFinite(p) && p >= 0 ? p : null
 }
@@ -187,16 +200,45 @@ export async function createAppointment(
   input: CreateAppointmentInput,
 ): Promise<CreateResult | OpError> {
   if (!input.patient_id || !input.doctor_id) return fail('patient_id y doctor_id son obligatorios')
+  if (
+    input.duration_minutes != null &&
+    (!Number.isFinite(input.duration_minutes) ||
+      !Number.isInteger(input.duration_minutes) ||
+      input.duration_minutes < APPOINTMENT_MIN_DURATION_MINUTES ||
+      input.duration_minutes > APPOINTMENT_MAX_DURATION_MINUTES)
+  ) {
+    return fail(
+      `duration_minutes debe estar entre ${APPOINTMENT_MIN_DURATION_MINUTES} y ${APPOINTMENT_MAX_DURATION_MINUTES}`,
+    )
+  }
+  if (
+    input.amount != null &&
+    (!Number.isFinite(input.amount) || input.amount < 0 || input.amount > MAX_APPOINTMENT_AMOUNT)
+  ) {
+    return fail('amount inválido')
+  }
   const start = new Date(input.scheduled_at)
   if (Number.isNaN(start.getTime())) return fail('scheduled_at inválido')
   if (start.getTime() < Date.now() - 60_000) return fail('La cita no puede ser en el pasado')
 
-  const durationMin = await resolveDuration(
-    supabase,
-    accountId,
-    input.service_id,
-    input.duration_minutes,
-  )
+  let durationMin: number
+  try {
+    durationMin = await resolveDuration(
+      supabase,
+      accountId,
+      input.service_id,
+      input.duration_minutes,
+    )
+  } catch (error) {
+    console.error('[clinic appointments] could not resolve service duration:', error)
+    return fail('No se pudo validar la duración del servicio', 503)
+  }
+  if (
+    durationMin < APPOINTMENT_MIN_DURATION_MINUTES ||
+    durationMin > APPOINTMENT_MAX_DURATION_MINUTES
+  ) {
+    return fail('La duración configurada del servicio es inválida')
+  }
 
   let instances: { start: string; end: string }[]
   let recurrenceGroupId: string | null = null
@@ -224,17 +266,29 @@ export async function createAppointment(
   // conflict check across the full span
   const spanFrom = instances[0].start
   const spanTo = instances[instances.length - 1].end
-  const busy = await loadDoctorBusy(supabase, accountId, input.doctor_id, spanFrom, spanTo)
+  let busy: BusyInterval[]
+  try {
+    busy = await loadDoctorBusy(supabase, accountId, input.doctor_id, spanFrom, spanTo)
+  } catch (error) {
+    console.error('[clinic appointments] could not load doctor calendar:', error)
+    return fail('No se pudo validar la disponibilidad del doctor', 503)
+  }
   for (const inst of instances) {
     if (overlapsBusy(inst.start, inst.end, busy)) {
       return fail(`El doctor ya tiene una cita el ${inst.start.slice(0, 16).replace('T', ' ')}`, 409)
     }
   }
 
-  const amount =
-    input.amount != null && Number.isFinite(input.amount) && input.amount >= 0
-      ? input.amount
-      : await resolveServiceAmount(supabase, accountId, input.service_id)
+  let amount: number | null
+  try {
+    amount =
+      input.amount != null
+        ? input.amount
+        : await resolveServiceAmount(supabase, accountId, input.service_id)
+  } catch (error) {
+    console.error('[clinic appointments] could not resolve service amount:', error)
+    return fail('No se pudo validar el precio del servicio', 503)
+  }
 
   const confirmationStatus: ConfirmationStatus =
     input.needs_confirmation === false ? 'not_required' : 'pending'
@@ -261,6 +315,7 @@ export async function createAppointment(
     .insert(rows)
     .select('id, scheduled_at, ends_at')
   if (error) {
+    if (error.code === '23P01') return fail('El doctor ya tiene una cita en ese horario', 409)
     if (error.code === '23514') return fail('Datos de la cita inválidos', 400)
     return fail(error.message, 500)
   }
@@ -309,7 +364,7 @@ export async function transitionAppointment(
 ): Promise<{ ok: true; appointment: Record<string, unknown> } | OpError> {
   const { data: current, error: readErr } = await supabase
     .from('appointments')
-    .select('id, status, confirmation_status, scheduled_at, google_event_id')
+    .select('id, status, confirmation_status, scheduled_at, google_event_id, updated_at')
     .eq('account_id', accountId)
     .eq('id', appointmentId)
     .maybeSingle()
@@ -317,13 +372,16 @@ export async function transitionAppointment(
   if (!current) return fail('Cita no encontrada', 404)
 
   const from = current.status as AppointmentStatus
-  if (from === next && !opts.confirmation_status) {
+  if (
+    from === next &&
+    (!opts.confirmation_status || current.confirmation_status === opts.confirmation_status)
+  ) {
     return { ok: true, appointment: current }
   }
   if (isTerminalAppointmentStatus(from)) {
     return fail('La cita ya está finalizada y no se puede cambiar', 409)
   }
-  if (!canTransitionAppointment(from, next)) {
+  if (from !== next && !canTransitionAppointment(from, next)) {
     return fail(`No se puede pasar de ${from} a ${next}`, 409)
   }
 
@@ -335,10 +393,11 @@ export async function transitionAppointment(
     .update(patch)
     .eq('account_id', accountId)
     .eq('id', appointmentId)
+    .eq('updated_at', current.updated_at as string)
     .select('*')
     .maybeSingle()
   if (error) return fail(error.message, 500)
-  if (!data) return fail('Cita no encontrada', 404)
+  if (!data) return fail('La cita cambió mientras se procesaba la solicitud', 409)
 
   await supabase.from('appointment_history').insert({
     account_id: accountId,
@@ -374,7 +433,7 @@ export async function rescheduleAppointment(
   const { data: current, error: readErr } = await supabase
     .from('appointments')
     .select(
-      'id, status, scheduled_at, ends_at, doctor_id, patient_id, service_id, confirmation_status, google_event_id',
+      'id, status, scheduled_at, ends_at, doctor_id, patient_id, service_id, confirmation_status, google_event_id, updated_at',
     )
     .eq('account_id', accountId)
     .eq('id', appointmentId)
@@ -389,22 +448,48 @@ export async function rescheduleAppointment(
   if (Number.isNaN(start.getTime())) return fail('scheduled_at inválido')
   if (start.getTime() < Date.now() - 60_000) return fail('La nueva fecha no puede ser en el pasado')
 
+  if (
+    input.duration_minutes != null &&
+    (!Number.isFinite(input.duration_minutes) ||
+      !Number.isInteger(input.duration_minutes) ||
+      input.duration_minutes < APPOINTMENT_MIN_DURATION_MINUTES ||
+      input.duration_minutes > APPOINTMENT_MAX_DURATION_MINUTES)
+  ) {
+    return fail(
+      `duration_minutes debe estar entre ${APPOINTMENT_MIN_DURATION_MINUTES} y ${APPOINTMENT_MAX_DURATION_MINUTES}`,
+    )
+  }
+
   const prevMs =
     new Date(current.ends_at as string).getTime() - new Date(current.scheduled_at as string).getTime()
-  const durationMin =
-    input.duration_minutes && input.duration_minutes > 0
-      ? Math.round(input.duration_minutes)
-      : await resolveDuration(supabase, accountId, current.service_id as string | null, prevMs / 60_000)
+  let durationMin: number
+  try {
+    durationMin = await resolveDuration(
+      supabase,
+      accountId,
+      current.service_id as string | null,
+      input.duration_minutes ?? prevMs / 60_000,
+    )
+  } catch (error) {
+    console.error('[clinic appointments] could not resolve reschedule duration:', error)
+    return fail('No se pudo validar la duración de la cita', 503)
+  }
   const end = new Date(start.getTime() + durationMin * 60_000)
 
-  const busy = await loadDoctorBusy(
-    supabase,
-    accountId,
-    current.doctor_id as string,
-    start.toISOString(),
-    end.toISOString(),
-    appointmentId,
-  )
+  let busy: BusyInterval[]
+  try {
+    busy = await loadDoctorBusy(
+      supabase,
+      accountId,
+      current.doctor_id as string,
+      start.toISOString(),
+      end.toISOString(),
+      appointmentId,
+    )
+  } catch (error) {
+    console.error('[clinic appointments] could not load doctor calendar:', error)
+    return fail('No se pudo validar la disponibilidad del doctor', 503)
+  }
   if (overlapsBusy(start.toISOString(), end.toISOString(), busy)) {
     return fail('El doctor ya tiene una cita en ese horario', 409)
   }
@@ -421,10 +506,14 @@ export async function rescheduleAppointment(
     })
     .eq('account_id', accountId)
     .eq('id', appointmentId)
+    .eq('updated_at', current.updated_at as string)
     .select('*')
     .maybeSingle()
-  if (error) return fail(error.message, 500)
-  if (!data) return fail('Cita no encontrada', 404)
+  if (error) {
+    if (error.code === '23P01') return fail('El doctor ya tiene una cita en ese horario', 409)
+    return fail(error.message, 500)
+  }
+  if (!data) return fail('La cita cambió mientras se procesaba la solicitud', 409)
 
   await supabase.from('appointment_history').insert({
     account_id: accountId,

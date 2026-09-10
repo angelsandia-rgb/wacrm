@@ -11,10 +11,9 @@ import { recordHeartbeat } from '@/lib/observability/heartbeat'
  * fallback so the operator can reuse the secret the other cron jobs
  * already use.
  *
- * Idempotency lives in the DB columns the sweep stamps
- * (`appointments.confirmation_reminder_sent_at`,
- * `visits.follow_up_nudged_at`), so a double invocation can't
- * double-send.
+ * Concurrent invocations use renewable database claims (migration 129).
+ * Delivered stamps are written only after the channel accepts the send;
+ * a crashed worker can be reclaimed after the lease expires.
  */
 export async function GET(request: Request) {
   const expected =

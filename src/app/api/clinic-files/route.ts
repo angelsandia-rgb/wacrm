@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 
 const UUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+const MAX_FILE_BYTES = 15 * 1024 * 1024
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
 
 /**
  * GET /api/clinic-files?patient_id=&visit_id=
@@ -16,6 +25,9 @@ export async function GET(request: Request) {
     const visitId = url.searchParams.get('visit_id')
     if (!patientId && !visitId) {
       return NextResponse.json({ error: 'patient_id o visit_id es obligatorio' }, { status: 400 })
+    }
+    if ((patientId && !UUID_RE.test(patientId)) || (visitId && !UUID_RE.test(visitId))) {
+      return NextResponse.json({ error: 'Referencia inválida' }, { status: 400 })
     }
     let q = supabase
       .from('clinic_files')
@@ -56,6 +68,17 @@ export async function POST(request: Request) {
     if (!patientId && !visitId) {
       return NextResponse.json({ error: 'patient_id o visit_id es obligatorio' }, { status: 400 })
     }
+    const mimeType = typeof b.mime_type === 'string' ? b.mime_type.trim().toLowerCase() : ''
+    const sizeBytes = b.size_bytes == null ? null : Number(b.size_bytes)
+    if (mimeType && !ALLOWED_MIME_TYPES.has(mimeType)) {
+      return NextResponse.json({ error: 'Tipo de archivo no permitido' }, { status: 400 })
+    }
+    if (
+      sizeBytes != null &&
+      (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0 || sizeBytes > MAX_FILE_BYTES)
+    ) {
+      return NextResponse.json({ error: 'Tamaño de archivo inválido' }, { status: 400 })
+    }
     // the path must sit under this account's folder
     if (!storagePath.startsWith(`account-${accountId}/`)) {
       return NextResponse.json({ error: 'Ruta de archivo inválida' }, { status: 400 })
@@ -69,8 +92,8 @@ export async function POST(request: Request) {
         visit_id: visitId,
         storage_path: storagePath,
         filename,
-        mime_type: typeof b.mime_type === 'string' ? b.mime_type.slice(0, 120) : null,
-        size_bytes: Number.isFinite(Number(b.size_bytes)) ? Math.round(Number(b.size_bytes)) : null,
+        mime_type: mimeType || null,
+        size_bytes: sizeBytes,
         uploaded_by: userId,
       })
       .select('id, patient_id, visit_id, filename, mime_type, size_bytes, uploaded_by, created_at')

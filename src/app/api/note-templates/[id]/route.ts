@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 
 /** PATCH /api/note-templates/[id]  { name?, body? } — agent+. */
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {

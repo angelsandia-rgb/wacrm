@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import {
   isAppointmentStatus,
   isConfirmationStatus,
@@ -44,7 +44,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (b.amount === null || b.amount === '') patch.amount = null
       else {
         const n = Number(b.amount)
-        if (!Number.isFinite(n) || n < 0) {
+        if (!Number.isFinite(n) || n < 0 || n > 9_999_999_999.99) {
           return NextResponse.json({ error: 'Monto inválido' }, { status: 400 })
         }
         patch.amount = n

@@ -17,6 +17,8 @@ const START = FUTURE.toISOString()
 function makeStub(opts: {
   service?: { duration_minutes: number | null; price: number | null }
   busy?: { scheduled_at: string; ends_at: string; status: string }[]
+  busyError?: { code: string; message: string } | null
+  insertError?: { code: string; message: string } | null
 }) {
   const inserted: { table: string; rows: Record<string, unknown>[] }[] = []
   const busy = opts.busy ?? []
@@ -38,14 +40,22 @@ function makeStub(opts: {
           neq: () => chain,
           lt: () => chain,
           gt: () => chain,
-          then: (res: (v: unknown) => unknown) => res({ data: busy, error: null }),
+          then: (res: (v: unknown) => unknown) =>
+            res({ data: busy, error: opts.busyError ?? null }),
           insert: (rows: Record<string, unknown>[]) => {
             inserted.push({ table, rows })
             return {
-              select: async () => ({
-                data: rows.map((r, i) => ({ id: `appt-${i}`, scheduled_at: r.scheduled_at })),
-                error: null,
-              }),
+              select: async () =>
+                opts.insertError
+                  ? { data: null, error: opts.insertError }
+                  : {
+                      data: rows.map((r, i) => ({
+                        id: `appt-${i}`,
+                        scheduled_at: r.scheduled_at,
+                        ends_at: r.ends_at,
+                      })),
+                      error: null,
+                    },
             }
           },
         }
@@ -140,6 +150,46 @@ describe('createAppointment', () => {
     expect(
       await createAppointment(db, 'acct', 'user', { patient_id: '', doctor_id: 'd1', scheduled_at: START }),
     ).toMatchObject({ ok: false })
+  })
+
+  it('fails closed when the busy-calendar read fails', async () => {
+    const { db } = makeStub({
+      service: { duration_minutes: 30, price: 1 },
+      busyError: { code: '57014', message: 'statement timeout' },
+    })
+    await expect(
+      createAppointment(db, 'acct', 'user', {
+        patient_id: 'p1',
+        doctor_id: 'd1',
+        scheduled_at: START,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 503 })
+  })
+
+  it('maps the database overlap constraint to a booking conflict', async () => {
+    const { db } = makeStub({
+      service: { duration_minutes: 30, price: 1 },
+      insertError: { code: '23P01', message: 'exclusion constraint violation' },
+    })
+    await expect(
+      createAppointment(db, 'acct', 'user', {
+        patient_id: 'p1',
+        doctor_id: 'd1',
+        scheduled_at: START,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 409 })
+  })
+
+  it('rejects durations that could exhaust the slot engine', async () => {
+    const { db } = makeStub({ service: { duration_minutes: 30, price: 1 } })
+    await expect(
+      createAppointment(db, 'acct', 'user', {
+        patient_id: 'p1',
+        doctor_id: 'd1',
+        scheduled_at: START,
+        duration_minutes: 1,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: 400 })
   })
 })
 

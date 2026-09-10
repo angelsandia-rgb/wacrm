@@ -35,6 +35,56 @@ const MESSAGING_CHANNELS = new Set(['whatsapp', 'instagram', 'facebook'])
 const LIVE_APPT = new Set(['SCHEDULED', 'CONFIRMED', 'RESCHEDULED', 'NO_RESPONSE'])
 const MAX_SENDS_PER_RUN = 150
 const MAX_ACCOUNTS = 200
+const CLAIM_LEASE_MS = 15 * 60_000
+
+function errorMessage(error: unknown): string {
+  return error instanceof SendMessageError
+    ? `${error.code}: ${error.message}`
+    : error instanceof Error
+      ? error.message
+      : String(error)
+}
+
+function safeTimeZone(timeZone: string | null): string {
+  const candidate = timeZone?.trim() || 'UTC'
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: candidate }).format(new Date(0))
+    return candidate
+  } catch {
+    console.error(`[clinic reminders] invalid timezone ${candidate}; falling back to UTC`)
+    return 'UTC'
+  }
+}
+
+async function claimConfirmation(
+  db: SupabaseClient,
+  appointmentId: string,
+  claimedAt: string,
+  staleBefore: string,
+): Promise<boolean> {
+  const { data, error } = await db.rpc('claim_clinic_confirmation_reminder', {
+    p_appointment_id: appointmentId,
+    p_claimed_at: claimedAt,
+    p_stale_before: staleBefore,
+  })
+  if (error) throw error
+  return data === true
+}
+
+async function claimFollowup(
+  db: SupabaseClient,
+  visitId: string,
+  claimedAt: string,
+  staleBefore: string,
+): Promise<boolean> {
+  const { data, error } = await db.rpc('claim_clinic_follow_up', {
+    p_visit_id: visitId,
+    p_claimed_at: claimedAt,
+    p_stale_before: staleBefore,
+  })
+  if (error) throw error
+  return data === true
+}
 
 export interface ClinicReminderResult {
   accounts: number
@@ -68,18 +118,19 @@ async function resolveConversation(
   contactId: string | null,
 ): Promise<string | null> {
   if (preferredId) {
-    const { data } = await db
+    const { data, error } = await db
       .from('conversations')
       .select('id, status, channel')
       .eq('account_id', accountId)
       .eq('id', preferredId)
       .maybeSingle()
+    if (error) throw error
     if (data && data.status === 'open' && MESSAGING_CHANNELS.has(data.channel as string)) {
       return data.id as string
     }
   }
   if (!contactId) return null
-  const { data } = await db
+  const { data, error } = await db
     .from('conversations')
     .select('id, channel, last_message_at')
     .eq('account_id', accountId)
@@ -89,6 +140,7 @@ async function resolveConversation(
     .order('last_message_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+  if (error) throw error
   return (data?.id as string) ?? null
 }
 
@@ -104,21 +156,22 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
   const now = new Date()
   let sendsLeft = MAX_SENDS_PER_RUN
 
-  const { data: accts } = await admin
+  const { data: accts, error: accountsError } = await admin
     .from('accounts')
     .select('id, timezone')
     .eq('industry_vertical', 'clinica')
     .limit(MAX_ACCOUNTS)
+  if (accountsError) throw accountsError
   const accounts = (accts ?? []) as { id: string; timezone: string | null }[]
   res.accounts = accounts.length
   if (accounts.length === 0) return res
 
   const acctIds = accounts.map((a) => a.id)
-  const tzByAcct = new Map(accounts.map((a) => [a.id, a.timezone || 'UTC']))
+  const tzByAcct = new Map(accounts.map((a) => [a.id, safeTimeZone(a.timezone)]))
   const win = confirmationWindow(now)
 
   // ── 1 + 2 : confirmations & no-response ──────────────────────
-  const { data: apptData } = await admin
+  const { data: apptData, error: appointmentsError } = await admin
     .from('appointments')
     .select(
       `id, account_id, scheduled_at, status, confirmation_status, confirmation_reminder_sent_at,
@@ -132,6 +185,7 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
     .lte('scheduled_at', win.to)
     .order('scheduled_at', { ascending: true })
     .limit(1000)
+  if (appointmentsError) throw appointmentsError
   const appts = (apptData ?? []) as unknown as ApptRow[]
 
   for (const a of appts) {
@@ -149,7 +203,12 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
         .eq('account_id', a.account_id)
         .eq('id', a.id)
         .eq('confirmation_status', 'pending')
-      if (!error) res.noResponseFlagged += 1
+      if (error) {
+        res.failed += 1
+        console.error('[clinic reminders] no-response update failed:', errorMessage(error))
+      } else {
+        res.noResponseFlagged += 1
+      }
       continue
     }
 
@@ -167,26 +226,24 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
       continue
     }
 
-    const tz = tzByAcct.get(a.account_id) || 'UTC'
-    const convId = await resolveConversation(
-      admin,
-      a.account_id,
-      a.conversation_id,
-      a.patient_profiles?.contact_id ?? null,
-    )
-    // stamp regardless so we attempt exactly once
-    await admin
-      .from('appointments')
-      .update({ confirmation_reminder_sent_at: now.toISOString() })
-      .eq('account_id', a.account_id)
-      .eq('id', a.id)
-
-    if (!convId) {
+    const claimedAt = new Date().toISOString()
+    const staleBefore = new Date(Date.now() - CLAIM_LEASE_MS).toISOString()
+    if (!(await claimConfirmation(admin, a.id, claimedAt, staleBefore))) {
       res.skipped += 1
       continue
     }
-    sendsLeft -= 1
+
+    let messageDelivered = false
     try {
+      const tz = tzByAcct.get(a.account_id) || 'UTC'
+      const convId = await resolveConversation(
+        admin,
+        a.account_id,
+        a.conversation_id,
+        a.patient_profiles?.contact_id ?? null,
+      )
+      if (!convId) throw new Error('no open messaging conversation for patient')
+      sendsLeft -= 1
       await sendMessageToConversation(admin, a.account_id, {
         conversationId: convId,
         messageType: 'text',
@@ -197,18 +254,44 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
         }),
         senderType: 'bot',
       })
+      messageDelivered = true
+      const { error: stampError } = await admin
+        .from('appointments')
+        .update({
+          confirmation_reminder_sent_at: new Date().toISOString(),
+          confirmation_reminder_claimed_at: null,
+          confirmation_reminder_last_error: null,
+        })
+        .eq('account_id', a.account_id)
+        .eq('id', a.id)
+        .eq('confirmation_reminder_claimed_at', claimedAt)
+      if (stampError) throw stampError
       res.confirmationsSent += 1
     } catch (e) {
       res.failed += 1
-      console.error(
-        '[clinic reminders] confirmation send failed:',
-        e instanceof SendMessageError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : e,
-      )
+      const message = errorMessage(e).slice(0, 500)
+      console.error('[clinic reminders] confirmation send failed:', message)
+      // If WhatsApp accepted the message but the final DB stamp failed,
+      // keep the lease until it expires instead of retrying immediately.
+      // This reduces duplicates during a transient database incident.
+      if (messageDelivered) continue
+      const { error: releaseError } = await admin
+        .from('appointments')
+        .update({
+          confirmation_reminder_claimed_at: null,
+          confirmation_reminder_last_error: message,
+        })
+        .eq('account_id', a.account_id)
+        .eq('id', a.id)
+        .eq('confirmation_reminder_claimed_at', claimedAt)
+      if (releaseError) {
+        console.error('[clinic reminders] confirmation claim release failed:', errorMessage(releaseError))
+      }
     }
   }
 
   // ── 3 : follow-ups ──────────────────────────────────────────
-  const { data: visitData } = await admin
+  const { data: visitData, error: visitsError } = await admin
     .from('visits')
     .select(
       `id, account_id, patient_id, doctor_id, follow_up_date,
@@ -220,6 +303,7 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
     .is('follow_up_nudged_at', null)
     .order('follow_up_date', { ascending: true })
     .limit(500)
+  if (visitsError) throw visitsError
   const visits = (visitData ?? []) as unknown as {
     id: string
     account_id: string
@@ -236,16 +320,30 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
       continue
     }
     // patient must have no live upcoming appointment
-    const { data: future } = await admin
+    const { data: future, error: futureError } = await admin
       .from('appointments')
       .select('id, status')
       .eq('account_id', v.account_id)
       .eq('patient_id', v.patient_id)
       .gte('scheduled_at', now.toISOString())
       .limit(20)
+    if (futureError) {
+      res.failed += 1
+      console.error('[clinic reminders] future appointment lookup failed:', errorMessage(futureError))
+      continue
+    }
     if ((future ?? []).some((f) => LIVE_APPT.has(f.status as string))) {
       // stamp so we don't keep re-checking a patient who's already booked
-      await admin.from('visits').update({ follow_up_nudged_at: now.toISOString() }).eq('id', v.id)
+      const { error } = await admin
+        .from('visits')
+        .update({ follow_up_nudged_at: now.toISOString() })
+        .eq('account_id', v.account_id)
+        .eq('id', v.id)
+        .is('follow_up_nudged_at', null)
+      if (error) {
+        res.failed += 1
+        console.error('[clinic reminders] follow-up closeout failed:', errorMessage(error))
+      }
       res.skipped += 1
       continue
     }
@@ -254,19 +352,22 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
       continue
     }
 
-    const convId = await resolveConversation(
-      admin,
-      v.account_id,
-      null,
-      v.patient_profiles?.contact_id ?? null,
-    )
-    await admin.from('visits').update({ follow_up_nudged_at: now.toISOString() }).eq('id', v.id)
-    if (!convId) {
+    const claimedAt = new Date().toISOString()
+    const staleBefore = new Date(Date.now() - CLAIM_LEASE_MS).toISOString()
+    if (!(await claimFollowup(admin, v.id, claimedAt, staleBefore))) {
       res.skipped += 1
       continue
     }
-    sendsLeft -= 1
+    let messageDelivered = false
     try {
+      const convId = await resolveConversation(
+        admin,
+        v.account_id,
+        null,
+        v.patient_profiles?.contact_id ?? null,
+      )
+      if (!convId) throw new Error('no open messaging conversation for patient')
+      sendsLeft -= 1
       await sendMessageToConversation(admin, v.account_id, {
         conversationId: convId,
         messageType: 'text',
@@ -276,13 +377,33 @@ export async function runClinicReminderSweep(admin: SupabaseClient): Promise<Cli
         }),
         senderType: 'bot',
       })
+      messageDelivered = true
+      const { error: stampError } = await admin
+        .from('visits')
+        .update({
+          follow_up_nudged_at: new Date().toISOString(),
+          follow_up_claimed_at: null,
+          follow_up_last_error: null,
+        })
+        .eq('account_id', v.account_id)
+        .eq('id', v.id)
+        .eq('follow_up_claimed_at', claimedAt)
+      if (stampError) throw stampError
       res.followupsSent += 1
     } catch (e) {
       res.failed += 1
-      console.error(
-        '[clinic reminders] follow-up send failed:',
-        e instanceof SendMessageError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : e,
-      )
+      const message = errorMessage(e).slice(0, 500)
+      console.error('[clinic reminders] follow-up send failed:', message)
+      if (messageDelivered) continue
+      const { error: releaseError } = await admin
+        .from('visits')
+        .update({ follow_up_claimed_at: null, follow_up_last_error: message })
+        .eq('account_id', v.account_id)
+        .eq('id', v.id)
+        .eq('follow_up_claimed_at', claimedAt)
+      if (releaseError) {
+        console.error('[clinic reminders] follow-up claim release failed:', errorMessage(releaseError))
+      }
     }
   }
 

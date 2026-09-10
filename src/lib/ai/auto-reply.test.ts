@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AiError, type AiConfig } from './types'
+import { checkSharedRateLimit } from '@/lib/rate-limit'
 
 // Shared, hoisted mock state so the module mocks can close over it.
 const h = vi.hoisted(() => ({
@@ -8,6 +9,8 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   loadCatalogContext: vi.fn(),
   loadQuickReplyContext: vi.fn(),
+  loadClinicAppointmentContext: vi.fn(),
+  transitionAppointment: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
   moveDeal: vi.fn(),
@@ -36,6 +39,7 @@ const h = vi.hoisted(() => ({
     pipeline: null as { id: string } | null,
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
     account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null },
+    accountError: null as { code: string; message: string } | null,
     dealInserts: [] as Record<string, unknown>[],
     createdDeal: { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' } as Record<string, unknown>,
     contactUpdates: [] as Record<string, unknown>[],
@@ -71,6 +75,12 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./catalog-context', () => ({ loadCatalogContext: h.loadCatalogContext }))
 vi.mock('./quick-reply-context', () => ({ loadQuickReplyContext: h.loadQuickReplyContext }))
+vi.mock('@/lib/clinic/appointment-context', () => ({
+  loadClinicAppointmentContext: h.loadClinicAppointmentContext,
+}))
+vi.mock('@/lib/clinic/appointments', () => ({
+  transitionAppointment: h.transitionAppointment,
+}))
 // Only `generateReply` is stubbed — `isRetryableAiError` (used by the
 // dispatch's one-retry wrapper) keeps its real implementation.
 vi.mock('./generate', async (importOriginal) => {
@@ -138,7 +148,8 @@ vi.mock('@/lib/products/send-restaurant-menu', () => ({
 // The real limiter is an in-memory counter shared across every test in
 // this file (same accountId) — mocked so the growing number of tests
 // here can't tip a shared counter over the real 30/min cap and start
-// skipping later tests. Rate-limiting itself isn't what's under test.
+// skipping later tests. One focused test overrides the next result to
+// verify that an exhausted account does not leave its customer silent.
 vi.mock('@/lib/rate-limit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/rate-limit')>()
   return { ...actual, checkSharedRateLimit: vi.fn().mockResolvedValue({ success: true }) }
@@ -255,7 +266,8 @@ vi.mock('./admin-client', () => ({
         return {
           select: () => ({
             eq: () => ({
-              maybeSingle: () => Promise.resolve({ data: h.state.account, error: null }),
+              maybeSingle: () =>
+                Promise.resolve({ data: h.state.account, error: h.state.accountError }),
             }),
           }),
         }
@@ -390,6 +402,7 @@ beforeEach(() => {
   h.state.pipeline = null
   h.state.contact = { lead_temperature: null, name: 'Juan Pérez', phone: '50255551234', email: null }
   h.state.account = { default_currency: 'USD' }
+  h.state.accountError = null
   h.state.dealInserts = []
   h.state.createdDeal = { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' }
   h.state.contactUpdates = []
@@ -410,6 +423,11 @@ beforeEach(() => {
   h.retrieveKnowledge.mockResolvedValue([])
   h.loadCatalogContext.mockResolvedValue(null)
   h.loadQuickReplyContext.mockResolvedValue(null)
+  h.loadClinicAppointmentContext.mockResolvedValue(null)
+  h.transitionAppointment.mockResolvedValue({
+    ok: true,
+    appointment: { id: 'appt-clinic-1', status: 'CONFIRMED' },
+  })
   h.generateReply.mockResolvedValue({
     text: 'Hello!',
     handoff: false,
@@ -529,9 +547,32 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de')
+  })
+
+  it('sends a deterministic fallback when the account-wide AI limit is reached', async () => {
+    vi.mocked(checkSharedRateLimit).mockResolvedValueOnce({
+      success: false,
+      remaining: 0,
+      reset: Date.now() + 60_000,
+      limit: 30,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de generación')
   })
 
   it('skips when there is nothing to reply to', async () => {
@@ -615,6 +656,21 @@ describe('dispatchInboundToAiReply — transient-handoff auto-recovery', () => {
   const OLD = new Date(Date.now() - 60 * 60_000).toISOString() // 60 min ago
   const RECENT = new Date(Date.now() - 5 * 60_000).toISOString() // 5 min ago
 
+  it('resets a capped conversation so recovery does not immediately pause it again', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_reply_count: 3,
+      ai_handoff_transient: true,
+      ai_handoff_at: OLD,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Hello!' }),
+    )
+  })
+
   it('re-enables the bot and replies when the grace period passed and no human engaged', async () => {
     h.state.conv = {
       assigned_agent_id: null,
@@ -628,6 +684,7 @@ describe('dispatchInboundToAiReply — transient-handoff auto-recovery', () => {
     expect(h.state.updatePayload).toMatchObject({
       ai_autoreply_disabled: false,
       ai_handoff_transient: null,
+      ai_reply_count: 0,
     })
     expect(h.engineSendText).toHaveBeenCalled()
   })
@@ -725,7 +782,9 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
     await dispatchInboundToAiReply(ARGS)
 
     expect(h.generateReply).toHaveBeenCalledTimes(3) // 1 initial + 2 retries
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
     expect(h.state.rpcCalls).toHaveLength(0) // never claimed a reply slot
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('error temporal')
@@ -750,14 +809,19 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
     })
   })
 
-  it('does not retry and does not force a per-conversation handoff on an invalid-key error', async () => {
+  it('does not retry, but sends a deterministic fallback and hands off on an invalid-key error', async () => {
     h.generateReply.mockRejectedValue(new AiError('rejected', { code: 'invalid_key' }))
 
     await dispatchInboundToAiReply(ARGS)
 
     expect(h.generateReply).toHaveBeenCalledTimes(1)
-    expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.state.updatePayload).toBeNull()
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
   })
 
   it('never throws out of dispatch even when generation keeps failing', async () => {
@@ -1621,4 +1685,111 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
     expect(h.createQuote).not.toHaveBeenCalled()
     expect(h.state.updatePayload).toBeNull()
   })
+})
+
+describe('dispatchInboundToAiReply - clinic appointment safety', () => {
+  beforeEach(() => {
+    h.state.account = {
+      default_currency: 'GTQ',
+      industry_vertical: 'clinica',
+      timezone: 'America/Guatemala',
+    }
+    h.loadClinicAppointmentContext.mockResolvedValue({
+      id: 'appt-clinic-1',
+      summary: 'Consulta, jueves 10 a las 9:00 a. m., con Dra. Ruiz',
+      confirmationStatus: 'pending',
+      status: 'SCHEDULED',
+    })
+    h.generateReply.mockResolvedValue({
+      text: 'Tu cita quedó confirmada. Te esperamos.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      appointmentAction: 'confirm',
+    })
+  })
+
+  it('persists the confirmation before telling the patient it succeeded', async () => {
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.transitionAppointment).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      'user-1',
+      'appt-clinic-1',
+      'CONFIRMED',
+      expect.objectContaining({ confirmation_status: 'confirmed' }),
+    )
+    expect(h.transitionAppointment.mock.invocationCallOrder[0]).toBeLessThan(
+      h.engineSendText.mock.invocationCallOrder[0],
+    )
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Tu cita quedó confirmada. Te esperamos.' }),
+    )
+    expect(h.state.aiActionLogInserts).toContainEqual(
+      expect.objectContaining({
+        action: 'appointment_action',
+        target_id: 'appt-clinic-1',
+        result: { status: 'CONFIRMED' },
+      }),
+    )
+  })
+
+  it('withholds a false success, sends a safe reply, and routes to reception when persistence fails', async () => {
+    h.transitionAppointment.mockResolvedValue({
+      ok: false,
+      error: 'La cita cambió mientras se procesaba la respuesta',
+      status: 409,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('No pude actualizar tu cita') }),
+    )
+    expect(h.engineSendText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Tu cita quedó confirmada. Te esperamos.' }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('base de datos rechazó')
+  })
+
+  it('does not expose generic Google Calendar booking to a clinic account', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ autoScheduleAppointmentsEnabled: true }))
+    h.state.gcalStatus = 'active'
+    h.generateReply.mockResolvedValue({
+      text: '¿Qué día prefieres?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    const prompt = h.generateReply.mock.calls[0][0].systemPrompt as string
+    expect(prompt).not.toContain('[[SCHEDULE_APPOINTMENT:')
+    expect(prompt).toContain('no live clinic-booking tool')
+  })
+
+  it('keeps medical safety limits when account metadata is temporarily unreadable', async () => {
+    h.state.accountError = { code: '57014', message: 'statement timeout' }
+    h.loadClinicAppointmentContext.mockResolvedValue(null)
+    h.generateReply.mockResolvedValue({
+      text: 'Un profesional de la clínica puede orientarte.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    const prompt = h.generateReply.mock.calls[0][0].systemPrompt as string
+    expect(prompt).toContain('This is a medical clinic')
+    expect(prompt).toContain('NEVER give a diagnosis')
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
 })

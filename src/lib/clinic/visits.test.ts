@@ -11,7 +11,12 @@ import { createVisit, updateVisit } from './visits'
  *  - visit_note_revisions.insert() → records
  *  - appointments.* → no-op
  */
-function makeStub(opts: { price?: number | null; current?: Record<string, unknown> | null } = {}) {
+function makeStub(opts: {
+  price?: number | null
+  current?: Record<string, unknown> | null
+  revisionError?: { code: string; message: string } | null
+  updateResult?: Record<string, unknown> | null
+} = {}) {
   const calls = {
     visitInsert: [] as Record<string, unknown>[],
     visitUpdate: [] as Record<string, unknown>[],
@@ -38,19 +43,26 @@ function makeStub(opts: { price?: number | null; current?: Record<string, unknow
           },
           update: (patch: Record<string, unknown>) => {
             calls.visitUpdate.push(patch)
-            return {
-              eq: () => ({
-                eq: () => ({
-                  select: () => ({ maybeSingle: async () => ({ data: { id: 'v1', ...patch }, error: null }) }),
-                }),
+            const updateChain: Record<string, unknown> = {
+              eq: () => updateChain,
+              select: () => updateChain,
+              maybeSingle: async () => ({
+                data: opts.updateResult === null ? null : (opts.updateResult ?? { id: 'v1', ...patch }),
+                error: null,
               }),
             }
+            return updateChain
           },
         }
         return c
       }
       if (table === 'visit_note_revisions') {
-        return { insert: async (row: Record<string, unknown>) => (calls.revisions.push(row), { error: null }) }
+        return {
+          insert: async (row: Record<string, unknown>) => (
+            calls.revisions.push(row),
+            { error: opts.revisionError ?? null }
+          ),
+        }
       }
       if (table === 'appointments') {
         const c: Record<string, unknown> = {
@@ -86,13 +98,16 @@ describe('createVisit', () => {
   it('rejects a bad visit_date and a missing patient', async () => {
     const { db } = makeStub({ price: 1 })
     expect(await createVisit(db, 'acct', 'user', { patient_id: 'p1', visit_date: '11/03/2026' })).toMatchObject({ ok: false })
+    expect(await createVisit(db, 'acct', 'user', { patient_id: 'p1', visit_date: '2026-02-31' })).toMatchObject({ ok: false })
     expect(await createVisit(db, 'acct', 'user', { patient_id: '', visit_date: '2026-03-11' })).toMatchObject({ ok: false })
   })
 })
 
 describe('updateVisit — note audit', () => {
   it('snapshots the PREVIOUS note text before a change', async () => {
-    const { db, calls } = makeStub({ current: { id: 'v1', notes: 'texto viejo', observations: null } })
+    const { db, calls } = makeStub({
+      current: { id: 'v1', notes: 'texto viejo', observations: null, updated_at: '2026-03-01T10:00:00Z' },
+    })
     const r = await updateVisit(db, 'acct', 'user', 'v1', { notes: 'texto nuevo' })
     expect(r.ok).toBe(true)
     expect(calls.revisions).toHaveLength(1)
@@ -101,7 +116,9 @@ describe('updateVisit — note audit', () => {
   })
 
   it('does NOT write a revision when notes are unchanged (only amount edited)', async () => {
-    const { db, calls } = makeStub({ current: { id: 'v1', notes: 'igual', observations: null } })
+    const { db, calls } = makeStub({
+      current: { id: 'v1', notes: 'igual', observations: null, updated_at: '2026-03-01T10:00:00Z' },
+    })
     await updateVisit(db, 'acct', 'user', 'v1', { notes: 'igual', amount: 500 })
     expect(calls.revisions).toHaveLength(0)
     expect(calls.visitUpdate[0]).toMatchObject({ amount: 500 })
@@ -115,5 +132,26 @@ describe('updateVisit — note audit', () => {
     expect(
       await updateVisit(makeStub({ current: { id: 'v1', notes: null, observations: null } }).db, 'acct', 'user', 'v1', {}),
     ).toMatchObject({ ok: false })
+  })
+
+  it('does not overwrite a note when its audit revision cannot be stored', async () => {
+    const { db, calls } = makeStub({
+      current: { id: 'v1', notes: 'texto viejo', observations: null, updated_at: 'v1' },
+      revisionError: { code: '57014', message: 'statement timeout' },
+    })
+    await expect(
+      updateVisit(db, 'acct', 'user', 'v1', { notes: 'texto nuevo' }),
+    ).resolves.toMatchObject({ ok: false, status: 503 })
+    expect(calls.visitUpdate).toHaveLength(0)
+  })
+
+  it('rejects a stale concurrent edit instead of silently overwriting it', async () => {
+    const { db } = makeStub({
+      current: { id: 'v1', notes: 'texto viejo', observations: null, updated_at: 'v1' },
+      updateResult: null,
+    })
+    await expect(
+      updateVisit(db, 'acct', 'user', 'v1', { amount: 50 }),
+    ).resolves.toMatchObject({ ok: false, status: 409 })
   })
 })

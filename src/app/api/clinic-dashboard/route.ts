@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { loadClinicDashboard } from '@/lib/clinic-metrics/queries'
 
 const MAX_RANGE_MS = 400 * 24 * 60 * 60 * 1000
@@ -27,11 +27,12 @@ export async function GET(request: Request) {
       to = new Date(from.getTime() + MAX_RANGE_MS)
     }
 
-    const { data: acct } = await supabase
+    const { data: acct, error: accountError } = await supabase
       .from('accounts')
       .select('timezone, default_currency')
       .eq('id', accountId)
       .maybeSingle()
+    if (accountError) throw accountError
 
     const stats = await loadClinicDashboard(supabase, accountId, {
       from: from.toISOString(),

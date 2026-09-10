@@ -227,16 +227,25 @@ export async function listPatients(
   const patientIds = base.map((r) => r.id)
   let aggregates = new Map<string, PatientAggregate>()
   if (patientIds.length > 0) {
-    const [{ data: visits, error: vErr }, { data: appts, error: aErr }] = await Promise.all([
-      supabase
+    let visitsQuery = supabase
         .from('visits')
         .select('patient_id, visit_date, amount, follow_up_date')
-        .eq('account_id', accountId),
-      supabase
+        .eq('account_id', accountId)
+    let appointmentsQuery = supabase
         .from('appointments')
         .select('patient_id, scheduled_at, status')
         .eq('account_id', accountId)
-        .gte('scheduled_at', opts.nowISO),
+        .gte('scheduled_at', opts.nowISO)
+    // For a search or a restricted doctor this can shrink two aggregate
+    // reads dramatically. Avoid an oversized PostgREST URL for very large
+    // unfiltered clinics; RLS and the account predicate still scope those.
+    if (patientIds.length <= 500) {
+      visitsQuery = visitsQuery.in('patient_id', patientIds)
+      appointmentsQuery = appointmentsQuery.in('patient_id', patientIds)
+    }
+    const [{ data: visits, error: vErr }, { data: appts, error: aErr }] = await Promise.all([
+      visitsQuery,
+      appointmentsQuery,
     ])
     if (vErr) throw vErr
     if (aErr) throw aErr

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 import { parseDoctorInput } from '@/lib/clinic/doctors'
 
 /**
@@ -25,7 +25,7 @@ export async function GET() {
     let availability: unknown[] = []
     let timeOff: unknown[] = []
     if (ids.length > 0) {
-      const [{ data: av }, { data: to }] = await Promise.all([
+      const [availabilityResult, timeOffResult] = await Promise.all([
         supabase
           .from('doctor_availability')
           .select('*')
@@ -39,8 +39,10 @@ export async function GET() {
           .gte('ends_at', new Date().toISOString())
           .order('starts_at', { ascending: true }),
       ])
-      availability = av ?? []
-      timeOff = to ?? []
+      if (availabilityResult.error) throw availabilityResult.error
+      if (timeOffResult.error) throw timeOffResult.error
+      availability = availabilityResult.data ?? []
+      timeOff = timeOffResult.data ?? []
     }
 
     return NextResponse.json({ doctors: doctors ?? [], availability, timeOff })
@@ -61,12 +63,13 @@ export async function POST(request: Request) {
 
     // a linked user must be a member of this account
     if (parsed.value.user_id) {
-      const { data: member } = await supabase
+      const { data: member, error: memberError } = await supabase
         .from('profiles')
         .select('user_id')
         .eq('account_id', accountId)
         .eq('user_id', parsed.value.user_id)
         .maybeSingle()
+      if (memberError) throw memberError
       if (!member) {
         return NextResponse.json({ error: 'El usuario no pertenece a esta cuenta' }, { status: 400 })
       }

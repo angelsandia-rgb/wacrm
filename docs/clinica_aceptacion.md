@@ -39,8 +39,8 @@ vertical `clinica`; cuentas `generic` / `hotel` no cambian.
 | 30 | Ver pacientes pendientes de seguimiento | Panel → "Atención requerida" (enlaza a `/patients?filter=follow_up_due`) |
 | 31 | Abrir un paciente desde Inbox | `<InboxPatientCard>` en el panel de contacto → "Ver paciente" |
 | 32 | Agendar desde una conversación | `<InboxPatientCard>` → "Nueva cita" (`/appointments?patient=`) |
-| 33 | Permitir que IA consulte disponibilidad | KB "Servicios y horarios" del kit + prompt del asistente |
-| 34 | Permitir que IA confirme/reagende/cancele citas | Auto-respuesta: marcador `[[ACTION:appointment:confirm\|cancel]]`; reagendar lo deriva a recepción |
+| 33 | Permitir que IA consulte disponibilidad | **Parcial**: la IA puede explicar horarios publicados en la KB, pero todavía no consulta slots vivos. No debe prometer un espacio; deriva la solicitud a recepción. |
+| 34 | Permitir que IA confirme/reagende/cancele citas | **Parcial seguro**: confirma o cancela la cita existente con `[[ACTION:appointment:confirm\|cancel]]` y persiste antes de responder. Crear o reagendar se deriva a recepción. |
 | 35 | Mantener funcionando los módulos existentes | Todos los hooks revalidan `industry_vertical === 'clinica'`; `generic`/`hotel` sin cambios (tests) |
 
 ## §30 — pruebas
@@ -52,14 +52,16 @@ vertical `clinica`; cuentas `generic` / `hotel` no cambian.
 | confirmation rate | `compute.test.ts` › `computeAppointments` |
 | No Shows | `compute.test.ts` › `computeAppointments` |
 | disponibilidad | `availability.test.ts`, `appointments-slots.test.ts` › `getFreeSlots` |
-| conflictos de horarios | `appointments.test.ts` (rechazo por colisión), `appointments-slots.test.ts` (`loadDoctorBusy` filtra estados), `availability.test.ts` › `overlapsBusy` |
+| conflictos de horarios | `appointments.test.ts` (rechazo por colisión y `23P01`), `appointments-slots.test.ts` (`loadDoctorBusy` filtra estados), `availability.test.ts` › `overlapsBusy`, `reminder-claims.test.ts` (DDL de exclusión) |
 | seguimiento | `reminders.test.ts`, `patients.test.ts` (`follow_up_due`), `compute.test.ts` › `computeAttention` |
 | respuesta humana | `compute.test.ts` › `computeHumanResponse` |
 | conversión conversación → cita | `compute.test.ts` › `computeConversions` |
-| permisos / IA no accede a lo que no le toca | `rls.test.ts` (RLS doctor-scope end-to-end como rol `authenticated`) |
-| migraciones / triggers tenant-guard | `migration.test.ts` (122+123), `rls.test.ts` (128) |
+| permisos / IA no accede a lo que no le toca | `auth.test.ts` (gate del vertical), `rls.test.ts` (doctor, paciente, visita, archivo y Storage como rol `authenticated`) |
+| migraciones / triggers tenant-guard | `migration.test.ts` (122+123), `rls.test.ts` (124+125+128+129), `reminder-claims.test.ts` (129) |
 | auditoría de notas | `visits.test.ts` › `updateVisit` |
 | reagendamiento conserva historial | `appointments.test.ts` (a través de `rescheduleAppointment`) |
+| continuidad de IA | `auto-reply.test.ts` (fallo de proveedor, límite de cuenta/conversación, respuesta vacía, recuperación y mutación clínica antes del mensaje) |
+| recordatorios concurrentes/reintentables | `reminder-claims.test.ts` (arrendamientos PostgreSQL) y `reminders-sweep` |
 
 ### Pruebas manuales recomendadas (no automatizables aquí)
 - Alta de doctor + horario + servicio + cita real por un usuario admin.

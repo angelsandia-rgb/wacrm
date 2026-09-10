@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireRole, toErrorResponse } from '@/lib/clinic/auth'
 
 /** GET /api/visits/[id]/revisions — the append-only note history. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
