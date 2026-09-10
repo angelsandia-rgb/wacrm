@@ -138,6 +138,7 @@ del job de pg_cron difieren — tabla de equivalencias:
 | `webhooks_cron` | `webhook-retry-sweep` | `/api/webhooks/cron` | ~5 min | `WEBHOOK_CRON_SECRET` |
 | `retention_cron` | `data-retention-sweep` | `/api/maintenance/retention/cron?execute=true` | diario 09:20 UTC | `RETENTION_CRON_SECRET` / `WEBHOOK_CRON_SECRET` |
 | `subscriptions_cron` | `subscriptions-alert-sweep` | `/api/admin/subscriptions/cron` | diario 13:00 | `SUBSCRIPTIONS_CRON_SECRET` |
+| *(sin heartbeat; mantenimiento pendiente)* | `task-reminders-sweep` | `/api/tasks/reminders/cron` | ~5 min | `TASKS_CRON_SECRET` / `WEBHOOK_CRON_SECRET` |
 | (vigilante) | `heartbeat-staleness-check` | `/api/system/heartbeat-check/cron` | ~5 min | `HEALTHCHECK_CRON_SECRET` / `WEBHOOK_CRON_SECRET` |
 
 > El watchdog `heartbeat-staleness-check`, al abrir una alerta **nueva**
