@@ -161,7 +161,27 @@ async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
       aiGenerated: true,
     })
   } catch (error) {
+    // Every OTHER failure path in this file that reaches for this
+    // fallback already raises an alert of its own; this send is the one
+    // thing they all have in common, and until now its own failure was
+    // the sole exception that went silent (console-only). If the channel
+    // itself is down at this exact moment, the customer gets NOTHING —
+    // no real reply, no holding message either — which is the single
+    // worst outcome this whole file exists to avoid. Make it loud.
     console.error('[ai auto-reply] continuity fallback send failed:', error)
+    void dispatchSystemAlert({
+      severity: 'critical',
+      source: 'ai_dispatch_error',
+      title: 'AI auto-reply: the continuity fallback message itself failed to send — customer got nothing',
+      detail: {
+        account_id: args.accountId,
+        conversation_id: args.conversationId,
+        message: describeError(error).slice(0, 300),
+      },
+      dedupKey: `ai_fallback_send_failed:${args.accountId}`,
+      accountId: args.accountId,
+      throttleMinutes: 60,
+    })
   }
 }
 
@@ -897,14 +917,59 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text: outboundText,
-      aiGenerated: true,
-    })
+    try {
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text: outboundText,
+        aiGenerated: true,
+      })
+    } catch (err) {
+      // The clinic appointment mutation above already committed — the
+      // database is correct — but the patient was never actually told,
+      // because the channel send itself just failed. Left to the outer
+      // catch, this reads as a generic "dispatch threw unexpectedly" and
+      // nobody learns WHICH appointment needs a human to call the
+      // patient directly. `appointmentAction && !clinicActionNeedsHandoff`
+      // means the mutation succeeded (a failed one already handled its
+      // own case above and never reaches this send with stale intent).
+      if (appointmentAction && isClinic && clinicAppointment && !clinicActionNeedsHandoff) {
+        console.error(
+          `[ai auto-reply] clinic appointment ${clinicAppointment.id} was updated but the confirmation message failed to send:`,
+          err,
+        )
+        void dispatchSystemAlert({
+          severity: 'critical',
+          source: 'ai_dispatch_error',
+          title: 'Clinic appointment updated, but the patient was never notified (message send failed)',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            appointment_id: clinicAppointment.id,
+            action: appointmentAction,
+            message: describeError(err).slice(0, 300),
+          },
+          dedupKey: `ai_send_after_mutation_failed:${clinicAppointment.id}`,
+          accountId,
+          throttleMinutes: 60,
+        })
+        await handOffToHuman({
+          db,
+          conversationId,
+          handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id),
+          summary:
+            '🤖 La cita se confirmó/canceló correctamente en el sistema, pero no se pudo enviar el mensaje al paciente (falló el envío del canal). Alguien debe avisarle directamente.',
+          transient: true,
+        }).catch((hoErr) => {
+          console.error('[ai auto-reply] handoff after send-after-mutation failure also failed:', hoErr)
+        })
+        return
+      }
+      throw err
+    }
 
     if (clinicActionNeedsHandoff) {
       await handOffToHuman({
@@ -993,11 +1058,31 @@ export async function dispatchInboundToAiReply(
       try {
         await sendCatalogToConversation(db, accountId, conversationId)
       } catch (err) {
-        if (err instanceof SendCatalogError) {
-          console.error('[ai auto-reply] autonomous send_catalog failed:', err.message)
-        } else {
-          throw err
-        }
+        // Never rethrow: the customer already got their text reply above,
+        // this is a "bonus" delivery on top of it, and every other
+        // autonomous action below (menu, temperature, contact name,
+        // appointment, quote, reservation) still deserves its own chance
+        // to run this turn — a network hiccup here used to `throw` a
+        // non-`SendCatalogError` straight to the outer catch, which quietly
+        // skipped every action listed after this one. A `SendCatalogError`
+        // (no active products, catalog not configured) used to log to the
+        // console only, with no alert at all — the bot told the customer
+        // "aquí va el catálogo" and then silently delivered nothing.
+        const detail = err instanceof SendCatalogError ? err.message : describeError(err)
+        console.error('[ai auto-reply] autonomous send_catalog failed:', detail)
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI told a customer "here is the catalog" but it could not be sent',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: detail.slice(0, 300),
+          },
+          dedupKey: `ai_send_catalog_failed:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
       }
     }
 
@@ -1009,11 +1094,26 @@ export async function dispatchInboundToAiReply(
       try {
         await sendRestaurantMenuToConversation(db, accountId, conversationId)
       } catch (err) {
-        if (err instanceof SendRestaurantMenuError) {
-          console.error('[ai auto-reply] autonomous send_restaurant_menu failed:', err.message)
-        } else {
-          throw err
-        }
+        // Same reasoning as send_catalog above: never rethrow (it would
+        // skip every autonomous action still queued after this one), and
+        // always alert — an expected `SendRestaurantMenuError` used to be
+        // console-only, silently leaving the customer without the menu
+        // they were just told was coming.
+        const detail = err instanceof SendRestaurantMenuError ? err.message : describeError(err)
+        console.error('[ai auto-reply] autonomous send_restaurant_menu failed:', detail)
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI told a customer "here is the menu" but it could not be sent',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: detail.slice(0, 300),
+          },
+          dedupKey: `ai_send_restaurant_menu_failed:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
       }
     }
 

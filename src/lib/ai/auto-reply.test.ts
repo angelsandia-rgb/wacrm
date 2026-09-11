@@ -554,6 +554,28 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de')
   })
 
+  it('alerts (critical) when even the continuity fallback message itself fails to send', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 3,
+    }
+    h.engineSendText.mockRejectedValueOnce(new Error('channel down'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'critical',
+        source: 'ai_dispatch_error',
+        dedupKey: 'ai_fallback_send_failed:acct-1',
+      }),
+    )
+    // The handoff itself must still happen — the fallback failing to
+    // send is not a reason to leave the bot stuck replying forever.
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
   it('sends a deterministic fallback when the account-wide AI limit is reached', async () => {
     vi.mocked(checkSharedRateLimit).mockResolvedValueOnce({
       success: false,
@@ -1475,7 +1497,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.moveDeal).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'deal-1', 'stage-b')
   })
 
-  it('swallows a send failure — the already-sent reply is unaffected', async () => {
+  it('swallows a send failure and alerts — the already-sent reply is unaffected', async () => {
     h.generateReply.mockResolvedValue({
       text: 'Aquí tienes.',
       handoff: false,
@@ -1487,6 +1509,41 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
 
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
     expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warning',
+        dedupKey: 'ai_send_catalog_failed:acct-1',
+        detail: expect.objectContaining({ message: 'No active products in the catalog yet.' }),
+      }),
+    )
+  })
+
+  it('does not cascade — a non-SendCatalogError still alerts but lets an independent same-turn action run', async () => {
+    h.state.contact = { lead_temperature: null, name: 'Juan Pérez', phone: '50255551234', email: null }
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tienes el catálogo.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: true,
+      leadTemperature: 'hot',
+    })
+    h.sendCatalogToConversation.mockRejectedValue(new Error('network blip'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Aquí tienes el catálogo.' }),
+    )
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_send_catalog_failed:acct-1' }),
+    )
+    // Previously this rethrew a non-SendCatalogError straight to the
+    // outer catch, silently skipping every autonomous action listed
+    // after send_catalog — including this one.
+    expect(h.state.contactUpdates).toEqual([
+      expect.objectContaining({ lead_temperature: 'hot' }),
+    ])
   })
 })
 
@@ -1523,6 +1580,31 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
     h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
     await dispatchInboundToAiReply(ARGS) // default mock: sendRestaurantMenu false
     expect(h.sendRestaurantMenuToConversation).not.toHaveBeenCalled()
+  })
+
+  it('swallows a send failure and alerts, without cancelling the already-sent reply', async () => {
+    h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, aquí tienes el menú.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendRestaurantMenu: true,
+    })
+    h.sendRestaurantMenuToConversation.mockRejectedValueOnce(new Error('pdf host unreachable'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Claro, aquí tienes el menú.' }),
+    )
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warning',
+        dedupKey: 'ai_send_restaurant_menu_failed:acct-1',
+      }),
+    )
   })
 })
 
@@ -1733,6 +1815,29 @@ describe('dispatchInboundToAiReply - clinic appointment safety', () => {
         result: { status: 'CONFIRMED' },
       }),
     )
+  })
+
+  it('alerts (critical) and hands off — without a false "sent" claim — when the mutation succeeds but the send itself fails', async () => {
+    h.engineSendText.mockRejectedValueOnce(new Error('WhatsApp send failed'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    // The database mutation already committed before the send was attempted.
+    expect(h.transitionAppointment).toHaveBeenCalledWith(
+      expect.anything(), 'acct-1', 'user-1', 'appt-clinic-1', 'CONFIRMED',
+      expect.objectContaining({ confirmation_status: 'confirmed' }),
+    )
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'critical',
+        dedupKey: 'ai_send_after_mutation_failed:appt-clinic-1',
+      }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('no se pudo enviar el mensaje')
   })
 
   it('withholds a false success, sends a safe reply, and routes to reception when persistence fails', async () => {
