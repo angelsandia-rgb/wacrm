@@ -1479,6 +1479,32 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.sendCatalogToConversation).not.toHaveBeenCalled()
   })
 
+  it('still sends the catalog when the model forgets the marker but the customer plainly asked for it (2026-09-11 incident)', async () => {
+    h.loadCatalogContext.mockResolvedValue(['- Suite Premium (Q350)'])
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Me envían su catálogo porfavor?' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, te comparto el catálogo 😊', // the marker never made it into the raw output
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_marker_missed_send_catalog:acct-1' }),
+    )
+  })
+
+  it('does not force-send when there is no catalog to offer, even if the customer asks', async () => {
+    h.loadCatalogContext.mockResolvedValue(null)
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Tienen catálogo?' }])
+    await dispatchInboundToAiReply(ARGS) // default mock: sendCatalog false
+    expect(h.sendCatalogToConversation).not.toHaveBeenCalled()
+  })
+
   it('fires alongside an autonomous stage move in the same turn', async () => {
     h.state.openDeal = { id: 'deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' }
     h.state.stages = [
@@ -1580,6 +1606,25 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
     h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
     await dispatchInboundToAiReply(ARGS) // default mock: sendRestaurantMenu false
     expect(h.sendRestaurantMenuToConversation).not.toHaveBeenCalled()
+  })
+
+  it('still sends the menu when the model forgets the marker but the customer plainly asked for it', async () => {
+    h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'me pueden compartir el menú?' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, te lo envío enseguida',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendRestaurantMenu: false,
+    })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_marker_missed_send_restaurant_menu:acct-1' }),
+    )
   })
 
   it('swallows a send failure and alerts, without cancelling the already-sent reply', async () => {
