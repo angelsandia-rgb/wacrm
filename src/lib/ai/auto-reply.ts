@@ -20,7 +20,7 @@ import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
-import { sendCatalogToConversation, SendCatalogError } from '@/lib/products/send-catalog'
+import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation } from '@/lib/products/send-catalog'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
 import { formatWithOffset, describeNowInZone } from '@/lib/timezone'
@@ -86,14 +86,45 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
 const CATALOG_URL_RE =
   /\s*https?:\/\/\S*?\/(?:catalog\/[0-9a-fA-F-]{20,}|c\/[a-z0-9][a-z0-9-]{1,39})(?:\?\S*)?/g
 
-export function stripCatalogUrls(text: string): string {
+/** Non-global copy of {@link CATALOG_URL_RE} for a stateless presence
+ *  check (`.test()` on the `g` regex would advance `lastIndex`). */
+const CATALOG_URL_TEST = new RegExp(CATALOG_URL_RE.source, 'i')
+
+/** True when `text` contains at least one public-catalog URL. */
+export function hasCatalogUrl(text: string): boolean {
+  return CATALOG_URL_TEST.test(text)
+}
+
+function tidyAfterUrlEdit(text: string): string {
   return text
-    .replace(CATALOG_URL_RE, '')
     // tidy a now-dangling "…aquí:" / "— " / trailing bullet left behind
     .replace(/[ \t]*[:\-–—][ \t]*$/gm, '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+export function stripCatalogUrls(text: string): string {
+  return tidyAfterUrlEdit(text.replace(CATALOG_URL_RE, ''))
+}
+
+/**
+ * Rewrite every catalog URL in `text` to `correctUrl` — the account's
+ * CURRENT canonical link. Used when the model answered "here's the
+ * catalog" inline (no `send_catalog` action, so nothing else delivers
+ * the link) but pasted a URL copied from earlier in the thread, which is
+ * dead once the account's `catalog_slug` has changed. A second/third
+ * copy of a catalog URL in the same reply collapses to nothing.
+ */
+export function canonicalizeCatalogUrls(text: string, correctUrl: string): string {
+  let replaced = false
+  const rewritten = text.replace(CATALOG_URL_RE, (match) => {
+    const lead = /^\s*/.exec(match)?.[0] ?? ''
+    if (replaced) return ''
+    replaced = true
+    return `${lead}${correctUrl}`
+  })
+  return replaced ? tidyAfterUrlEdit(rewritten) : text
 }
 
 /** Generic, safe fallback sent instead of a fabricated confirmation —
@@ -464,6 +495,7 @@ export async function dispatchInboundToAiReply(
     let catalog: string[] | null = null
     let quickReplies: Awaited<ReturnType<typeof loadQuickReplyContext>> = null
     let catalogDeliveryMode: 'digital' | 'pdf' | 'photos' = 'digital'
+    let catalogSlug: string | null = null
     let isHotel = false
     let isClinic = false
     // If account metadata is temporarily unreadable, retain the strict
@@ -493,7 +525,7 @@ export async function dispatchInboundToAiReply(
       // whether a restaurant menu PDF is on file (migration 114).
       const { data: catalogModeRow, error: accountMetadataError } = await db
         .from('accounts')
-        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency')
+        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency, catalog_slug')
         .eq('id', accountId)
         .maybeSingle()
       if (accountMetadataError) {
@@ -502,6 +534,7 @@ export async function dispatchInboundToAiReply(
       }
       catalogDeliveryMode =
         (catalogModeRow?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital'
+      catalogSlug = (catalogModeRow?.catalog_slug as string | null | undefined) ?? null
       isHotel = (catalogModeRow?.industry_vertical as string | undefined) === 'hotel'
       isClinic = (catalogModeRow?.industry_vertical as string | undefined) === 'clinica'
       clinicSafetyMode = isClinic
@@ -657,17 +690,34 @@ export async function dispatchInboundToAiReply(
     }
     let outboundText = quickReplyText?.text ?? text
 
-    // `sendCatalogToConversation` (below) delivers the catalog link as
-    // its own message using the account's short /c/<slug> URL. If the
-    // model also pasted a catalog URL into its reply — almost always a
-    // stale long /catalog/<uuid> link it copied from earlier in the
-    // thread — drop it so the customer isn't handed two links, one wrong.
-    if (sendCatalog && !quickReplyText) {
-      const stripped = stripCatalogUrls(outboundText)
-      // Keep the original if stripping the URL left nothing — the empty
-      // check below would otherwise drop the whole turn, catalog send
-      // included.
-      if (stripped) outboundText = stripped
+    // Deal with any catalog URL the model pasted into its prose — almost
+    // always copied from earlier in the thread, and DEAD once the
+    // account's `catalog_slug` has been renamed (real incident: a bot
+    // handed a customer `…/c/demo` after the slug moved to `…/c/villa-…`).
+    //   • `send_catalog` fired: `sendCatalogToConversation` (below)
+    //     delivers the correct link/files as its own message, so strip
+    //     the pasted one — two links, one wrong, helps nobody.
+    //   • it did NOT fire (the model answered "here's the catalog"
+    //     inline): rewrite every catalog URL to the account's CURRENT
+    //     canonical link so the customer never gets a 404.
+    if (!quickReplyText && hasCatalogUrl(outboundText)) {
+      if (sendCatalog) {
+        const stripped = stripCatalogUrls(outboundText)
+        // Keep the original if stripping left nothing — the empty check
+        // below would otherwise drop the whole turn, catalog send included.
+        if (stripped) outboundText = stripped
+      } else {
+        try {
+          outboundText = canonicalizeCatalogUrls(
+            outboundText,
+            catalogUrlForConversation(accountId, catalogSlug, conversationId),
+          )
+        } catch {
+          // NEXT_PUBLIC_SITE_URL missing → strip rather than crash the turn.
+          const stripped = stripCatalogUrls(outboundText)
+          if (stripped) outboundText = stripped
+        }
+      }
     }
 
     // Defense in depth against a fabricated appointment confirmation:
