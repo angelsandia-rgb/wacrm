@@ -77,6 +77,20 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
   return EMBEDDED_EMAIL_RE.test(trimmed)
 }
 
+/** Loose match for a customer message plainly asking for the catalog or
+ *  a price list — mirrors the phrasing `buildSystemPrompt` teaches the
+ *  model to react to with `SEND_CATALOG_SENTINEL`. Used only to detect
+ *  when the model failed to use a marker it was taught, never to decide
+ *  whether to teach it in the first place. */
+const CUSTOMER_ASKS_FOR_CATALOG_RE = /\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
+
+/** Same idea for the restaurant's food/drink menu. Trailing lookahead
+ *  instead of `\b` after the accented "ú" — JS's `\b` is ASCII-only, so
+ *  `\bmenú\b` fails to match "menú?" (no boundary between "ú" and "?",
+ *  since neither counts as a `\w` character) while still correctly
+ *  rejecting "menudo". */
+const CUSTOMER_ASKS_FOR_MENU_RE = /\bmen[uú](?![a-zà-ÿ])|\bla\s+carta\b/i
+
 /** A public-catalog URL in either shape: the long `/catalog/<uuid>`
  *  form or the short `/c/<slug>` alias (migration 116), with or without
  *  the signed `?c=` query. The `send_catalog` action delivers the
@@ -665,8 +679,54 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog, sendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
     } = generation
+
+    // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
+    // only teaches SEND_CATALOG_SENTINEL / SEND_RESTAURANT_MENU_SENTINEL
+    // when there's real catalog/menu content to send, so the marker was
+    // available this turn — the model just didn't use it. Real incident
+    // (2026-09-11, gpt-5.4-mini): a customer asked for the catálogo twice
+    // and the bot answered "claro, te lo comparto 😊" / "te lo envío
+    // enseguida" both times with no marker, so nothing was ever sent —
+    // `ai_action_log` shows zero send_catalog attempts across the whole
+    // exchange. Unlike a fabricated appointment/booking claim, actually
+    // delivering the real catalog/menu carries no risk of telling the
+    // customer something false, so rather than only alert, just do what
+    // the customer plainly asked for: if THIS turn's inbound reads as a
+    // catalog/menu request, the account has one to offer, and the model
+    // didn't already send it, send it anyway.
+    const latestInbound = latestUserMessage(messages)
+    const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
+    const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
+    const sendCatalog =
+      modelSendCatalog || (!quickReplyId && customerAskedForCatalog && Boolean(catalog?.length))
+    const sendRestaurantMenu =
+      modelSendRestaurantMenu || (!quickReplyId && hasRestaurantMenu && customerAskedForMenu)
+    if (!modelSendCatalog && sendCatalog) {
+      console.warn(`[ai auto-reply] conversation ${conversationId}: model asked for the catalog without the marker — sending it anyway`)
+      void dispatchSystemAlert({
+        severity: 'warning',
+        source: 'ai_dispatch_error',
+        title: 'AI model failed to emit send_catalog on a turn that plainly asked for it (auto-corrected)',
+        detail: { account_id: accountId, conversation_id: conversationId, model: config.model },
+        dedupKey: `ai_marker_missed_send_catalog:${accountId}`,
+        accountId,
+        throttleMinutes: 360,
+      })
+    }
+    if (!modelSendRestaurantMenu && sendRestaurantMenu) {
+      console.warn(`[ai auto-reply] conversation ${conversationId}: model asked for the menu without the marker — sending it anyway`)
+      void dispatchSystemAlert({
+        severity: 'warning',
+        source: 'ai_dispatch_error',
+        title: 'AI model failed to emit send_restaurant_menu on a turn that plainly asked for it (auto-corrected)',
+        detail: { account_id: accountId, conversation_id: conversationId, model: config.model },
+        dedupKey: `ai_marker_missed_send_restaurant_menu:${accountId}`,
+        accountId,
+        throttleMinutes: 360,
+      })
+    }
 
     // The provider call succeeded, so the key is valid again — clear any
     // open "AI provider rejected the key" alert for this account.
