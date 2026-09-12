@@ -31,6 +31,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { buildSignatureHeader } from '@/lib/webhooks/sign';
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf';
+import { describeError } from '@/lib/observability/describe-error';
 import type { WebhookEvent } from '@/lib/webhooks/events';
 import { dispatchToGoogleSheets } from '@/lib/google-sheets/dispatch';
 
@@ -188,7 +189,7 @@ async function attemptDelivery(
     }
     return { ok: true, status: res.status };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeError(err);
     console.warn(`[webhooks] delivery to ${row.id} failed:`, message);
     return { ok: false, status: null, message };
   }

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { runFollowupSweep } from '@/lib/ai/followups-sweep'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
+import { describeError } from '@/lib/observability/describe-error'
 
 /**
  * Send due follow-up nudges for accounts that opted in
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
     })
     return NextResponse.json(result)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)
     await recordHeartbeat('followups_cron', { status: 'error', detail: message })
     return NextResponse.json({ error: message }, { status: 500 })

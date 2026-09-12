@@ -33,6 +33,7 @@
  */
 
 import { supabaseAdmin } from "./admin-client";
+import { describeError } from "@/lib/observability/describe-error";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -556,7 +557,7 @@ async function menuSendFailedToHandoff(
 ): Promise<void> {
   await logEvent(db, run.id, "error", node.node_key, {
     reason: "send_menu_failed",
-    detail: err instanceof Error ? err.message : String(err),
+    detail: describeError(err),
   });
   if (run.conversation_id) {
     await db
@@ -776,7 +777,7 @@ async function advanceFromNodeKey(
       } catch (err) {
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "send_text_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
         await endRun(db, run.id, "failed", "send_text_failed");
         return { outcome: "completed" };
@@ -807,7 +808,7 @@ async function advanceFromNodeKey(
       } catch (err) {
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "send_media_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
         await endRun(db, run.id, "failed", "send_media_failed");
         return { outcome: "completed" };
@@ -845,7 +846,7 @@ async function advanceFromNodeKey(
       } catch (err) {
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "collect_input_prompt_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
         await endRun(db, run.id, "failed", "collect_input_prompt_failed");
         return { outcome: "completed" };
@@ -873,7 +874,7 @@ async function advanceFromNodeKey(
       } catch (err) {
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "condition_evaluation_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
         await endRun(db, run.id, "failed", "condition_evaluation_failed");
         return { outcome: "completed" };
@@ -912,7 +913,7 @@ async function advanceFromNodeKey(
         // strand the customer mid-flow.
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "set_tag_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
       }
       currentKey = cfg.next_node_key;
@@ -1237,7 +1238,7 @@ async function handleReplyForActiveRun(
       } catch (err) {
         await logEvent(db, run.id, "error", currentNode.node_key, {
           reason: "reprompt_send_failed",
-          detail: err instanceof Error ? err.message : String(err),
+          detail: describeError(err),
         });
       }
     }

@@ -1,4 +1,5 @@
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
+import { describeError } from '@/lib/observability/describe-error'
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import {
   engineSendInteractiveButtons,
@@ -313,7 +314,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       lastError = null
       break
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (!isRecipientNotAllowedError(msg)) throw err
       lastError = err
     }
