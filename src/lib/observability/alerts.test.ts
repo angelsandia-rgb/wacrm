@@ -144,6 +144,21 @@ describe('dispatchSystemAlert', () => {
       dispatchSystemAlert({ severity: 'info', source: 'unit', title: 'x', dedupKey: 'unit:1' }),
     ).resolves.toMatchObject({ opened: false, notified: false, alertId: null });
   });
+
+  it('never calls Telegram — the /admin panel replaced it (2026-09-12)', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('ok'));
+    process.env.TELEGRAM_BOT_TOKEN = 'token';
+    process.env.TELEGRAM_ALERT_CHAT_ID = 'chat';
+    db.setExisting(null);
+    await dispatchSystemAlert({
+      severity: 'critical',
+      source: 'unit',
+      title: 'x',
+      dedupKey: 'unit:1',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
 });
 
 describe('resolveSystemAlert', () => {

@@ -38,6 +38,7 @@ import {
   type PlatformCompany,
 } from '@/components/admin/company-master-detail';
 import { AiDemo } from '@/components/admin/ai-demo';
+import { AlertsPanel } from '@/components/admin/alerts-panel';
 
 type Company = PlatformCompany;
 
@@ -752,6 +753,8 @@ export default function PlatformAdminPage() {
           {error}
         </div>
       ) : null}
+
+      <AlertsPanel />
 
       <CompanyMasterDetail
         companies={companies}
