@@ -21,6 +21,7 @@
 
 import { platformAdminClient } from '@/lib/platform/admin-client';
 import { sendEmail } from '@/lib/email/send';
+import { sendPushToUser } from '@/lib/push/send';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
@@ -186,13 +187,53 @@ async function notify(input: DispatchAlertInput, alertId: string): Promise<void>
   ].filter(Boolean) as string[];
   const text = lines.join('\n');
 
-  await Promise.allSettled([sendTelegramMessage(text), sendEmailAlert(input, text)]);
+  // Telegram is intentionally NOT in this fan-out — the /admin "Alertas"
+  // panel (migration 130) is now the primary surface, decided 2026-09-12
+  // while that panel gets tried out. `sendTelegramMessage` stays exported
+  // for the triage bot (src/lib/observability/triage.ts), a separate
+  // system this change doesn't touch.
+  await Promise.allSettled([
+    sendEmailAlert(input, text),
+    sendCriticalPush(input, alertId),
+  ]);
 }
 
 /**
- * Post a raw message to the ops Telegram channel. Shared by the alert
- * fan-out and the triage bot. Returns false (no throw) when Telegram
- * isn't configured; throws on an actual API failure.
+ * Push a `critical` alert straight to every platform admin's phone —
+ * unlike the /admin panel, this reaches someone without them having the
+ * app open. Reuses the same Web Push plumbing as task/notification
+ * fanout (src/lib/push/send.ts); a no-op until VAPID keys are set in
+ * EasyPanel (`isPushConfigured()`), same as the rest of that feature.
+ */
+async function sendCriticalPush(input: DispatchAlertInput, alertId: string): Promise<void> {
+  if (input.severity !== 'critical') return;
+  try {
+    const db = platformAdminClient();
+    const { data: admins } = await db
+      .from('profiles')
+      .select('user_id')
+      .eq('is_platform_admin', true);
+    if (!admins || admins.length === 0) return;
+
+    await Promise.allSettled(
+      admins.map((admin) =>
+        sendPushToUser(db, admin.user_id as string, {
+          title: `🔴 ${input.title}`,
+          body: input.source,
+          url: '/admin#alerts',
+          tag: alertId,
+        }),
+      ),
+    );
+  } catch (err) {
+    console.error('[alerts] critical push failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Post a raw message to the ops Telegram channel. Still used by the
+ * triage bot (src/lib/observability/triage.ts) — not by this file's own
+ * `notify()` fan-out, see the comment there.
  */
 export async function sendTelegramMessage(text: string): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();

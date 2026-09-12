@@ -4836,3 +4836,145 @@ cobertura en `base-url.test.ts`). Sin diff en `package-lock.json`.
 la conexión — con este fix, si el `invalid_state` persiste, ahora sí
 va a aterrizar en la página de Settings real donde se puede
 diagnosticar en vivo, en vez de una URL rota.
+
+### 2026-09-12 — Claude Code (feat: panel de alertas en /admin + auditoría técnica priorizada)
+
+Angel pidió dos cosas en la misma sesión: (1) un panel dentro de `/admin`
+para ver alertas/errores del sistema sin depender solo de Telegram, y (2)
+recorrer una lista priorizada de mejoras técnicas (escalabilidad,
+seguridad, base de datos, rate limiting, caché/CDN, arquitectura) surgida
+de comparar wacrm contra un competidor — con la instrucción explícita de
+**confirmar el estado real en el código antes de "arreglar" nada**, porque
+`docs/SANDIA_diagnostico_tecnico.md` (agosto) ya estaba desactualizado en
+varios puntos.
+
+**PARTE 1 — Panel de alertas en /admin.**
+
+Ya existía todo el backend de observabilidad (migración 088): tabla
+`system_alerts` (severidad, `dedup_key`, `occurrences`, `resolved_at`) +
+`dispatchSystemAlert()`/`resolveSystemAlert()` en
+`src/lib/observability/alerts.ts`, que hoy solo empujan a Telegram/email.
+Nadie leía esa tabla desde una UI. Se agregó siguiendo el patrón exacto de
+`/api/admin/tickets` (mismo `requirePlatformAdmin()` + `platformAdminClient()`
+service-role, sin RLS nueva porque `system_alerts` ya tenía política
+`USING (is_platform_admin())` desde el 088):
+
+- `GET /api/admin/alerts` — lista `system_alerts` (`resolved_at IS NULL`
+  por defecto, `?resolved=1` para incluir resueltas), con el nombre de la
+  empresa vía join a `accounts`.
+- `POST /api/admin/alerts/[id]/resolve` — cierra una alerta por id
+  actualizando `resolved_at` directo (no se reutilizó
+  `resolveSystemAlert()` porque esa función toma `dedup_key`, no id; el
+  efecto es el mismo — una recurrencia futura del mismo `dedup_key` abre
+  fila nueva y re-notifica).
+- `src/components/admin/alerts-panel.tsx` — componente autocontenido
+  (mismo estilo que `AiDemo`: hace su propio fetch, sin props desde
+  `page.tsx`) con tabla shadcn, badge de severidad, empresa, ocurrencias,
+  última vez visto y botón "Resolver". Se suscribe a `system_alerts` por
+  Supabase Realtime (`postgres_changes`) para reflejar alertas nuevas sin
+  refrescar.
+- Migración `130_realtime_system_alerts.sql` — agrega `system_alerts` a la
+  publicación `supabase_realtime` (mismo patrón que la 059 para
+  `deals`/`contacts`). **No hizo falta política RLS nueva**, la del 088 ya
+  cubre exactamente lo que Realtime necesita.
+- `src/app/(dashboard)/admin/page.tsx` — se agregó `<AlertsPanel />` como
+  una tarjeta más, arriba de `CompanyMasterDetail` (misma vista única, sin
+  ruta aparte).
+
+**Decisiones que Angel debe tomar (no se tocó nada de esto todavía):**
+1. **¿Telegram se apaga o se deja solo para `critical`** mientras se
+   prueba el panel nuevo? `notify()` en `alerts.ts` (línea ~189) sigue
+   intacta — la usa también el bot de triage (`src/lib/observability/triage.ts`),
+   que es un sistema aparte y no se tocó.
+2. **Push al celular para alertas `critical`:** un panel dentro de `/admin`
+   solo se ve si alguien lo abre, a diferencia de Telegram. Ya existe toda
+   la infraestructura de Web Push (`src/lib/push/vapid.ts`, `send.ts`,
+   `client.ts`, tabla `push_subscriptions`, migraciones 094/095) — se
+   propone reutilizarla para las alertas `critical` en vez de construir
+   algo nuevo, pero no se implementó (Angel debe confirmarlo primero).
+
+**PARTE 2 — Auditoría técnica priorizada (se verificó el código real antes
+de tocar nada; varios puntos del diagnóstico de agosto ya estaban
+resueltos y no se volvieron a tocar):**
+
+1. **Contraseña mínima — YA RESUELTO, sin acción.** `signup/page.tsx` y
+   `reset-password/page.tsx` ya exigen 8 caracteres (`MIN_PASSWORD_LENGTH`
+   / `MIN_PASSWORD`), no 6. El diagnóstico de agosto quedó desactualizado
+   en este punto.
+2. **CDN/proxy de EasyPanel cacheando HTML con chunks viejos — verificado,
+   sin acción.** Se pidieron los headers reales de `chatsandia.com`: sin
+   `CF-Cache-Status`/`CF-Ray`/`Age` (el dominio pasa por Cloudflare en modo
+   DNS-only, no proxied) y sin ningún `Server`/`Via` de un CDN externo. El
+   único cacheo presente es `X-Nextjs-Cache: HIT`, el caché de datos propio
+   de Next (`next.config.ts` línea ~176, `s-maxage=300`), que se
+   autoinvalida en cada build nueva (build id distinto). El bug documentado
+   para Hostinger (CDN de terceros ignorando el build) **no aplica** al
+   despliegue actual porque no hay ningún CDN de terceros al frente.
+3. **Permisos GRANT/REVOKE de funciones `SECURITY DEFINER` — re-auditado
+   con script sobre las 130 migraciones, sin acción urgente.** Los 4
+   hallazgos que el diagnóstico de agosto señalaba
+   (`recompute_broadcast_counts`, `_bcast_bump`, `record_webhook_failure`,
+   `claim_ai_reply_slot`) **ya estaban corregidos desde la migración 046**
+   (antes de la fecha del propio diagnóstico — quedó desactualizado en este
+   punto también). Barrido de las 51 funciones `SECURITY DEFINER`
+   existentes hoy: 49 tienen `REVOKE ... FROM PUBLIC/anon` explícito.
+   Las 2 sin `REVOKE` (`update_ai_knowledge_documents_updated_at` en la
+   030, `enforce_profile_privilege_columns` en la 034) son funciones
+   `RETURNS TRIGGER` — Postgres rechaza invocarlas directo vía RPC
+   ("trigger functions can only be called as triggers") sin importar el
+   `GRANT`, así que no son explotables. Por prolijidad (mismo criterio que
+   la 110, que sí revocó `handle_new_user` pese a ser también un trigger),
+   se puede sumar una migración de una línea para las dos si Angel la
+   quiere — no se escribió sin confirmar.
+4. **Métricas del dashboard calculadas en el cliente — SIGUE ABIERTO,
+   pendiente de decisión.** `src/lib/dashboard/queries.ts` (`loadMetrics`,
+   `loadPipelinesOverview`, `loadResponseTime`, `loadActivity`, …) sigue
+   haciendo `.from(tabla).select(...)` directo desde el navegador, no RPC a
+   funciones agregadas. Es el único punto de la lista con trabajo real de
+   diseño (definir las funciones SQL, migrar cada call site, mantener el
+   mismo resultado con RLS igual). No se tocó — se necesita luz verde de
+   Angel para dimensionarlo como su propia sesión, dado que toca 6 queries
+   distintas usadas en `/dashboard` y en los dashboards de vertical
+   (hotel/clínica).
+5. **CSP con nonces — confirmado que sigue en modo enforcing (ya NO es
+   Report-Only, el diagnóstico de agosto también quedó desactualizado
+   aquí) pero todavía con `'unsafe-inline'` en `script-src`** (comentario
+   propio en `next.config.ts` ya lo marca como "a later project"). Es el
+   único punto de seguridad de fondo real que sigue pendiente tal como
+   Angel lo describió — no se implementó en esta pasada (requiere generar
+   nonce por request en middleware/layout y tocar cada `<script>` inline).
+6. **Connection pooling de Supabase — confirmado que hoy no aplica.** Toda
+   la app usa `@supabase/supabase-js` (REST/PostgREST + Realtime); no hay
+   ni un solo `pg.Pool`/`DATABASE_URL`/conexión directa a Postgres en
+   `src/`. El pooling de Supabase (PgBouncer) solo es relevante para quien
+   sostiene conexiones `pg` directas — hoy nadie en el código lo hace, así
+   que correr más de una instancia de la app **no** choca con este límite
+   todavía. Esto sí se vuelve relevante el día que se adopte el punto 8
+   (pg-boss usa `pg` real) — ahí hay que apuntarlo a la cadena del pooler
+   en modo transacción, no a la conexión directa.
+7. **Rate limiting — no tocado, confirmado que ya no es el cuello de
+   botella.** `checkSharedRateLimit()` (`src/lib/rate-limit.ts`) respaldado
+   por Postgres (migración 048) sigue en 41/42 rutas. Sin cambios, tal
+   como se pidió.
+8. **Cola real para tareas diferidas — no tocado, dejado como
+   recomendación a futuro.** Los cron endpoints siguen siendo el único
+   mecanismo. Si el volumen lo exige, pg-boss sobre el mismo Postgres es la
+   opción a evaluar antes que sumar Redis — coincide con el punto 6 arriba
+   (pg-boss sí necesitaría la cadena del pooler).
+
+**Probado:** `tsc --noEmit` limpio, `eslint` limpio en los archivos
+tocados/creados, `next build` completo (61+ rutas, incluye `/api/admin/alerts`
+y `/api/admin/alerts/[id]/resolve`), `vitest run` en verde (1826 tests). Sin
+diff en `package-lock.json`.
+
+**Pendiente / decisiones de Angel antes de seguir:**
+- Aplicar la migración `130_realtime_system_alerts.sql` a
+  `puvbwzwmojpjplhdfnmk` (producción) — **no se aplicó**, se muestra antes
+  de correrla.
+- Confirmar si se hace `git push` de esta rama/commit — **no se hizo**.
+- Decidir los dos puntos de la Parte 1 (Telegram on/off para `critical`,
+  Web Push para `critical`).
+- Decidir si vale la pena dimensionar el punto 4 de la Parte 2 (métricas
+  del dashboard vía funciones SQL) como su propia sesión.
+- Decidir si vale la pena el nonce rollout de CSP (punto 5) como su propia
+  sesión.
