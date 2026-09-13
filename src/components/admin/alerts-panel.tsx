@@ -1,7 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, RefreshCw, Siren } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bot,
+  CheckCircle2,
+  ExternalLink,
+  RefreshCw,
+  Siren,
+} from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +30,18 @@ import {
 import { readResponseJson } from '@/lib/http/response-json';
 
 type Severity = 'info' | 'warning' | 'critical';
+type WatcherStatus = 'pr_opened' | 'diagnosed_only';
+
+interface WatcherRun {
+  id: string;
+  status: WatcherStatus;
+  branch: string | null;
+  pr_url: string | null;
+  summary: string;
+  tests_passed: boolean | null;
+  merged_at: string | null;
+  created_at: string;
+}
 
 interface SystemAlert {
   id: string;
@@ -38,6 +57,13 @@ interface SystemAlert {
   occurrences: number;
   notified_at: string | null;
   resolved_at: string | null;
+  watcher_runs: WatcherRun[] | null;
+}
+
+function latestWatcherRun(alert: SystemAlert): WatcherRun | null {
+  const runs = alert.watcher_runs;
+  if (!runs || runs.length === 0) return null;
+  return [...runs].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 }
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -71,6 +97,7 @@ export function AlertsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
   const load = useCallback(async (includeResolved: boolean) => {
     setLoading(true);
@@ -116,6 +143,11 @@ export function AlertsPanel() {
         { event: '*', schema: 'public', table: 'system_alerts' },
         () => void load(showResolved),
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'system_alert_watcher_runs' },
+        () => void load(showResolved),
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
@@ -142,6 +174,26 @@ export function AlertsPanel() {
     }
   };
 
+  const acceptFix = async (alert: SystemAlert) => {
+    setAcceptingId(alert.id);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/alerts/${alert.id}/accept-fix`, {
+        method: 'POST',
+      });
+      const body = await readResponseJson<{ error?: string }>(response);
+      if (!response.ok)
+        throw new Error(body.error ?? 'No se pudo fusionar el PR');
+      await load(showResolved);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : 'No se pudo fusionar el PR',
+      );
+    } finally {
+      setAcceptingId(null);
+    }
+  };
+
   const openCount = alerts.filter((a) => !a.resolved_at).length;
 
   return (
@@ -160,7 +212,9 @@ export function AlertsPanel() {
             </CardTitle>
             <CardDescription>
               Fallas de cron, credenciales inválidas y anomalías detectadas por
-              el sistema — el mismo sink que alimenta Telegram.
+              el sistema. El watcher automático las investiga cada hora — la
+              columna &quot;Watcher&quot; muestra su diagnóstico o el PR que
+              propuso.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -198,6 +252,7 @@ export function AlertsPanel() {
               <TableHead>Empresa</TableHead>
               <TableHead>Ocurrencias</TableHead>
               <TableHead>Última vez</TableHead>
+              <TableHead>Watcher</TableHead>
               <TableHead className="text-right">Acción</TableHead>
             </TableRow>
           </TableHeader>
@@ -228,6 +283,13 @@ export function AlertsPanel() {
                 <TableCell>{accountName(alert) ?? '—'}</TableCell>
                 <TableCell>{alert.occurrences}</TableCell>
                 <TableCell>{formatDateTime(alert.last_seen_at)}</TableCell>
+                <TableCell>
+                  <WatcherCell
+                    run={latestWatcherRun(alert)}
+                    accepting={acceptingId === alert.id}
+                    onAccept={() => void acceptFix(alert)}
+                  />
+                </TableCell>
                 <TableCell className="text-right">
                   {alert.resolved_at ? (
                     <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
@@ -250,7 +312,7 @@ export function AlertsPanel() {
             {!loading && alerts.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-muted-foreground py-8 text-center"
                 >
                   {showResolved
@@ -263,5 +325,60 @@ export function AlertsPanel() {
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+function WatcherCell({
+  run,
+  accepting,
+  onAccept,
+}: {
+  run: WatcherRun | null;
+  accepting: boolean;
+  onAccept: () => void;
+}) {
+  if (!run) {
+    return <span className="text-muted-foreground text-xs">—</span>;
+  }
+
+  if (run.status === 'diagnosed_only') {
+    return (
+      <span
+        className="text-muted-foreground inline-flex max-w-56 items-center gap-1 truncate text-xs"
+        title={run.summary}
+      >
+        <Bot className="size-3.5 shrink-0" />
+        Diagnóstico: {run.summary}
+      </span>
+    );
+  }
+
+  if (run.merged_at) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+        <CheckCircle2 className="size-3.5" />
+        Fusionado
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {run.pr_url ? (
+        <a
+          href={run.pr_url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary inline-flex items-center gap-1 text-xs hover:underline"
+        >
+          <Bot className="size-3.5" />
+          Ver PR
+          <ExternalLink className="size-3" />
+        </a>
+      ) : null}
+      <Button size="sm" disabled={accepting} onClick={onAccept}>
+        {accepting ? 'Fusionando…' : 'Aceptar'}
+      </Button>
+    </div>
   );
 }
