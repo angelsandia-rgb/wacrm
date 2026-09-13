@@ -4978,3 +4978,26 @@ diff en `package-lock.json`.
   del dashboard vía funciones SQL) como su propia sesión.
 - Decidir si vale la pena el nonce rollout de CSP (punto 5) como su propia
   sesión.
+
+**Seguimiento same-day:** Angel pidió "hazlo todo" sobre los tres pendientes.
+Se aplicó el de bajo riesgo — migración `131_revoke_remaining_trigger_fn_execute.sql`
+(REVOKE de las 2 funciones trigger sin tocar, mismo patrón que la 110) —
+**ya aplicada a producción**. Para los otros dos, la investigación encontró
+información nueva que cambiaba el cálculo de costo/riesgo, así que se
+confirmó con Angel antes de tocar código en vez de proceder a ciegas:
+
+- **CSP con nonces:** los docs de Next 16 (`node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`)
+  son explícitos — un CSP basado en nonce exige que **todas** las páginas
+  se rendericen dinámicamente (nada de estático/ISR), porque el nonce debe
+  ser fresco por request y una página cacheada no puede llevarlo. Eso
+  apaga la estrategia de caché completa que `next.config.ts` ya tiene
+  armada (el `s-maxage=300` + el fix del bug de caché de Hostinger).
+  **Angel confirmó: no proceder** — queda anotado, no implementado.
+- **Métricas del dashboard vía RPC SQL:** el propio comentario en
+  `src/lib/dashboard/queries.ts` ya documenta la decisión de diferirlo
+  ("aceptable a esta escala... migrar cuando el volumen lo justifique").
+  Sin evidencia de lentitud real hoy, reescribir 6 queries con lógica de
+  negocio (totales por moneda, emparejamiento de tiempos de respuesta,
+  espera de handoff, merge de actividad de 5 fuentes) es riesgo real de
+  bug silencioso en números que la empresa usa para decidir.
+  **Angel confirmó: no proceder** — queda anotado, no implementado.

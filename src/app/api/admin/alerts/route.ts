@@ -14,7 +14,7 @@ import { platformAdminClient } from "@/lib/platform/admin-client";
  * already has one restricting SELECT to `is_platform_admin()`.
  *
  * Each alert is embedded with its `system_alert_watcher_runs` (migration
- * 131) — what the hourly "SANDIA alert watcher" cloud routine found when
+ * 134) — what the hourly "SANDIA alert watcher" cloud routine found when
  * it investigated: a PR it opened, a diagnosis-only note, or nothing yet.
  */
 export async function GET(request: Request) {

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { runClinicReminderSweep } from '@/lib/clinic/reminders-sweep'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
+import { describeError } from '@/lib/observability/describe-error'
 
 /**
  * Clinic appointment confirmations + visit follow-ups. Hit on a
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     })
     return NextResponse.json(result)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = describeError(err)
     console.error('[clinic/reminders/cron] sweep failed:', message)
     await recordHeartbeat('clinic_reminders_cron', { status: 'error', detail: message })
     return NextResponse.json({ error: message }, { status: 500 })

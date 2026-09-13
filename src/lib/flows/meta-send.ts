@@ -17,6 +17,7 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
+import { describeError } from '@/lib/observability/describe-error'
 import {
   engineSendInstagramText,
   engineSendInstagramMedia,
@@ -220,7 +221,7 @@ export async function engineSendText(
       lastError = null
       break
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (!isRecipientNotAllowedError(msg)) throw err
       lastError = err
     }
@@ -388,7 +389,7 @@ export async function engineSendMedia(
       lastError = null
       break
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (!isRecipientNotAllowedError(msg)) throw err
       lastError = err
     }
@@ -672,7 +673,7 @@ async function sendInteractiveViaMeta(
       lastError = null
       break
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = describeError(err)
       if (!isRecipientNotAllowedError(msg)) throw err
       lastError = err
     }
