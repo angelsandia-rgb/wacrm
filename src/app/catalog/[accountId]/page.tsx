@@ -142,6 +142,23 @@ function reservationSlugFromName(name: string | null): ReservationSlug | null {
   return null;
 }
 
+/** Whether this product needs the dates/availability flow — the
+ *  "Consultar disponibilidad" button that opens the detail dialog's
+ *  check-in/check-out calendar — instead of a plain add-to-cart
+ *  quantity stepper on the grid card. True for rooms (their own
+ *  per-night rates make them a room already), and, in the hotel
+ *  vertical, also for packages: a package still needs a stay's dates
+ *  even though it's priced as a flat bundle rather than per night.
+ *  Mirrors the `usesStayDates` categories used inside the detail
+ *  dialog, so a package never falls back to a quantity-only cart line
+ *  that skips date collection entirely. */
+function needsAvailabilityFlow(p: CatalogProduct, vertical: string): boolean {
+  if (isRoom(p)) return true;
+  if (vertical !== 'hotel') return false;
+  const slug = reservationSlugFromName(p.category);
+  return slug === 'habitaciones' || slug === 'paquetes';
+}
+
 /** Cart line identity: a product at its base price, or at one of its
  *  priced options — each tracked as an independent quantity. */
 function lineKey(productId: string, optionId: string | null): string {
@@ -848,7 +865,7 @@ function PublicCatalogPageInner() {
                     </div>
                   </button>
                   <div className="pt-3">
-                    {isRoom(product) ? (
+                    {needsAvailabilityFlow(product, data.industry_vertical) ? (
                       <button
                         type="button"
                         onClick={() => {
