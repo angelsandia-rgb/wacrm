@@ -1092,28 +1092,28 @@ function PublicCatalogPageInner() {
                         <div className="grid grid-cols-2 gap-3">
                           {usesStayDates ? (
                             <>
-                              <label className="flex flex-col gap-1 text-xs text-[#284d53]/75">
+                              <label className="flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75">
                                 Entrada
                                 <input
                                   type="date"
                                   value={stayCheckIn}
                                   onChange={(e) => setStayCheckIn(e.target.value)}
-                                  className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                                  className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                                 />
                               </label>
-                              <label className="flex flex-col gap-1 text-xs text-[#284d53]/75">
+                              <label className="flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75">
                                 Salida
                                 <input
                                   type="date"
                                   value={stayCheckOut}
                                   min={stayCheckIn || undefined}
                                   onChange={(e) => setStayCheckOut(e.target.value)}
-                                  className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                                  className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                                 />
                               </label>
                             </>
                           ) : (
-                            <label className="col-span-2 flex flex-col gap-1 text-xs text-[#284d53]/75">
+                            <label className="col-span-2 flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75">
                               {selectedHotelCategory === 'eventos'
                                 ? 'Fecha del evento'
                                 : 'Fecha de uso'}
@@ -1121,12 +1121,12 @@ function PublicCatalogPageInner() {
                                 type="date"
                                 value={resvUseDate}
                                 onChange={(e) => setResvUseDate(e.target.value)}
-                                className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                                className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                               />
                             </label>
                           )}
                           <label
-                            className={`flex flex-col gap-1 text-xs text-[#284d53]/75 ${usesMinutes ? '' : 'col-span-2'}`}
+                            className={`flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75 ${usesMinutes ? '' : 'col-span-2'}`}
                           >
                             Personas
                             <input
@@ -1139,11 +1139,11 @@ function PublicCatalogPageInner() {
                                   Math.max(1, Math.min(200, Number(e.target.value) || 1)),
                                 )
                               }
-                              className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                              className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                             />
                           </label>
                           {usesMinutes && (
-                            <label className="flex flex-col gap-1 text-xs text-[#284d53]/75">
+                            <label className="flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75">
                               Minutos
                               <input
                                 type="number"
@@ -1152,21 +1152,21 @@ function PublicCatalogPageInner() {
                                 value={resvMinutes}
                                 onChange={(e) => setResvMinutes(e.target.value)}
                                 placeholder="60"
-                                className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                                className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                               />
                             </label>
                           )}
-                          <label className="col-span-2 flex flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
+                          <label className="col-span-2 flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
                             Tu nombre
                             <input
                               type="text"
                               value={name}
                               onChange={(e) => setName(e.target.value)}
                               autoComplete="name"
-                              className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                              className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                             />
                           </label>
-                          <label className="col-span-2 flex flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
+                          <label className="col-span-2 flex min-w-0 flex-col gap-1 text-xs text-[#284d53]/75 sm:col-span-1">
                             Tu teléfono
                             <input
                               type="tel"
@@ -1175,7 +1175,7 @@ function PublicCatalogPageInner() {
                               onChange={(e) => setPhone(e.target.value)}
                               autoComplete="tel"
                               placeholder="+502 5555 5555"
-                              className="h-10 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
+                              className="h-10 w-full min-w-0 rounded-lg border border-[#082f38]/25 bg-white px-2 text-sm text-[#062f38] sm:rounded-none"
                             />
                           </label>
                         </div>
