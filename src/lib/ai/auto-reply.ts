@@ -2423,6 +2423,7 @@ async function autoCreateQuoteFromChat(args: {
       created.quote.id,
       conversationId,
       proposal.format === 'text',
+      true,
     )
   } catch (err) {
     if (err instanceof SendQuoteError) {
