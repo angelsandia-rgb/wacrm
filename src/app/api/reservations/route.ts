@@ -25,6 +25,8 @@ export async function GET(request: Request) {
     if (category) q = q.eq('category', category)
     const status = searchParams.get('status')
     if (status) q = q.eq('status', status)
+    const conversationId = searchParams.get('conversation_id')
+    if (conversationId) q = q.eq('conversation_id', conversationId)
     const { data, error } = await q
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ reservations: data ?? [] })

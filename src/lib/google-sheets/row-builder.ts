@@ -40,7 +40,7 @@ export interface SheetRow {
 
 type Db = SupabaseClient
 
-function cat(base: string, suffix: string): string {
+export function cat(base: string, suffix: string): string {
   return suffix ? `${base} - ${suffix}` : base
 }
 
@@ -395,7 +395,7 @@ async function buildBriefRow(
 // never rewrites it.
 // ------------------------------------------------------------
 
-const RESERVATION_TAB_LABEL: Record<string, string> = {
+export const RESERVATION_TAB_LABEL: Record<string, string> = {
   habitaciones: 'Habitaciones',
   spa: 'Spa',
   actividades: 'Actividades al aire libre',

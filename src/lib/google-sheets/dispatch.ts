@@ -55,7 +55,10 @@ export async function dispatchToGoogleSheets(
     await ensureTab(token, config.spreadsheet_id, row.tab)
 
     if (row.rowRef) {
-      await writeReservationRow(db, config, token, accountId, row)
+      const statusChanged =
+        typeof data === 'object' && data !== null &&
+        (data as Record<string, unknown>).status_changed === true
+      await writeReservationRow(db, config, token, accountId, row, statusChanged)
       return
     }
 
@@ -96,7 +99,10 @@ export async function dispatchToGoogleSheets(
  * `reservation.updated` — one row per request, rewritten in place as
  * fields come in. First write appends and stores the row number on
  * `reservation_requests.sheet_row`; later writes overwrite that row,
- * leaving the trailing hotel-filled "Aprobación" column alone.
+ * leaving the trailing hotel-filled "Aprobación" column alone — UNLESS
+ * `statusChanged` (an explicit approve/deny from the CRM, not the AI/
+ * catalog filling in booking details), in which case that column is
+ * written too, so the CRM button is the one thing allowed to move it.
  */
 async function writeReservationRow(
   db: ReturnType<typeof supabaseAdmin>,
@@ -104,6 +110,7 @@ async function writeReservationRow(
   token: string,
   accountId: string,
   row: SheetRow,
+  statusChanged: boolean,
 ): Promise<void> {
   if (!row.rowRef) return
   const spreadsheetId = config.spreadsheet_id!
@@ -138,8 +145,10 @@ async function writeReservationRow(
     return
   }
 
-  // Overwrite the data columns only — never the last ("Aprobación").
-  await writeRow(token, spreadsheetId, row.tab, existingRow, row.values.slice(0, -1))
+  // Overwrite the data columns only — never the last ("Aprobación"),
+  // unless this write is the explicit approve/deny action itself.
+  const values = statusChanged ? row.values : row.values.slice(0, -1)
+  await writeRow(token, spreadsheetId, row.tab, existingRow, values)
   await db
     .from('google_sheets_config')
     .update({ last_write_at: new Date().toISOString() })
