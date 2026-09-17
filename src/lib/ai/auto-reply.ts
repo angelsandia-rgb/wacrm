@@ -99,6 +99,13 @@ const CUSTOMER_ASKS_FOR_CATALOG_RE = /\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\
  *  rejecting "menudo". */
 const CUSTOMER_ASKS_FOR_MENU_RE = /\bmen[uú](?![a-zà-ÿ])|\bla\s+carta\b/i
 
+/** The MODEL's own reply already promising a specific photo ("le
+ *  comparto la foto de la Suite Clásica", "aquí tiene la imagen de..."),
+ *  used only to detect when it forgot the `send_photo` marker for a
+ *  promise it already made — see `guessPromisedProductName`. */
+const PHOTO_PROMISE_RE =
+  /\b(comparto|env[ií]o|le env[ií]o|aqu[ií]\s+tiene|aqu[ií]\s+est[aá]|le dejo)\b[^.!?\n]{0,25}\b(foto|imagen|fotograf[ií]a)/i
+
 /** A public-catalog URL in either shape: the long `/catalog/<uuid>`
  *  form or the short `/c/<slug>` alias (migration 116), with or without
  *  the signed `?c=` query. The `send_catalog` action delivers the
@@ -756,6 +763,41 @@ export async function dispatchInboundToAiReply(
       })
     }
 
+    // Same self-heal idea, one step more targeted: the customer's own
+    // product-name phrasing is too free-form to guess a photo from
+    // safely, but once the MODEL's OWN reply text already promises a
+    // specific one ("le comparto la foto de la Suite Clásica") without
+    // the marker, fulfilling that promise can't introduce a new false
+    // claim — it was already made. Real incident (2026-09-17, Villa San
+    // Ricardo): three room-photo promises in one chat, zero
+    // `send_photo` ai_action_log rows for any of them. Only fires when
+    // exactly one active product plausibly matches the promised text —
+    // see `guessPromisedProductName` — never guesses between several.
+    let resolvedSendPhotoProductName = sendPhotoProductName
+    if (!sendPhotoProductName && !quickReplyId && PHOTO_PROMISE_RE.test(text)) {
+      const guessed = await guessPromisedProductName(db, accountId, text).catch(() => null)
+      if (guessed) {
+        resolvedSendPhotoProductName = guessed
+        console.warn(
+          `[ai auto-reply] conversation ${conversationId}: model promised a photo of "${guessed}" without the marker — sending it anyway`,
+        )
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI model failed to emit send_photo on a turn where its own reply promised one (auto-corrected)',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            model: config.model,
+            product_name: guessed,
+          },
+          dedupKey: `ai_marker_missed_send_photo:${accountId}`,
+          accountId,
+          throttleMinutes: 360,
+        })
+      }
+    }
+
     // The provider call succeeded, so the key is valid again — clear any
     // open "AI provider rejected the key" alert for this account.
     void resolveSystemAlert(`ai_key_invalid:${accountId}`)
@@ -1181,14 +1223,14 @@ export async function dispatchInboundToAiReply(
     }
 
     let photoSentProductId: string | null = null
-    if (sendPhotoProductName) {
+    if (resolvedSendPhotoProductName) {
       try {
         photoSentProductId = await autoSendProductPhoto({
           db,
           accountId,
           configOwnerUserId,
           conversationId,
-          productName: sendPhotoProductName,
+          productName: resolvedSendPhotoProductName,
         })
       } catch (err) {
         // Same reasoning as send_catalog above: never rethrow, always
@@ -2386,6 +2428,42 @@ async function autoSetContactName(args: {
  * id (so the caller can follow up with `sendHotelBookingNudge`), or
  * `null` for either no-op case above.
  */
+/** Lowercases, trims, and drops a trailing parenthetical qualifier
+ *  ("Suite Clásica (Individual o Pareja)" -> "suite clásica") so a
+ *  shortened product name still resolves to the right catalog row. */
+function normalizeProductName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim()
+}
+
+/** Same self-heal reasoning as the send_catalog one in the main
+ *  dispatch function: too risky to guess a product from the
+ *  CUSTOMER's free-form wording, but once the model's own reply text
+ *  already promises a specific one, matching it is just fulfilling an
+ *  already-made promise. Returns a name only when exactly one active
+ *  product's (normalized) name appears in the reply text — several
+ *  matches or zero both return null rather than guess. */
+async function guessPromisedProductName(
+  db: SupabaseClient,
+  accountId: string,
+  replyText: string,
+): Promise<string | null> {
+  const { data: products } = await db
+    .from('products')
+    .select('name')
+    .eq('account_id', accountId)
+    .eq('is_active', true)
+  const lowerText = replyText.toLowerCase()
+  const candidates = ((products ?? []) as { name: string }[]).filter((p) => {
+    const normalized = normalizeProductName(p.name)
+    return normalized.length >= 4 && lowerText.includes(normalized)
+  })
+  return candidates.length === 1 ? candidates[0].name : null
+}
+
 async function autoSendProductPhoto(args: {
   db: SupabaseClient
   accountId: string
@@ -2400,14 +2478,34 @@ async function autoSendProductPhoto(args: {
     .select('id, name, image_url, image_urls')
     .eq('account_id', accountId)
     .eq('is_active', true)
-  const product = (
-    (products ?? []) as {
-      id: string
-      name: string
-      image_url: string | null
-      image_urls: string[] | null
-    }[]
-  ).find((p) => p.name.trim().toLowerCase() === productName.trim().toLowerCase())
+  const productList = (products ?? []) as {
+    id: string
+    name: string
+    image_url: string | null
+    image_urls: string[] | null
+  }[]
+
+  let product = productList.find(
+    (p) => p.name.trim().toLowerCase() === productName.trim().toLowerCase(),
+  )
+  if (!product) {
+    // The model was told to copy the EXACT catalog name, but a
+    // trailing qualifier ("(Individual o Pareja)") is an easy thing to
+    // drop when the customer's own phrasing never mentioned it either.
+    const target = normalizeProductName(productName)
+    product = productList.find((p) => normalizeProductName(p.name) === target)
+  }
+  if (!product && productName.trim().length >= 4) {
+    // Last resort: containment either direction. Only applied when it
+    // resolves to exactly one candidate, so this can't silently pick
+    // the wrong room among several similarly-named ones.
+    const targetLower = productName.trim().toLowerCase()
+    const candidates = productList.filter((p) => {
+      const nameLower = p.name.trim().toLowerCase()
+      return nameLower.includes(targetLower) || targetLower.includes(nameLower)
+    })
+    if (candidates.length === 1) product = candidates[0]
+  }
   if (!product) {
     console.warn(`[ai auto-reply] send_photo: no active product matches "${productName}"`)
     return null
