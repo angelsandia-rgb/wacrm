@@ -36,6 +36,26 @@ export async function getSpreadsheetMeta(
   }
 }
 
+/** Read one A1 range's cell values (row-major, like the Sheets UI
+ *  copy-paste shape). Missing/short rows are NOT padded — a row with
+ *  trailing blank cells may simply be shorter than the range's width. */
+export async function getValues(
+  accessToken: string,
+  spreadsheetId: string,
+  range: string,
+): Promise<(string | number | null)[][]> {
+  const res = await googleFetch(
+    `${SHEETS_BASE}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new GoogleSheetsError(`Sheets read failed (${res.status}): ${body.slice(0, 300)}`, 502)
+  }
+  const json = (await res.json().catch(() => null)) as { values?: unknown[][] } | null
+  return (json?.values ?? []) as (string | number | null)[][]
+}
+
 /** Create a tab if it doesn't already exist. No-op when it does. */
 export async function ensureTab(
   accessToken: string,
