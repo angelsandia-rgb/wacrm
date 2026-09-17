@@ -91,6 +91,12 @@ export async function PATCH(
   await dispatchWebhookEvent(admin, ctx.accountId, 'reservation.updated', {
     reservation_id: id,
     source: 'manual',
+    // Tells `writeReservationRow` (google-sheets/dispatch.ts) this write
+    // is an explicit approve/deny from the CRM, so it's allowed to write
+    // the Sheet's "Aprobación" column — normally left alone so an AI/
+    // catalog field update never clobbers the hotel's own hand-typed
+    // approval note.
+    status_changed: 'status' in patch,
   })
   return NextResponse.json({ reservation: data })
 }

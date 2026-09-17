@@ -2801,6 +2801,12 @@
       "total": "합계"
     }
   },
+  "HotelReservations": {
+    "title": "요청",
+    "approve": "승인",
+    "deny": "거절",
+    "guests": "{count}명"
+  },
   "Clinic": {
     "patients": {
       "title": "환자",

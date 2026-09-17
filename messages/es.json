@@ -2801,6 +2801,12 @@
       "total": "Total"
     }
   },
+  "HotelReservations": {
+    "title": "Solicitudes",
+    "approve": "Aprobar",
+    "deny": "Rechazar",
+    "guests": "{count} {count, plural, =1 {persona} other {personas}}"
+  },
   "Clinic": {
     "patients": {
       "title": "Pacientes",
