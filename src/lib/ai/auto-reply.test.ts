@@ -38,6 +38,10 @@ const h = vi.hoisted(() => ({
     /** Prior successful `schedule_appointment` rows the idempotency guard reads back. */
     priorScheduleBookings: [] as { input: Record<string, unknown> }[],
     pipeline: null as { id: string } | null,
+    /** All of the account's pipelines (id + name), for
+     *  `resolveHotelCategoryPipeline`'s name-matched lookup — empty means
+     *  "no per-category pipeline", falling back to `pipeline` above. */
+    pipelines: [] as { id: string; name: string }[],
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
     account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null },
     accountError: null as { code: string; message: string } | null,
@@ -226,14 +230,20 @@ vi.mock('./admin-client', () => ({
         }
       }
       if (table === 'pipelines') {
-        // .select('id').eq().order().limit().maybeSingle() → account's
-        // default (oldest) pipeline.
-        const chain = {
+        // Two shapes share this table:
+        //  - .select('id').eq().order().limit().maybeSingle() →
+        //    loadDefaultPipeline (account's oldest pipeline).
+        //  - .select('id, name').eq(...), awaited directly (no
+        //    .maybeSingle) → resolveHotelCategoryPipeline's full list,
+        //    matched by name against the active reservation category.
+        const chain: Record<string, unknown> = {
           select: () => chain,
           eq: () => chain,
           order: () => chain,
           limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: h.state.pipeline, error: null }),
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve({ data: h.state.pipelines ?? [], error: null }).then(onFulfilled),
         }
         return chain
       }
@@ -347,6 +357,7 @@ vi.mock('./admin-client', () => ({
           select: () => chain,
           eq: () => chain,
           order: () => chain,
+          limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: h.state.reservationRow, error: null }),
           then: (onFulfilled: (v: unknown) => unknown) =>
             Promise.resolve({ data: h.state.activeReservationRows, error: null }).then(onFulfilled),
@@ -480,6 +491,7 @@ beforeEach(() => {
   h.state.stages = []
   h.state.aiActionLogInserts = []
   h.state.pipeline = null
+  h.state.pipelines = []
   h.state.contact = { lead_temperature: null, name: 'Juan Pérez', phone: '50255551234', email: null }
   h.state.account = { default_currency: 'USD' }
   h.state.accountError = null
@@ -1357,6 +1369,57 @@ describe('dispatchInboundToAiReply — autonomous create_deal', () => {
       'deal.stage_changed',
       expect.objectContaining({ deal_id: 'new-deal-1', source: 'auto_reply_autonomous' }),
     )
+  })
+
+  it('routes a new deal to the pipeline matching this conversation\'s active reservation category, not the default one', async () => {
+    h.state.openDeal = null
+    h.state.pipeline = { id: 'pipe-default' } // would be used if category routing found nothing
+    h.state.pipelines = [
+      { id: 'pipe-default', name: 'Ventas' },
+      { id: 'pipe-spa', name: 'Spa' },
+    ]
+    h.state.reservationRow = { category: 'spa' }
+    h.state.stages = [{ id: 'stage-a', name: 'Cotización' }]
+    h.generateReply.mockResolvedValue({
+      text: 'ok',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: 'Cotización',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.dealInserts[0]).toMatchObject({ pipeline_id: 'pipe-spa' })
+  })
+
+  it('falls back to the default pipeline when the active category has no matching pipeline', async () => {
+    h.state.openDeal = null
+    h.state.pipeline = { id: 'pipe-default' }
+    h.state.pipelines = [{ id: 'pipe-default', name: 'Ventas' }] // no "Eventos" pipeline
+    h.state.reservationRow = { category: 'eventos' }
+    h.state.stages = [{ id: 'stage-a', name: 'Cotización' }]
+    h.generateReply.mockResolvedValue({
+      text: 'ok',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: 'Cotización',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.dealInserts[0]).toMatchObject({ pipeline_id: 'pipe-default' })
+  })
+
+  it('falls back to the default pipeline for a non-hotel account (no active reservation category at all)', async () => {
+    h.state.openDeal = null
+    h.state.pipeline = { id: 'pipe-default' }
+    h.state.pipelines = [{ id: 'pipe-default', name: 'Ventas' }]
+    h.state.reservationRow = null
+    h.state.stages = [{ id: 'stage-a', name: 'Cotización' }]
+    h.generateReply.mockResolvedValue({
+      text: 'ok',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: 'Cotización',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.dealInserts[0]).toMatchObject({ pipeline_id: 'pipe-default' })
   })
 })
 
