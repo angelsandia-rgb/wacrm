@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     if (!limit.success) return rateLimitResponse(limit);
 
     const body = (await request.json().catch(() => null)) as
-      | { newOwnerUserId?: unknown }
+      | { newOwnerUserId?: unknown; demoteToRole?: unknown }
       | null;
     const newOwnerUserId = body?.newOwnerUserId;
 
@@ -81,8 +81,26 @@ export async function POST(request: Request) {
       );
     }
 
+    // What the OUTGOING owner becomes — defaults to 'admin' (migration
+    // 018's original behavior) when omitted. 'owner' is rejected here
+    // too, even though the RPC also guards it, so the bad-input case
+    // never round-trips to the database.
+    const demoteToRole = body?.demoteToRole;
+    if (
+      demoteToRole !== undefined &&
+      demoteToRole !== "admin" &&
+      demoteToRole !== "agent" &&
+      demoteToRole !== "viewer"
+    ) {
+      return NextResponse.json(
+        { error: "'demoteToRole' must be one of 'admin', 'agent', 'viewer'" },
+        { status: 400 },
+      );
+    }
+
     const { error } = await ctx.supabase.rpc("transfer_account_ownership", {
       p_new_owner_user_id: newOwnerUserId,
+      ...(demoteToRole !== undefined ? { p_demote_to_role: demoteToRole } : {}),
     });
 
     if (error) return rpcErrorToResponse(error);

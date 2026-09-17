@@ -1928,7 +1928,14 @@
       "removeDialogDesc": "¿Quitar a <bold>{name}</bold> de la cuenta? Se cerrará su sesión en esta cuenta y se le dará una cuenta personal nueva en su próximo inicio de sesión. Su acceso de inicio de sesión no se elimina.",
       "cancel": "Cancelar",
       "removing": "Quitando...",
-      "removeBtn": "Quitar miembro"
+      "removeBtn": "Quitar miembro",
+      "transferOwnership": "Hacer propietario",
+      "transferDialogTitle": "Transferir propiedad de la cuenta",
+      "transferDialogDesc": "¿Transferir la propiedad de esta cuenta a <bold>{name}</bold>? Se convertirá en el propietario de inmediato — después de esto, solo el nuevo propietario podrá revertirlo, tú no.",
+      "transferYourNewRole": "Tu nuevo rol después de la transferencia",
+      "transferBtn": "Transferir propiedad",
+      "transferring": "Transfiriendo...",
+      "transferredToast": "Propiedad transferida a {name}"
     },
     "invite": {
       "inviteCreated": "Invitación creada",
