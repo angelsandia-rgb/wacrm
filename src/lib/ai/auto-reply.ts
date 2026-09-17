@@ -566,7 +566,7 @@ export async function dispatchInboundToAiReply(
       // not prevent the other sources from grounding the reply.
       const enrichment = await Promise.allSettled([
         retrieveKnowledge(db, accountId, config, latestUserMessage(messages)),
-        loadDealStageOptions({ db, accountId, contactId }),
+        loadDealStageOptions({ db, accountId, contactId, conversationId }),
         loadCatalogContext(db, accountId),
         loadQuickReplyContext(db, accountId),
         loadKnownContactFacts(db, accountId, contactId),
@@ -1142,7 +1142,7 @@ export async function dispatchInboundToAiReply(
       }
     } else if (moveToStageName) {
       try {
-        await autoMoveDealStage({ db, accountId, contactId, configOwnerUserId, stageName: moveToStageName })
+        await autoMoveDealStage({ db, accountId, contactId, conversationId, configOwnerUserId, stageName: moveToStageName })
       } catch (err) {
         console.error('[ai auto-reply] autonomous move_deal failed:', err)
       }
@@ -1841,8 +1841,9 @@ async function loadDealStageOptions(args: {
   db: SupabaseClient
   accountId: string
   contactId: string
+  conversationId: string
 }): Promise<{ hasDeal: boolean; currentStageName: string | null; otherStageNames: string[] } | null> {
-  const { db, accountId, contactId } = args
+  const { db, accountId, contactId, conversationId } = args
 
   const { data: deal } = await db
     .from('deals')
@@ -1865,7 +1866,9 @@ async function loadDealStageOptions(args: {
     return { hasDeal: true, currentStageName: current.name, otherStageNames }
   }
 
-  const pipeline = await loadDefaultPipeline(db, accountId)
+  const pipeline =
+    (await resolveHotelCategoryPipeline(db, accountId, conversationId)) ??
+    (await loadDefaultPipeline(db, accountId))
   if (!pipeline) return null
 
   const preSale = await loadPreSaleStages(db, pipeline.id)
@@ -1878,7 +1881,8 @@ async function loadDealStageOptions(args: {
 /**
  * "The account's default pipeline" — oldest one, same convention
  * `createQuote()` uses for a brand-new deal with no pipeline specified.
- * Shared by `loadDealStageOptions` and `autoMoveDealStage` so a
+ * Shared by `loadDealStageOptions` and `autoMoveDealStage` as the
+ * fallback when `resolveHotelCategoryPipeline` finds nothing, so a
  * newly-created deal always lands in the same pipeline the model was
  * shown stage names from.
  */
@@ -1894,6 +1898,63 @@ async function loadDefaultPipeline(
     .limit(1)
     .maybeSingle()
   return (data as { id: string } | null) ?? null
+}
+
+/**
+ * A hotel account may run one pipeline PER reservation category
+ * (Angel's explicit product decision, 2026-09-17: "un pipeline por
+ * categoría", knowingly trading the single-board overview for
+ * per-category boards) instead of one shared pipeline. When it does,
+ * a deal should be created/found in the pipeline matching what this
+ * conversation is actually about — never always "the oldest pipeline",
+ * which would dump every category into whichever one happened to be
+ * created first.
+ *
+ * Resolves the category from this conversation's most recently
+ * touched `reservation_requests` row (the same category the
+ * `record_reservation` marker is already tracking — see
+ * `autoRecordReservation`), then matches it against the account's
+ * pipelines by NAME using the same fuzzy matching
+ * `categorySlugFromName` already applies to product category names —
+ * so a pipeline literally named "Habitaciones", or a rename that still
+ * reads the same (e.g. "Reservas de habitación"), both resolve.
+ *
+ * Returns `null` — meaning "fall back to `loadDefaultPipeline`" — for
+ * a non-hotel account (no `reservation_requests` rows exist), a
+ * conversation with no reservation captured yet, or one whose category
+ * has no matching pipeline (the account kept a single shared pipeline,
+ * or hasn't created one for that category yet). Fails open on any
+ * error for the same reason: a missing pipeline should never block
+ * deal creation, just fall back to the old single-pipeline behavior.
+ */
+async function resolveHotelCategoryPipeline(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+): Promise<{ id: string } | null> {
+  try {
+    const { data: row } = await db
+      .from('reservation_requests')
+      .select('category')
+      .eq('account_id', accountId)
+      .eq('conversation_id', conversationId)
+      .eq('is_active_build', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle<{ category: string }>()
+    if (!row?.category) return null
+
+    const { data: pipelines } = await db
+      .from('pipelines')
+      .select('id, name')
+      .eq('account_id', accountId)
+    for (const p of (pipelines ?? []) as { id: string; name: string }[]) {
+      if (categorySlugFromName(p.name) === row.category) return { id: p.id }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -1988,10 +2049,11 @@ async function autoMoveDealStage(args: {
   db: SupabaseClient
   accountId: string
   contactId: string
+  conversationId: string
   configOwnerUserId: string
   stageName: string
 }): Promise<void> {
-  const { db, accountId, contactId, configOwnerUserId, stageName } = args
+  const { db, accountId, contactId, conversationId, configOwnerUserId, stageName } = args
 
   const { data: deal, error: dealErr } = await db
     .from('deals')
@@ -2040,7 +2102,9 @@ async function autoMoveDealStage(args: {
     return
   }
 
-  const pipeline = await loadDefaultPipeline(db, accountId)
+  const pipeline =
+    (await resolveHotelCategoryPipeline(db, accountId, conversationId)) ??
+    (await loadDefaultPipeline(db, accountId))
   if (!pipeline) return
 
   const stages = await loadPreSaleStages(db, pipeline.id)
