@@ -97,7 +97,7 @@ export async function POST(request: Request) {
 
     const { data: conversation, error: convErr } = await supabase
       .from('conversations')
-      .select('id, contact_id, status')
+      .select('id, contact_id, status, ai_context_reset_at')
       .eq('id', conversationId)
       .eq('account_id', accountId)
       .maybeSingle()
@@ -115,7 +115,13 @@ export async function POST(request: Request) {
       )
     }
 
-    const messages = await buildConversationContext(supabase, conversationId)
+    const messages = await buildConversationContext(
+      supabase,
+      conversationId,
+      undefined,
+      undefined,
+      conversation.ai_context_reset_at,
+    )
     if (messages.length === 0) {
       return NextResponse.json({ suggestion: emptySuggestion('No messages to analyze yet.') })
     }

@@ -21,7 +21,7 @@ const REAL_MESSAGES_COLUMNS = new Set([
  *  typo'd / non-existent column fails the test instead of prod. */
 function fakeDb(
   rows: unknown[],
-  filters?: { includedTypes?: string[]; selectedColumns?: string[] },
+  filters?: { includedTypes?: string[]; selectedColumns?: string[]; sinceISO?: string },
 ): SupabaseClient {
   const chain = {
     from: () => chain,
@@ -44,6 +44,10 @@ function fakeDb(
     eq: () => chain,
     in: (_column: string, values: string[]) => {
       if (filters) filters.includedTypes = values
+      return chain
+    },
+    gt: (_column: string, value: string) => {
+      if (filters) filters.sinceISO = value
       return chain
     },
     order: () => chain,
@@ -121,6 +125,39 @@ describe('buildConversationContext', () => {
       'conv-1',
     )
     expect(out).toEqual([{ role: 'user', content: 'real' }])
+  })
+
+  describe('ai_context_reset_at cutoff', () => {
+    it('does not filter by created_at when sinceISO is omitted', async () => {
+      const filters: { sinceISO?: string } = {}
+      await buildConversationContext(fakeDb([{ sender_type: 'customer', content_text: 'hi' }], filters), 'conv-1')
+      expect(filters.sinceISO).toBeUndefined()
+    })
+
+    it('does not filter when sinceISO is null (never reset)', async () => {
+      const filters: { sinceISO?: string } = {}
+      await buildConversationContext(
+        fakeDb([{ sender_type: 'customer', content_text: 'hi' }], filters),
+        'conv-1',
+        undefined,
+        undefined,
+        null,
+      )
+      expect(filters.sinceISO).toBeUndefined()
+    })
+
+    it('applies a created_at > sinceISO filter when set', async () => {
+      const filters: { sinceISO?: string } = {}
+      const cutoff = '2026-09-18T16:00:00.000Z'
+      await buildConversationContext(
+        fakeDb([{ sender_type: 'customer', content_text: 'hi' }], filters),
+        'conv-1',
+        undefined,
+        undefined,
+        cutoff,
+      )
+      expect(filters.sinceISO).toBe(cutoff)
+    })
   })
 
   describe('inbound customer photos (with an image resolver)', () => {

@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     // row means "not yours / not found" either way.
     const { data: conversation, error: convErr } = await supabase
       .from('conversations')
-      .select('id')
+      .select('id, ai_context_reset_at')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr) {
@@ -78,7 +78,13 @@ export async function POST(request: Request) {
       )
     }
 
-    const messages = await buildConversationContext(supabase, conversationId)
+    const messages = await buildConversationContext(
+      supabase,
+      conversationId,
+      undefined,
+      undefined,
+      conversation.ai_context_reset_at,
+    )
     // Nothing to draft from — a brand-new thread with no customer text
     // would otherwise produce a nonsensical reply-to-nothing.
     if (messages.length === 0) {
