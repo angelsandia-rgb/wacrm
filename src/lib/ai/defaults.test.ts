@@ -119,7 +119,10 @@ describe('buildSystemPrompt — category banner marker gate', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
-      hotelCategoryBanners: ['Habitaciones', 'Spa'],
+      hotelCategoryBanners: [
+        { name: 'Habitaciones', hasWeekendVariant: false },
+        { name: 'Spa', hasWeekendVariant: false },
+      ],
     })
     expect(p).toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
     expect(p).toContain('"Habitaciones", "Spa"')
@@ -138,8 +141,44 @@ describe('buildSystemPrompt — category banner marker gate', () => {
     const draft = buildSystemPrompt({
       userPrompt: null,
       mode: 'draft',
-      hotelCategoryBanners: ['Habitaciones'],
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
     })
     expect(draft).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+  })
+
+  it('teaches the weekday/weekend split only for a category that has both banners', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [
+        { name: 'Habitaciones', hasWeekendVariant: true },
+        { name: 'Spa', hasWeekendVariant: false },
+      ],
+    })
+    expect(p).toContain('"Habitaciones" (has a weekday/weekend split)')
+    expect(p).toContain('"Spa"')
+    expect(p).not.toContain('"Spa" (has a weekday/weekend split)')
+    expect(p).toContain(`${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekday`)
+    expect(p).toContain(`${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekend`)
+  })
+
+  it('says nothing about resolving a weekday/weekend variant when no category has one', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+    })
+    expect(p).not.toContain('(has a weekday/weekend split)')
+    expect(p).not.toContain('|weekday')
+    expect(p).not.toContain('|weekend')
+  })
+
+  it('teaches not to re-send an already-sent category banner', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+    })
+    expect(p.toLowerCase()).toContain('do not send it again')
   })
 })

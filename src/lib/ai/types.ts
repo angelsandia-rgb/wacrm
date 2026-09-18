@@ -112,6 +112,11 @@ export interface GenerateResult {
    *  resolved against the account's real `product_categories`
    *  (case-insensitive) before anything is sent — never trusted as-is. */
   sendCategoryBannerName: string | null
+  /** For a category with two rate-based banners (weekday/weekend, see
+   *  `banner_url_weekend`), which one the model picked based on the
+   *  stay's check-in day of week — or null when the category has only
+   *  one banner, or the model sent no variant. */
+  sendCategoryBannerVariant: 'weekday' | 'weekend' | null
   /** True when the model asked to send the restaurant menu PDF
    *  (auto-reply mode, `hotel` vertical with `restaurant_menu_url` set)
    *  — see `SEND_RESTAURANT_MENU_SENTINEL`. */

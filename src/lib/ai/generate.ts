@@ -132,7 +132,17 @@ export function parseGeneration(
       `${escapeRegExp(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)}(.+?)${escapeRegExp(SEND_CATEGORY_BANNER_SENTINEL_SUFFIX)}`,
     ),
   )
-  const sendCategoryBannerName = sendCategoryBannerMatch ? sendCategoryBannerMatch[1].trim() || null : null
+  // Format: `<category>` or `<category>|weekday`/`<category>|weekend` —
+  // the variant is only meaningful for a category with two rate-based
+  // banners (see `banner_url_weekend`); auto-reply.ts falls back to the
+  // default banner when it's absent or unrecognized.
+  let sendCategoryBannerName: string | null = null
+  let sendCategoryBannerVariant: 'weekday' | 'weekend' | null = null
+  if (sendCategoryBannerMatch) {
+    const [nameRaw, variantRaw] = sendCategoryBannerMatch[1].split('|').map((s) => s.trim())
+    sendCategoryBannerName = nameRaw || null
+    sendCategoryBannerVariant = variantRaw === 'weekday' || variantRaw === 'weekend' ? variantRaw : null
+  }
 
   const moveMatch = raw.match(
     new RegExp(
@@ -338,6 +348,7 @@ export function parseGeneration(
     sendCatalog,
     sendPhotoProductName,
     sendCategoryBannerName,
+    sendCategoryBannerVariant,
     sendRestaurantMenu,
     leadTemperature,
     contactName,

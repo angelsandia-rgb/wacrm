@@ -41,6 +41,13 @@ export async function PATCH(
     }
     update.banner_url = bannerUrl === null ? null : bannerUrl.trim() || null
   }
+  if ('banner_url_weekend' in body) {
+    const bannerUrlWeekend = body.banner_url_weekend
+    if (bannerUrlWeekend !== null && typeof bannerUrlWeekend !== 'string') {
+      return NextResponse.json({ error: 'banner_url_weekend must be a string or null' }, { status: 400 })
+    }
+    update.banner_url_weekend = bannerUrlWeekend === null ? null : bannerUrlWeekend.trim() || null
+  }
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
   }
