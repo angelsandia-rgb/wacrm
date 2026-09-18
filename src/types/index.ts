@@ -511,6 +511,10 @@ export interface ProductCategory {
   account_id: string;
   name: string;
   position: number;
+  /** One banner image for the whole category (migration 141) — the
+   *  AI sends it when a guest asks about the category in general
+   *  rather than one specific item. Hotel vertical only for now. */
+  banner_url?: string | null;
   created_at: string;
   updated_at: string;
 }

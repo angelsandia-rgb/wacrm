@@ -34,6 +34,13 @@ export async function PATCH(
     }
     update.position = position
   }
+  if ('banner_url' in body) {
+    const bannerUrl = body.banner_url
+    if (bannerUrl !== null && typeof bannerUrl !== 'string') {
+      return NextResponse.json({ error: 'banner_url must be a string or null' }, { status: 400 })
+    }
+    update.banner_url = bannerUrl === null ? null : bannerUrl.trim() || null
+  }
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
   }

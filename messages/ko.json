@@ -1174,6 +1174,18 @@
       "durationPlaceholder": "예: 30",
       "toastDurationInvalid": "소요 시간은 1~1440분 사이여야 합니다."
     },
+    "categoryBanners": {
+      "title": "카테고리 배너",
+      "description": "카테고리별 배너 이미지 하나(사진 + 일반 가격) — 손님이 특정 객실이나 서비스가 아니라 카테고리 전체를 물어볼 때 AI가 이 이미지를 전송합니다.",
+      "uploadBtn": "배너 업로드",
+      "replaceBtn": "교체",
+      "removeBtn": "배너 삭제",
+      "uploadSuccess": "배너가 업데이트되었습니다",
+      "removeSuccess": "배너가 삭제되었습니다",
+      "uploadFailed": "배너를 업로드할 수 없습니다",
+      "invalidImage": "이미지 파일을 선택해 주세요",
+      "fileTooLarge": "이미지가 너무 큽니다 (최대 5MB)"
+    },
     "quoteBuilder": {
       "title": "새 견적서",
       "description": "카탈로그 제품과 고객의 결제 정보를 결합하여 견적서를 작성하세요.",

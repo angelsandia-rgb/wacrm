@@ -1174,6 +1174,18 @@
       "durationPlaceholder": "e.g. 30",
       "toastDurationInvalid": "Duration must be between 1 and 1440 minutes."
     },
+    "categoryBanners": {
+      "title": "Category banners",
+      "description": "One banner image per category (photos + general prices) — the AI sends it when a guest asks about the whole category instead of one specific room or service.",
+      "uploadBtn": "Upload banner",
+      "replaceBtn": "Replace",
+      "removeBtn": "Remove banner",
+      "uploadSuccess": "Banner updated",
+      "removeSuccess": "Banner removed",
+      "uploadFailed": "Could not upload the banner",
+      "invalidImage": "Please choose an image file",
+      "fileTooLarge": "That image is too large (max 5 MB)"
+    },
     "quoteBuilder": {
       "title": "New quote",
       "description": "Combine catalog products with the customer's billing info to build a quote.",
