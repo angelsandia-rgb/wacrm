@@ -59,6 +59,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -82,6 +83,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -102,6 +104,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -125,6 +128,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -155,6 +159,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -193,6 +198,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -246,6 +252,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: null,
     })
@@ -327,6 +334,7 @@ describe('parseGeneration', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage,
     })
@@ -596,6 +604,7 @@ describe('generateReply — OpenAI', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 },
     })
@@ -670,6 +679,7 @@ describe('generateReply — Anthropic', () => {
       sentinelLeakDetected: false,
       quickReplyId: null,
       reservationProposal: null,
+      confirmReservation: false,
       appointmentAction: null,
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
     })

@@ -29,6 +29,7 @@ import {
   RECORD_RESERVATION_SENTINEL_PREFIX,
   RECORD_RESERVATION_SENTINEL_SUFFIX,
   RESERVATION_MARKER_CATEGORIES,
+  CONFIRM_RESERVATION_SENTINEL,
   APPOINTMENT_ACTION_SENTINEL_PREFIX,
   APPOINTMENT_ACTION_SENTINEL_SUFFIX,
   aiRequestTimeoutMs,
@@ -119,6 +120,7 @@ export function parseGeneration(
   const markDealWon = raw.includes(MARK_DEAL_WON_SENTINEL)
   const sendCatalog = raw.includes(SEND_CATALOG_SENTINEL)
   const sendRestaurantMenu = raw.includes(SEND_RESTAURANT_MENU_SENTINEL)
+  const confirmReservation = raw.includes(CONFIRM_RESERVATION_SENTINEL)
 
   const sendPhotoMatch = raw.match(
     new RegExp(
@@ -276,6 +278,8 @@ export function parseGeneration(
     .join('')
     .split(SEND_CATALOG_SENTINEL)
     .join('')
+    .split(CONFIRM_RESERVATION_SENTINEL)
+    .join('')
     .split(SEND_RESTAURANT_MENU_SENTINEL)
     .join('')
     .replace(sendPhotoMatch ? sendPhotoMatch[0] : '', '')
@@ -309,7 +313,7 @@ export function parseGeneration(
   //      `QUICK_REPLY`). Strip it SILENTLY — never a reason to park the
   //      conversation on a human.
   const SAFE_KNOWN_MARKER_RE =
-    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_photo|send_category_banner|send_restaurant_menu|set_temperature|set_contact_name|record_reservation|appointment)(?::[^\]]{0,600})?)\s*\]\]/gi
+    /\[\[\s*(?:HANDOFF|QUICK_REPLY(?::[^\]]{0,200})?|ACTION:(?:mark_deal_won|move_deal|send_catalog|send_photo|send_category_banner|send_restaurant_menu|set_temperature|set_contact_name|record_reservation|confirm_reservation|appointment)(?::[^\]]{0,600})?)\s*\]\]/gi
   const straySafe = text.match(SAFE_KNOWN_MARKER_RE)
   if (straySafe) {
     console.warn('[ai generate] stripped stray/duplicate low-stakes marker(s) from reply text:', straySafe)
@@ -349,6 +353,7 @@ export function parseGeneration(
     sendPhotoProductName,
     sendCategoryBannerName,
     sendCategoryBannerVariant,
+    confirmReservation,
     sendRestaurantMenu,
     leadTemperature,
     contactName,

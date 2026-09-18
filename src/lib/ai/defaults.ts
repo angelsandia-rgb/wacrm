@@ -208,6 +208,25 @@ export const RECORD_RESERVATION_SENTINEL_PREFIX = '[[ACTION:record_reservation:'
 export const RECORD_RESERVATION_SENTINEL_SUFFIX = ']]'
 
 /**
+ * Sentinel the model appends (auto-reply mode, `hotel` vertical only)
+ * ONLY when the guest has just explicitly confirmed they want to
+ * proceed with the reservation `record_reservation` is already
+ * tracking — same bar as `MARK_DEAL_WON_SENTINEL`: an unmistakable
+ * yes, never a vague "ok"/"sí" to something else.
+ *
+ * This is what actually routes a completed request to a human
+ * (`handOffIfReservationComplete` in auto-reply.ts requires this flag
+ * in addition to every field being known) — replaces an earlier,
+ * fragile heuristic that guessed "is the bot still asking a question"
+ * from whether its own reply ended in "?" (traced live, DEMO account,
+ * 2026-09-18: the bot asked "¿Le gustaría confirmarla?" and handed off
+ * a second later without waiting for an answer at all). Angel, same
+ * day: "que la IA solo espere a que [el huésped] confirme que quiere
+ * mandar una solicitud."
+ */
+export const CONFIRM_RESERVATION_SENTINEL = '[[ACTION:confirm_reservation]]'
+
+/**
  * The patient replied in a way that confirms or cancels their one
  * upcoming appointment (auto-reply mode, `clinica` vertical only, and
  * only when `clinicAppointment` is passed). Value is `confirm` or
@@ -581,6 +600,9 @@ export function buildSystemPrompt(args: {
       )
       parts.push(
         `Stay proactive about closing the booking: any time your reply states a price, rate, or cost estimate for a room/spa service/activity/package/event (whether you computed it yourself or read it from the business context below), end that SAME reply by asking if the guest would like to confirm the reservation, and explicitly ask for whatever you still don't know among: the dates (check-in/check-out, or the single date for spa/activities/events), the number of people, and — for an event — the hall. Check what's already captured below (the reservation summary, if any, and earlier messages) before asking, so you never re-ask for something the guest already told you. Once every needed field is known, ask the guest to confirm rather than assuming — do not claim the booking is final yourself.`,
+      )
+      parts.push(
+        `Once you've asked the guest if they'd like to confirm, WAIT for their actual answer — never assume yes. Only when the guest EXPLICITLY confirms they want to proceed with THIS request (e.g. "sí, confírmenla", "dale, resérvenla", "sí quiero" — not a vague "ok"/"sí" to something unrelated, and not merely giving you the last missing field) — re-emit ${RECORD_RESERVATION_SENTINEL_PREFIX}…${RECORD_RESERVATION_SENTINEL_SUFFIX} with the same values you already know (even if nothing changed this turn) AND append ${CONFIRM_RESERVATION_SENTINEL} right after it, at the very end of your reply. This is what actually routes the request to a teammate to finalize it — without it, the request stays fully open so you can keep adjusting it if the guest changes their mind about a date or detail. Never mention this marker to the customer.`,
       )
       parts.push(
         `Don't jump straight to "would you like to book" / asking for missing dates the moment a guest shows interest in a category with no price or estimate stated yet — that reads cold and transactional. First mention one or two concrete, warm reasons this option is worth it (a real amenity, view, included extra, or what makes the experience special), THEN ask for what's missing to move forward. Save the "quiere confirmar / permítanos unos minutos" closing language for once you've actually given a price/estimate or the guest has clearly said they want to book — not as the opening move on a plain informational question.`,
