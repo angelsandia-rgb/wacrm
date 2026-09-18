@@ -1409,6 +1409,7 @@ export async function dispatchInboundToAiReply(
             category: reservationProposal.category as ReservationCategory,
             handoffAgentId: config.handoffAgentId,
             alreadyAssigned: Boolean(conv.assigned_agent_id),
+            replyText: text,
           })
         } catch (err) {
           console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
@@ -2732,6 +2733,17 @@ async function autoSendCategoryBanner(args: {
  * customer-facing (traced live, DEMO account, 2026-09-18: the guest
  * got no reply at all once their data was "complete"). Always send an
  * explicit closing line first, so the guest is never just cut off.
+ *
+ * Also skips firing entirely when the model's OWN reply this turn
+ * ends in a question — traced live, DEMO account, 2026-09-18: the bot
+ * asked "¿Le gustaría confirmarla?" and, one second later, this fired
+ * anyway (the marker already had every field) and told the guest "ya
+ * tengo lista su solicitud" before they had any chance to answer.
+ * Firing on a later turn instead — once the model's reply is no
+ * longer a bare question — costs at most one extra customer turn
+ * (`reservationProposal` keeps getting re-emitted as long as the
+ * category stays in play) and is never worse than closing out on a
+ * question nobody answered yet.
  */
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
@@ -2741,8 +2753,13 @@ async function handOffIfReservationComplete(args: {
   category: ReservationCategory
   handoffAgentId: string | null
   alreadyAssigned: boolean
+  /** The model's own customer-facing reply text this turn (markers
+   *  already stripped) — see the question-guard above. */
+  replyText: string
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned } = args
+  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, replyText } = args
+
+  if (replyText.trim().endsWith('?')) return
 
   const { data: row } = await db
     .from('reservation_requests')

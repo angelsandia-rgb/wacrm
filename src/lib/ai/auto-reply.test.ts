@@ -2397,6 +2397,28 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 
+  it('does not hand off (and sends no closing message) while the model\'s own reply is still a question', async () => {
+    h.state.reservationRow = {
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Para 4 personas el estimado es GTQ 1,500. ¿Le gustaría confirmarla?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+  })
+
   it('does not hand off (and sends no closing message) while a required field is still missing', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
