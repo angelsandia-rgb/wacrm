@@ -2,16 +2,19 @@ import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resetConversationAiState } from './reset-ai'
 
-/** Minimal fake covering the three tables touched: flow_runs (update),
- *  conversations (update), messages (insert). Records what each call
- *  was given so assertions can check the exact shape written. */
+/** Minimal fake covering the four tables touched: flow_runs (update),
+ *  reservation_requests (delete), conversations (update), messages
+ *  (insert). Records what each call was given so assertions can check
+ *  the exact shape written / filtered on. */
 function fakeDb(opts: {
   flowUpdateError?: unknown
+  reservationDeleteError?: unknown
   convUpdateError?: unknown
   noteInsertError?: unknown
 } = {}) {
   const calls: {
     flowUpdate?: Record<string, unknown>
+    reservationDeleteFilters?: { column: string; value: unknown; op: 'eq' | 'neq' }[]
     convUpdate?: Record<string, unknown>
     noteInsert?: Record<string, unknown>
   } = {}
@@ -35,6 +38,26 @@ function fakeDb(opts: {
             }
           },
         }
+      }
+      if (table === 'reservation_requests') {
+        const filters: { column: string; value: unknown; op: 'eq' | 'neq' }[] = []
+        calls.reservationDeleteFilters = filters
+        const builder = {
+          eq: (column: string, value: unknown) => {
+            filters.push({ column, value, op: 'eq' })
+            return builder
+          },
+          neq: (column: string, value: unknown) => {
+            filters.push({ column, value, op: 'neq' })
+            return builder
+          },
+          select: () =>
+            Promise.resolve({
+              data: opts.reservationDeleteError ? null : [{ id: 'req-1' }, { id: 'req-2' }],
+              error: opts.reservationDeleteError ?? null,
+            }),
+        }
+        return { delete: () => builder }
       }
       if (table === 'conversations') {
         return {
@@ -77,6 +100,19 @@ describe('resetConversationAiState', () => {
     expect(calls.flowUpdate?.ended_at).toBeTypeOf('string')
   })
 
+  it('deletes non-approved reservation drafts for the conversation, never approved ones', async () => {
+    const { db, calls } = fakeDb()
+    await resetConversationAiState(db, {
+      conversationId: 'conv-1',
+      accountId: 'acct-1',
+      actorName: 'Angel',
+    })
+    expect(calls.reservationDeleteFilters).toEqual([
+      { column: 'conversation_id', value: 'conv-1', op: 'eq' },
+      { column: 'status', value: 'approved', op: 'neq' },
+    ])
+  })
+
   it('clears every AI eligibility/handoff column and sets ai_context_reset_at', async () => {
     const { db, calls } = fakeDb()
     await resetConversationAiState(db, {
@@ -111,14 +147,14 @@ describe('resetConversationAiState', () => {
     expect(calls.noteInsert?.content_text).toContain('Angel')
   })
 
-  it('reports how many flow runs it ended', async () => {
+  it('reports how many flow runs it ended and reservation drafts it cleared', async () => {
     const { db } = fakeDb()
     const result = await resetConversationAiState(db, {
       conversationId: 'conv-1',
       accountId: 'acct-1',
       actorName: 'Angel',
     })
-    expect(result).toEqual({ flowRunsEnded: 1 })
+    expect(result).toEqual({ flowRunsEnded: 1, reservationDraftsCleared: 2 })
   })
 
   it('does not throw when ending flow runs fails (best-effort)', async () => {
@@ -129,7 +165,19 @@ describe('resetConversationAiState', () => {
       accountId: 'acct-1',
       actorName: 'Angel',
     })
-    expect(result).toEqual({ flowRunsEnded: 0 })
+    expect(result).toEqual({ flowRunsEnded: 0, reservationDraftsCleared: 2 })
+    errorSpy.mockRestore()
+  })
+
+  it('does not throw when clearing reservation drafts fails (best-effort)', async () => {
+    const { db } = fakeDb({ reservationDeleteError: { message: 'boom' } })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await resetConversationAiState(db, {
+      conversationId: 'conv-1',
+      accountId: 'acct-1',
+      actorName: 'Angel',
+    })
+    expect(result).toEqual({ flowRunsEnded: 1, reservationDraftsCleared: 0 })
     errorSpy.mockRestore()
   })
 
@@ -142,7 +190,7 @@ describe('resetConversationAiState', () => {
         accountId: 'acct-1',
         actorName: 'Angel',
       }),
-    ).resolves.toEqual({ flowRunsEnded: 1 })
+    ).resolves.toEqual({ flowRunsEnded: 1, reservationDraftsCleared: 2 })
     errorSpy.mockRestore()
   })
 
