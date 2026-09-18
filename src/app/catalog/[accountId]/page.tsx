@@ -1204,14 +1204,27 @@ function PublicCatalogPageInner() {
                                 {stayGuests}{' '}
                                 {stayGuests === 1 ? 'persona' : 'personas'}
                               </span>
-                              <span className="font-serif text-xl">
-                                {formatCurrency(stayQuote.total, data.currency)}
-                              </span>
+                              {/* No night priced (e.g. 5+ guests has no
+                                  occupancy tier at all) — a "Total: Q0.00"
+                                  headline would read as a real price, not
+                                  as "nothing could be estimated". */}
+                              {stayQuote.missing.length < stayQuote.nights.length && (
+                                <span className="font-serif text-xl">
+                                  {formatCurrency(stayQuote.total, data.currency)}
+                                </span>
+                              )}
                             </div>
-                            {stayQuote.missing.length > 0 && (
+                            {stayQuote.missing.length > 0 &&
+                              stayQuote.missing.length < stayQuote.nights.length && (
+                                <p className="pt-1 text-xs text-[#284d53]/60">
+                                  Algunas noches ({stayQuote.missing.join(', ')}) no tienen
+                                  tarifa publicada — te confirmamos ese precio al escribir.
+                                </p>
+                              )}
+                            {stayQuote.missing.length === stayQuote.nights.length && (
                               <p className="pt-1 text-xs text-[#284d53]/60">
-                                Algunas noches ({stayQuote.missing.join(', ')}) no tienen
-                                tarifa publicada — te confirmamos ese precio al escribir.
+                                No tenemos una tarifa publicada para {stayGuests} personas —
+                                escríbenos y te confirmamos el precio.
                               </p>
                             )}
                           </div>

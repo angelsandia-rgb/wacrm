@@ -495,8 +495,8 @@ export interface ProductRateRow {
   product_id: string;
   /** Which day of the week this price applies to (migration 111). */
   day_of_week: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
-  /** standard = base · couple = 2 guests · group = 3+ guests (migration 108). */
-  occupancy: 'standard' | 'couple' | 'group';
+  /** standard = 1 guest · couple = 2 · group = 3 · quad = 4 (migrations 108, 140). */
+  occupancy: 'standard' | 'couple' | 'group' | 'quad';
   price: number;
   date_from: string | null;
   date_to: string | null;

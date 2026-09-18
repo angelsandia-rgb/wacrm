@@ -53,8 +53,8 @@ function emptyPriceOptionDraft(): PriceOptionDraft {
 // flattened to product_rates rows on save.
 // ------------------------------------------------------------
 
-type RateOccupancy = 'standard' | 'couple' | 'group';
-const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group'];
+type RateOccupancy = 'standard' | 'couple' | 'group' | 'quad';
+const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group', 'quad'];
 
 type DayRates = Record<RateOccupancy, string>;
 type RateBlockDraft = Record<DayOfWeek, DayRates>;
@@ -65,7 +65,7 @@ interface SeasonDraft {
 }
 
 function emptyDayRates(): DayRates {
-  return { standard: '', couple: '', group: '' };
+  return { standard: '', couple: '', group: '', quad: '' };
 }
 function emptyRateBlock(): RateBlockDraft {
   return Object.fromEntries(
@@ -152,18 +152,20 @@ function RateGrid({
 
   return (
     <div className="space-y-1.5">
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr] items-end gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-end gap-1.5">
         <span />
         <Label className="text-muted-foreground text-[11px]">{t('rateCol1')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol2')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol3')}</Label>
+        <Label className="text-muted-foreground text-[11px]">{t('rateCol4')}</Label>
       </div>
 
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr] items-center gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-center gap-1.5">
         <span className="text-muted-foreground text-[11px]">{t('rateAllDays')}</span>
         {cellInput(fill.standard, (v) => setFill((p) => ({ ...p, standard: v })))}
         {cellInput(fill.couple, (v) => setFill((p) => ({ ...p, couple: v })))}
         {cellInput(fill.group, (v) => setFill((p) => ({ ...p, group: v })))}
+        {cellInput(fill.quad, (v) => setFill((p) => ({ ...p, quad: v })))}
       </div>
       <Button
         type="button"
@@ -182,7 +184,7 @@ function RateGrid({
       {DAY_ORDER.map((day) => (
         <div
           key={day}
-          className="grid grid-cols-[2.75rem_1fr_1fr_1fr] items-center gap-1.5"
+          className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-center gap-1.5"
         >
           <span className="text-muted-foreground text-xs">{DAY_LABEL_ES[day]}</span>
           {RATE_OCCUPANCIES.map((occ) =>
