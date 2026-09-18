@@ -39,7 +39,7 @@ import { SettingsPanelHead } from "@/components/settings/settings-panel-head";
 type CatalogMode = "digital" | "pdf" | "photos";
 type QuoteMode = "pdf" | "message";
 
-const MAX_CATALOG_FILE_BYTES = 10 * 1024 * 1024; // matches the catalog-media bucket cap (migration 068)
+const MAX_CATALOG_FILE_BYTES = 40 * 1024 * 1024; // matches the catalog-media bucket cap (migration 139)
 
 interface CatalogRow {
   catalog_delivery_mode: CatalogMode;
