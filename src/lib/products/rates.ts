@@ -188,18 +188,30 @@ export function rateSortKey(r: Pick<ProductRate, 'day_of_week' | 'occupancy'>): 
 }
 
 /** Collapse a run of consecutive same-priced days into "Lun–Jue Q800",
- *  a single day into "Vie Q1000". `days` must be in Mon→Sun order. */
+ *  a single day into "Vie Q1000". `days` must be in Mon→Sun order.
+ *
+ *  A run touching Monday and a run ending on Sunday that share the same
+ *  price are really ONE run that wraps past `DAY_ORDER`'s Mon-first
+ *  array boundary — e.g. a hotel's "domingo a jueves" corporate rate,
+ *  which is Sun+Mon–Thu, not Mon–Thu with Sunday floating off on its
+ *  own after a pricier Fri–Sat. Left unmerged, that reads as "Lun–Jue
+ *  Q300 · Vie–Sáb Q400 · Dom Q300" — Sunday's identical price looks
+ *  like a separate, confusing data point instead of what it is (Angel,
+ *  2026-09-18: "el precio para domingo... se puede integrar a los
+ *  demás precios"). Merged, it reads "Dom–Jue Q300 · Vie–Sáb Q400". */
 function collapseDayRuns(
   entries: { day: DayOfWeek; price: number }[],
   fmt: (n: number) => string,
 ): string {
   const byDay = new Map(entries.map((e) => [e.day, e.price]))
-  const runs: string[] = []
-  let i = 0
   const present = DAY_ORDER.filter((d) => byDay.has(d))
+  if (present.length === 0) return ''
+
+  type Run = { startIdx: number; endIdx: number; price: number }
+  const runs: Run[] = []
+  let i = 0
   while (i < present.length) {
-    const startDay = present[i]
-    const price = byDay.get(startDay)!
+    const price = byDay.get(present[i])!
     let j = i
     // Extend while the next present day is the immediate next weekday and
     // carries the same price.
@@ -210,14 +222,30 @@ function collapseDayRuns(
     ) {
       j += 1
     }
-    const label =
-      i === j
-        ? DAY_LABEL_ES[startDay]
-        : `${DAY_LABEL_ES[startDay]}–${DAY_LABEL_ES[present[j]]}`
-    runs.push(`${label} ${fmt(price)}`)
+    runs.push({ startIdx: i, endIdx: j, price })
     i = j + 1
   }
-  return runs.join(' · ')
+
+  if (
+    runs.length >= 2 &&
+    DAY_ORDER.indexOf(present[runs[0].startIdx]) === 0 && // first run starts Monday
+    DAY_ORDER.indexOf(present[runs[runs.length - 1].endIdx]) === 6 && // last run ends Sunday
+    runs[0].price === runs[runs.length - 1].price
+  ) {
+    const first = runs.shift()!
+    const last = runs.pop()!
+    runs.unshift({ startIdx: last.startIdx, endIdx: first.endIdx, price: first.price })
+  }
+
+  return runs
+    .map((r) => {
+      const startDay = present[r.startIdx]
+      const endDay = present[r.endIdx]
+      const label =
+        r.startIdx === r.endIdx ? DAY_LABEL_ES[startDay] : `${DAY_LABEL_ES[startDay]}–${DAY_LABEL_ES[endDay]}`
+      return `${label} ${fmt(r.price)}`
+    })
+    .join(' · ')
 }
 
 /**
