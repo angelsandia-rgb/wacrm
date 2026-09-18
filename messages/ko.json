@@ -1960,7 +1960,14 @@
       "removeDialogDesc": "<bold>{name}</bold>을(를) 이 계정에서 제거하시겠습니까? 이 계정에서 로그아웃되며 다음 로그인 시 새로운 개인 계정이 발급됩니다. 로그인 정보 자체는 삭제되지 않습니다.",
       "cancel": "취소",
       "removing": "제거 중...",
-      "removeBtn": "멤버 제거"
+      "removeBtn": "멤버 제거",
+      "transferOwnership": "소유자로 지정",
+      "transferDialogTitle": "계정 소유권 이전",
+      "transferDialogDesc": "이 계정의 소유권을 <bold>{name}</bold>에게 이전하시겠습니까? 즉시 소유자가 되며, 이후에는 새 소유자만 이를 되돌릴 수 있습니다.",
+      "transferYourNewRole": "이전 후 나의 새 역할",
+      "transferBtn": "소유권 이전",
+      "transferring": "이전 중...",
+      "transferredToast": "{name}에게 소유권이 이전되었습니다"
     },
     "invite": {
       "inviteCreated": "초대가 생성되었습니다",

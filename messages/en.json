@@ -1960,7 +1960,14 @@
       "removeDialogDesc": "Remove <bold>{name}</bold> from the account? They'll be signed out of this account and given a fresh personal account on their next sign-in. Their login isn't deleted.",
       "cancel": "Cancel",
       "removing": "Removing...",
-      "removeBtn": "Remove member"
+      "removeBtn": "Remove member",
+      "transferOwnership": "Make owner",
+      "transferDialogTitle": "Transfer account ownership",
+      "transferDialogDesc": "Transfer ownership of this account to <bold>{name}</bold>? They become the owner immediately — this can't be undone by you afterwards, only by the new owner.",
+      "transferYourNewRole": "Your new role after the transfer",
+      "transferBtn": "Transfer ownership",
+      "transferring": "Transferring...",
+      "transferredToast": "Ownership transferred to {name}"
     },
     "invite": {
       "inviteCreated": "Invite created",

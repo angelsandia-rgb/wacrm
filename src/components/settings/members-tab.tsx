@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Banknote,
+  Crown,
   Loader2,
   Mail,
   MailX,
@@ -68,6 +69,7 @@ import {
 import { useTranslations } from 'next-intl';
 import { RequireRole } from '@/components/auth/require-role';
 import { useAuth } from '@/hooks/use-auth';
+import { useCan } from '@/hooks/use-can';
 import { usePresence } from '@/hooks/use-presence';
 import type { AccountRole } from '@/lib/auth/roles';
 import { presenceLabel, summarize } from '@/lib/presence';
@@ -135,6 +137,7 @@ export function MembersTab() {
   const t = useTranslations('Settings.members');
   const tRoles = useTranslations('Settings.roles');
   const { user, canManageMembers } = useAuth();
+  const canTransferOwnership = useCan('transfer-ownership');
   const { getPresence, getRow, now } = usePresence();
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -148,6 +151,10 @@ export function MembersTab() {
   const [pendingMemberAction, setPendingMemberAction] = useState<string | null>(
     null
   );
+  const [transferTarget, setTransferTarget] = useState<Member | null>(null);
+  const [transferDemoteRole, setTransferDemoteRole] =
+    useState<AccountRole>('agent');
+  const [transferring, setTransferring] = useState(false);
 
   const loadEverything = useCallback(async () => {
     try {
@@ -291,6 +298,43 @@ export function MembersTab() {
     } catch (err) {
       console.error('[MembersTab] revoke error:', err);
       toast.error('Could not reach the server');
+    }
+  }
+
+  async function handleTransferOwnership() {
+    if (!transferTarget) return;
+    setTransferring(true);
+    try {
+      const res = await fetch('/api/account/transfer-ownership', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          newOwnerUserId: transferTarget.user_id,
+          demoteToRole: transferDemoteRole,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await readResponseJson(res).catch(() => ({}));
+        toast.error(payload.error || 'Failed to transfer ownership');
+        return;
+      }
+      toast.success(
+        t('transferredToast', {
+          name: transferTarget.full_name || t('unnamed'),
+        })
+      );
+      setTransferTarget(null);
+      // The caller's OWN role just changed (owner -> whatever was
+      // picked) — every role-gated element on the page (this tab
+      // included) was rendered from the stale role, so a full reload
+      // is the simplest way to avoid showing owner-only affordances
+      // to someone who no longer has them.
+      window.location.reload();
+    } catch (err) {
+      console.error('[MembersTab] transfer ownership error:', err);
+      toast.error('Could not reach the server');
+    } finally {
+      setTransferring(false);
     }
   }
 
@@ -498,6 +542,25 @@ export function MembersTab() {
                       </span>
                     )}
 
+                    {/* Make owner. Owner only (not admin+) — a
+                        teammate who is merely admin should never be
+                        able to hand away someone else's account. */}
+                    {canTransferOwnership && !isOwnerRow && !isSelf && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setTransferDemoteRole('agent');
+                          setTransferTarget(member);
+                        }}
+                        disabled={isBusy}
+                        className="border-border text-muted-foreground hover:bg-muted gap-1.5"
+                      >
+                        <Crown className="size-4" />
+                        {t('transferOwnership')}
+                      </Button>
+                    )}
+
                     {/* Remove. Admin+ only; never on the owner row;
                         never on yourself. Pre-polish styling was
                         neutral-default + red-on-hover — the
@@ -613,6 +676,75 @@ export function MembersTab() {
           )}
         </div>
       </RequireRole>
+
+      <Dialog
+        open={transferTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setTransferTarget(null);
+        }}
+      >
+        <DialogContent className="bg-popover border-border sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground flex items-center gap-2">
+              <Crown className="size-4 text-amber-400" />
+              {t('transferDialogTitle')}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {t.rich('transferDialogDesc', {
+                name: transferTarget?.full_name || t('unnamed'),
+                bold: (chunks: React.ReactNode) => <strong>{chunks}</strong>,
+              })}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1.5">
+            <label className="text-muted-foreground text-xs font-medium">
+              {t('transferYourNewRole')}
+            </label>
+            <Select
+              value={transferDemoteRole}
+              onValueChange={(v) => v && setTransferDemoteRole(v as AccountRole)}
+              disabled={transferring}
+            >
+              <SelectTrigger className="bg-muted border-border w-full">
+                <SelectValue>{tRoles(transferDemoteRole)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {EDITABLE_ROLES.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {tRoles(r.value)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <DialogFooter className="bg-popover border-border">
+            <Button
+              variant="outline"
+              onClick={() => setTransferTarget(null)}
+              className="border-border text-muted-foreground hover:bg-muted"
+              disabled={transferring}
+            >
+              {t('cancel')}
+            </Button>
+            <Button
+              onClick={handleTransferOwnership}
+              disabled={transferring}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {transferring ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  {t('transferring')}
+                </>
+              ) : (
+                t('transferBtn')
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <InviteMemberDialog
         open={inviteOpen}
