@@ -2083,6 +2083,82 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
   })
+
+  it('resolves a shortened name against a product with a trailing parenthetical qualifier', async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Clásica (Individual o Pareja)', image_url: 'https://cdn.example.com/clasica.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, aquí tiene la foto de la Suite Clásica.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Clásica', // the marker itself dropped the qualifier
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/clasica.jpg' }),
+    )
+  })
+
+  it("sends the photo anyway when the model's own reply promises one but forgets the marker (auto-corrected, 2026-09-17 Villa San Ricardo incident)", async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Master Deluxe', image_url: 'https://cdn.example.com/deluxe.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto, le comparto la foto de la Suite Master Deluxe.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: null, // the marker never showed up
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/deluxe.jpg' }),
+    )
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_marker_missed_send_photo:acct-1' }),
+    )
+  })
+
+  it('does not guess when the reply text plausibly names more than one product', async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Clásica', image_url: 'https://cdn.example.com/clasica.jpg' },
+      { id: 'p2', name: 'Suite Clásica Doble', image_url: 'https://cdn.example.com/doble.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le comparto la foto de la Suite Clásica y también de la Suite Clásica Doble.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('does not self-heal when the reply text never promised a photo', async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Clásica', image_url: 'https://cdn.example.com/clasica.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'La Suite Clásica cuesta Q300 por noche.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
 })
 
 describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
