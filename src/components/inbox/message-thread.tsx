@@ -35,6 +35,8 @@ import {
   PanelLeftClose,
   Info,
   Bot,
+  RotateCcw,
+  Loader2,
 } from 'lucide-react';
 import { differenceInHours } from 'date-fns';
 import { useTranslations } from 'next-intl';
@@ -49,9 +51,12 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { ChannelBadge } from './channel-badge';
 import { ContactSidebar } from './contact-sidebar';
 import { MessageBubble } from './message-bubble';
@@ -262,6 +267,8 @@ export function MessageThread({
   // temperature/notes/quotes — this opens the same ContactSidebar
   // inside a dialog instead of a permanent side panel.
   const [mobileContactOpen, setMobileContactOpen] = useState(false);
+  const [resetAiDialogOpen, setResetAiDialogOpen] = useState(false);
+  const [resettingAi, setResettingAi] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
   // Purely visual spin state for the manual-refresh button. The actual
@@ -964,6 +971,27 @@ export function MessageThread({
     [conversation, onStatusChange]
   );
 
+  const handleResetAi = useCallback(async () => {
+    if (!conversation) return;
+    setResettingAi(true);
+    try {
+      const res = await fetch(`/api/conversations/${conversation.id}/reset-ai`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const j = await readResponseJson(res).catch(() => ({}));
+        toast.error(j?.error ?? t('resetAiError'));
+        return;
+      }
+      toast.success(t('resetAiSuccess'));
+      setResetAiDialogOpen(false);
+    } catch {
+      toast.error(t('resetAiError'));
+    } finally {
+      setResettingAi(false);
+    }
+  }, [conversation, t]);
+
   const handleOpenTemplates = useCallback(() => {
     setTemplateModalOpen(true);
   }, []);
@@ -1359,6 +1387,19 @@ export function MessageThread({
             </button>
           )}
 
+          {/* Reset AI memory — clears handoff/pause/context state for
+              this thread and re-fires the welcome automation, without
+              touching the visible chat history or any business data. */}
+          <button
+            type="button"
+            onClick={() => setResetAiDialogOpen(true)}
+            aria-label={t('resetAi')}
+            title={t('resetAi')}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+
           {/* Status dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1636,6 +1677,39 @@ export function MessageThread({
             conversationId={conversation?.id ?? null}
             className="h-auto w-full border-l-0"
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset AI confirmation — see the RotateCcw button above. */}
+      <Dialog open={resetAiDialogOpen} onOpenChange={setResetAiDialogOpen}>
+        <DialogContent className="border-border bg-card sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">
+              {t('resetAiDialogTitle')}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {t('resetAiDialogDesc')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setResetAiDialogOpen(false)}
+              disabled={resettingAi}
+            >
+              {t('cancel')}
+            </Button>
+            <Button onClick={handleResetAi} disabled={resettingAi}>
+              {resettingAi ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {t('resettingAi')}
+                </>
+              ) : (
+                t('resetAiConfirm')
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -34,18 +34,24 @@ interface DbMessage {
  *
  * Ordered oldest-first (chronological) so the transcript reads
  * naturally and the most recent customer message lands last.
+ *
+ * `sinceISO`, when given, excludes messages at or before that instant —
+ * this is `conversations.ai_context_reset_at` (migration 142), set by
+ * the "reset conversation for AI" action so the bot forgets everything
+ * before the reset without the visible chat history being touched.
  */
 export async function buildConversationContext(
   db: SupabaseClient,
   conversationId: string,
   limit: number = aiContextMessageLimit(),
   imageResolver?: InboundImageResolver | null,
+  sinceISO?: string | null,
 ): Promise<ChatMessage[]> {
   const contentTypes = imageResolver
     ? ['text', 'template', 'image']
     : ['text', 'template']
 
-  const { data, error } = await db
+  let query = db
     .from('messages')
     .select('sender_type, content_type, content_text, media_url')
     .eq('conversation_id', conversationId)
@@ -53,6 +59,8 @@ export async function buildConversationContext(
     // content_text. Treat them as assistant turns just like bot text so
     // the AI continues from what the customer actually received.
     .in('content_type', contentTypes)
+  if (sinceISO) query = query.gt('created_at', sinceISO)
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(limit)
 

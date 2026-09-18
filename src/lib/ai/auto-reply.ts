@@ -228,13 +228,14 @@ interface ConvEligibility {
   ai_handoff_transient: boolean | null
   ai_handoff_at: string | null
   ai_flow_directive: string | null
+  ai_context_reset_at: string | null
 }
 
 /** Stable columns that predate every recent AI feature — the eligibility
  *  read still works against these even when a newer column's migration
  *  hasn't landed yet. */
 const CONV_ELIGIBILITY_STABLE_COLS = 'assigned_agent_id, ai_autoreply_disabled, ai_reply_count'
-const CONV_ELIGIBILITY_ALL_COLS = `${CONV_ELIGIBILITY_STABLE_COLS}, ai_handoff_transient, ai_handoff_at, ai_flow_directive`
+const CONV_ELIGIBILITY_ALL_COLS = `${CONV_ELIGIBILITY_STABLE_COLS}, ai_handoff_transient, ai_handoff_at, ai_flow_directive, ai_context_reset_at`
 
 /**
  * Read the conversation's AI-eligibility columns. If the full select
@@ -290,6 +291,7 @@ async function loadConvEligibility(
       ai_handoff_transient: null,
       ai_handoff_at: null,
       ai_flow_directive: null,
+      ai_context_reset_at: null,
     }
   }
 
@@ -445,7 +447,13 @@ export async function dispatchInboundToAiReply(
       : null
     let messages: ChatMessage[]
     try {
-      messages = await buildConversationContext(db, conversationId, undefined, imageResolver)
+      messages = await buildConversationContext(
+        db,
+        conversationId,
+        undefined,
+        imageResolver,
+        conv.ai_context_reset_at,
+      )
     } catch (err) {
       // Reading the thread failed. A single oversized / corrupt inbound
       // image feeding the vision resolver is the usual culprit and the
@@ -453,7 +461,13 @@ export async function dispatchInboundToAiReply(
       // once, then give up loudly (alert), never silently.
       console.error('[ai auto-reply] buildConversationContext failed, retrying text-only:', err)
       try {
-        messages = await buildConversationContext(db, conversationId, undefined, null)
+        messages = await buildConversationContext(
+          db,
+          conversationId,
+          undefined,
+          null,
+          conv.ai_context_reset_at,
+        )
       } catch (err2) {
         console.error('[ai auto-reply] buildConversationContext failed again (text-only):', err2)
         void dispatchSystemAlert({
