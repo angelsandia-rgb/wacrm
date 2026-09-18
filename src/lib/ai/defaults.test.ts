@@ -3,6 +3,7 @@ import {
   buildSystemPrompt,
   RECORD_RESERVATION_SENTINEL_PREFIX,
   SEND_RESTAURANT_MENU_SENTINEL,
+  SEND_CATEGORY_BANNER_SENTINEL_PREFIX,
   SET_CONTACT_NAME_SENTINEL_PREFIX,
 } from './defaults'
 
@@ -110,5 +111,35 @@ describe('buildSystemPrompt — restaurant menu marker gate', () => {
   it('never mentions the marker in draft mode', () => {
     const draft = buildSystemPrompt({ userPrompt: null, mode: 'draft', restaurantMenu: true })
     expect(draft).not.toContain(SEND_RESTAURANT_MENU_SENTINEL)
+  })
+})
+
+describe('buildSystemPrompt — category banner marker gate', () => {
+  it('teaches SEND_CATEGORY_BANNER with the exact category names when at least one has a banner', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: ['Habitaciones', 'Spa'],
+    })
+    expect(p).toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+    expect(p).toContain('"Habitaciones", "Spa"')
+  })
+
+  it('never mentions the marker when no category has a banner', () => {
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelCategoryBanners: [] }),
+    ).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' }),
+    ).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+  })
+
+  it('never mentions the marker in draft mode', () => {
+    const draft = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'draft',
+      hotelCategoryBanners: ['Habitaciones'],
+    })
+    expect(draft).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
   })
 })

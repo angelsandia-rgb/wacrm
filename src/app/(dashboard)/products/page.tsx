@@ -47,6 +47,7 @@ import { ProductForm } from '@/components/products/product-form';
 import { QuoteBuilder } from '@/components/products/quote-builder';
 import { ProductsImportDialog } from '@/components/products/products-import-dialog';
 import { CatalogDeliverySettings } from '@/components/products/catalog-delivery-settings';
+import { CategoryBannersCard } from '@/components/products/category-banners-card';
 import {
   downloadProductsExcel,
   toProductExportRow,
@@ -473,7 +474,8 @@ export default function ProductsPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="catalog" className="mt-4">
+        <TabsContent value="catalog" className="mt-4 space-y-6">
+          <CategoryBannersCard />
           <CatalogDeliverySettings />
         </TabsContent>
       </Tabs>

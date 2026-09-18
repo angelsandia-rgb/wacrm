@@ -106,6 +106,12 @@ export interface GenerateResult {
    *  resolved against the account's real active `products`
    *  (case-insensitive) before anything is sent — never trusted as-is. */
   sendPhotoProductName: string | null
+  /** The exact category name the model asked to send the banner of
+   *  (auto-reply mode, `hotel` vertical only), or null — see
+   *  `SEND_CATEGORY_BANNER_SENTINEL_PREFIX`. The model's own text,
+   *  resolved against the account's real `product_categories`
+   *  (case-insensitive) before anything is sent — never trusted as-is. */
+  sendCategoryBannerName: string | null
   /** True when the model asked to send the restaurant menu PDF
    *  (auto-reply mode, `hotel` vertical with `restaurant_menu_url` set)
    *  — see `SEND_RESTAURANT_MENU_SENTINEL`. */

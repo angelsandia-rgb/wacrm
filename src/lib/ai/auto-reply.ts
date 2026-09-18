@@ -564,6 +564,7 @@ export async function dispatchInboundToAiReply(
     let hasRestaurantMenu = false
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
+    let hotelCategoryBanners: string[] = []
     let clinicAppointment: Awaited<ReturnType<typeof loadClinicAppointmentContext>> = null
     let calendarContext: AutoReplyCalendarContext | null = null
     let knownContactFacts: string | null = null
@@ -621,6 +622,7 @@ export async function dispatchInboundToAiReply(
           conversationId,
           currency,
         ).catch(() => null)
+        hotelCategoryBanners = await loadHotelCategoryBanners(db, accountId).catch(() => [])
       }
 
       // Clinic: the patient's one upcoming appointment, so the bot can
@@ -677,6 +679,7 @@ export async function dispatchInboundToAiReply(
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
+      hotelCategoryBanners,
       hotelStayEstimate,
       clinicGuardrails: clinicSafetyMode,
       clinicAppointment: clinicAppointment
@@ -714,7 +717,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1249,6 +1252,37 @@ export async function dispatchInboundToAiReply(
             message: describeError(err).slice(0, 300),
           },
           dedupKey: `ai_send_photo_failed:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
+      }
+    }
+
+    // Defense in depth, same reasoning as send_photo above: the marker
+    // is only ever taught for hotel accounts with at least one category
+    // banner on file, but re-check here too — a hallucination or an
+    // injection attempt must never send an arbitrary image.
+    if (sendCategoryBannerName && isHotel) {
+      try {
+        await autoSendCategoryBanner({
+          db,
+          accountId,
+          configOwnerUserId,
+          conversationId,
+          categoryName: sendCategoryBannerName,
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] autonomous send_category_banner failed:', describeError(err))
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI tried to send a category banner but it could not be sent',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: describeError(err).slice(0, 300),
+          },
+          dedupKey: `ai_send_category_banner_failed:${accountId}`,
           accountId,
           throttleMinutes: 60,
         })
@@ -2541,6 +2575,83 @@ async function autoSendProductPhoto(args: {
   })
 
   return product.id
+}
+
+/** Category names that have a banner image on file — shown to the
+ *  model as the only valid targets for `SEND_CATEGORY_BANNER_SENTINEL`.
+ *  Empty for a non-hotel account (never called) or a hotel account
+ *  that hasn't uploaded any category banners yet. */
+async function loadHotelCategoryBanners(
+  db: SupabaseClient,
+  accountId: string,
+): Promise<string[]> {
+  const { data } = await db
+    .from('product_categories')
+    .select('name')
+    .eq('account_id', accountId)
+    .not('banner_url', 'is', null)
+  return ((data ?? []) as { name: string }[]).map((c) => c.name)
+}
+
+/**
+ * Sends a CATEGORY's own banner image (photos + general prices,
+ * designed outside the CRM) — for when the guest asks about a whole
+ * category rather than one specific room/service. Same matching
+ * strategy as `autoSendProductPhoto` (exact, then case-insensitive,
+ * then a last-resort containment match only when it resolves to
+ * exactly one candidate) against the account's `product_categories`.
+ */
+async function autoSendCategoryBanner(args: {
+  db: SupabaseClient
+  accountId: string
+  configOwnerUserId: string
+  conversationId: string
+  categoryName: string
+}): Promise<void> {
+  const { db, accountId, configOwnerUserId, conversationId, categoryName } = args
+
+  const { data: categories } = await db
+    .from('product_categories')
+    .select('id, name, banner_url')
+    .eq('account_id', accountId)
+  const categoryList = (categories ?? []) as { id: string; name: string; banner_url: string | null }[]
+
+  let category = categoryList.find(
+    (c) => c.name.trim().toLowerCase() === categoryName.trim().toLowerCase(),
+  )
+  if (!category && categoryName.trim().length >= 3) {
+    const targetLower = categoryName.trim().toLowerCase()
+    const candidates = categoryList.filter((c) => {
+      const nameLower = c.name.trim().toLowerCase()
+      return nameLower.includes(targetLower) || targetLower.includes(nameLower)
+    })
+    if (candidates.length === 1) category = candidates[0]
+  }
+  if (!category) {
+    console.warn(`[ai auto-reply] send_category_banner: no category matches "${categoryName}"`)
+    return
+  }
+  if (!category.banner_url) {
+    console.warn(`[ai auto-reply] send_category_banner: category "${category.name}" has no banner on file`)
+    return
+  }
+
+  await sendMessageToConversation(db, accountId, {
+    conversationId,
+    messageType: 'image',
+    mediaUrl: category.banner_url,
+    contentText: category.name,
+    senderType: 'bot',
+  })
+
+  await db.from('ai_action_log').insert({
+    account_id: accountId,
+    actor_user_id: configOwnerUserId,
+    action: 'send_category_banner',
+    target_id: category.id,
+    input: { category_name: category.name, source: 'auto_reply_autonomous' },
+    result: { category_id: category.id },
+  })
 }
 
 /**

@@ -77,6 +77,14 @@ export const SEND_CATALOG_SENTINEL = '[[ACTION:send_catalog]]'
 export const SEND_PRODUCT_PHOTO_SENTINEL_PREFIX = '[[ACTION:send_photo:'
 export const SEND_PRODUCT_PHOTO_SENTINEL_SUFFIX = ']]'
 
+/** `<exact category name>` — sends that CATEGORY's own banner image
+ *  (photos + prices, designed outside the CRM), for when the guest
+ *  asks about a whole category rather than one specific item. Hotel
+ *  vertical only; only taught when at least one category has a
+ *  banner on file (see `hotelCategoryBanners` in `buildSystemPrompt`). */
+export const SEND_CATEGORY_BANNER_SENTINEL_PREFIX = '[[ACTION:send_category_banner:'
+export const SEND_CATEGORY_BANNER_SENTINEL_SUFFIX = ']]'
+
 /**
  * Sentinel the model appends (auto-reply mode only, `hotel` vertical
  * with a `restaurant_menu_url` configured) when the guest asks for the
@@ -362,6 +370,12 @@ export function buildSystemPrompt(args: {
    *  that PDF when a guest asks for the food menu. Off/omitted means the
    *  marker is never taught. */
   restaurantMenu?: boolean
+  /** Category names that have a banner image on file (migration 141,
+   *  `product_categories.banner_url`), hotel vertical only. Turns on
+   *  `SEND_CATEGORY_BANNER_SENTINEL_PREFIX` for exactly these category
+   *  names. Empty/omitted means the marker is never taught — there'd
+   *  be nothing real for it to send. */
+  hotelCategoryBanners?: string[]
   /** A finished per-night stay total for the room/package the guest is
    *  currently asking about (`loadHotelStayEstimate`) — auto-reply mode,
    *  `hotel` vertical. Lets the bot answer "¿cuánto sería?" with a real
@@ -408,7 +422,7 @@ export function buildSystemPrompt(args: {
    *  confirmation-quality answer. Omitted/null = nothing open yet. */
   activeReservations?: string | null
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelStayEstimate, currentDate, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelStayEstimate, currentDate, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -536,6 +550,13 @@ export function buildSystemPrompt(args: {
     if (restaurantMenu) {
       parts.push(
         `If the customer asks for the restaurant's food menu — "el menú del restaurante", "la carta", "the menu", "what food do you serve" and the like — append ${SEND_RESTAURANT_MENU_SENTINEL} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies). This sends them the restaurant's own menu PDF, so you don't need to list dishes or prices yourself — just answer naturally and add the marker. This is ONLY for the restaurant's food/drink menu, not the rooms/spa/activities catalog (that's ${SEND_CATALOG_SENTINEL}). Never mention this marker to the customer.`,
+      )
+    }
+
+    if (hotelCategoryBanners && hotelCategoryBanners.length > 0) {
+      const list = hotelCategoryBanners.map((c) => `"${c}"`).join(', ')
+      parts.push(
+        `If the guest asks about one of these categories IN GENERAL — not one specific room/service/package, the whole category — append ${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>${SEND_CATEGORY_BANNER_SENTINEL_SUFFIX} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies). This sends that category's own banner image (with photos and general prices) as a separate message the instant you use this marker — just answer naturally and add the marker, never describe or link an image yourself. The ONLY valid category names for this marker are: ${list} — use the exact name as written, never one outside this list, and never this marker for one specific room/service (that's ${SEND_PRODUCT_PHOTO_SENTINEL_PREFIX}… above) or for the whole catalog across every category (that's ${SEND_CATALOG_SENTINEL}). Never mention this marker to the customer.`,
       )
     }
 

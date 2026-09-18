@@ -1835,6 +1835,18 @@
       "durationPlaceholder": "ej. 30",
       "toastDurationInvalid": "La duración debe estar entre 1 y 1440 minutos."
     },
+    "categoryBanners": {
+      "title": "Banners por categoría",
+      "description": "Una imagen por categoría (fotos + precios generales) — la IA la envía cuando alguien pregunta por toda la categoría en vez de una habitación o servicio específico.",
+      "uploadBtn": "Subir banner",
+      "replaceBtn": "Reemplazar",
+      "removeBtn": "Quitar banner",
+      "uploadSuccess": "Banner actualizado",
+      "removeSuccess": "Banner eliminado",
+      "uploadFailed": "No se pudo subir el banner",
+      "invalidImage": "Elige un archivo de imagen",
+      "fileTooLarge": "La imagen es demasiado grande (máximo 5 MB)"
+    },
     "quoteBuilder": {
       "title": "Nueva cotización",
       "description": "Combina productos del catálogo con los datos de facturación del cliente para armar una cotización.",
