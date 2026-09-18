@@ -849,11 +849,11 @@ function PublicCatalogPageInner() {
                                 .filter((r) => !r.date_from && !r.date_to && r.price > 0)
                                 .map((r) => r.price);
                               return nightly.length > 0
-                                ? `Desde ${formatCurrency(Math.min(...nightly), data.currency)}`
+                                ? formatCurrency(Math.min(...nightly), data.currency)
                                 : formatCurrency(product.price, data.currency);
                             })()
                           : product.price_options.length > 0
-                            ? `Desde ${formatCurrency(Math.min(product.price, ...product.price_options.map((o) => o.price)), data.currency)}`
+                            ? formatCurrency(Math.min(product.price, ...product.price_options.map((o) => o.price)), data.currency)
                             : formatCurrency(product.price, data.currency)}
                         {isRoom(product) && (
                           <span className="text-xs font-normal text-[#284d53]/55">
