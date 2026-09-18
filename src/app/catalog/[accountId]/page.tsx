@@ -373,11 +373,27 @@ function PublicCatalogPageInner() {
     return data.categories.map((c) => c.name).filter((name) => withProducts.has(name));
   }, [data]);
 
+  // Category name -> its position among the account's categories
+  // (Habitaciones first for every hotel account, per product_categories
+  // .position) — used to group the "Todos" grid by category instead of
+  // the raw alphabetical-by-product-name order the API returns, which
+  // otherwise interleaves every category together.
+  const categoryOrder = useMemo(() => {
+    if (!data) return new Map<string, number>();
+    return new Map(data.categories.map((c, i) => [c.name, i]));
+  }, [data]);
+
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('es');
     let list = data?.products ?? [];
     if (activeCategory) {
       list = list.filter((product) => product.category === activeCategory);
+    } else {
+      list = [...list].sort((a, b) => {
+        const ai = a.category ? (categoryOrder.get(a.category) ?? Infinity) : Infinity;
+        const bi = b.category ? (categoryOrder.get(b.category) ?? Infinity) : Infinity;
+        return ai - bi;
+      });
     }
     if (query) {
       list = list.filter((product) =>
@@ -387,7 +403,7 @@ function PublicCatalogPageInner() {
       );
     }
     return list;
-  }, [data, search, activeCategory]);
+  }, [data, search, activeCategory, categoryOrder]);
 
   const selectedOption = selectedProduct
     ? (selectedProduct.price_options.find((o) => o.id === selectedOptionId) ??
