@@ -2722,6 +2722,16 @@ async function autoSendCategoryBanner(args: {
  * active-build row for this category rather than trusting this turn's
  * marker alone, since completeness can be reached by a field captured
  * on an earlier turn.
+ *
+ * Because this can fire on the SAME turn as a reply that was still
+ * asking the guest a question (`missingReservationFields` reads the
+ * row fresh, so a field the model captured via the marker but never
+ * mentioned closing on in its own text still counts as complete), the
+ * guest could be left with the bot going silent right after asking
+ * them something — `handOffToHuman` itself never sends anything
+ * customer-facing (traced live, DEMO account, 2026-09-18: the guest
+ * got no reply at all once their data was "complete"). Always send an
+ * explicit closing line first, so the guest is never just cut off.
  */
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
@@ -2744,6 +2754,19 @@ async function handOffIfReservationComplete(args: {
     .maybeSingle()
   if (!row) return
   if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) return
+
+  try {
+    await sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'text',
+      contentText: '¡Perfecto! Ya tengo lista su solicitud — un compañero del equipo le confirmará disponibilidad y el total en breve. 🙌',
+    })
+  } catch (err) {
+    // Best-effort: the handoff itself (pausing the bot, routing to a
+    // human) matters more than this closing line — never let a send
+    // failure here skip it.
+    console.error('[ai auto-reply] reservation-complete closing message failed:', err)
+  }
 
   await handOffToHuman({
     db,
