@@ -390,10 +390,11 @@ export async function upsertReservationRequest(
   return id
 }
 
-const OCCUPANCY_LABEL_ES: Record<ReturnType<typeof occupancyForGuests>, string> = {
+const OCCUPANCY_LABEL_ES: Record<NonNullable<ReturnType<typeof occupancyForGuests>>, string> = {
   standard: 'Individual',
   couple: 'Pareja',
-  group: 'Grupo',
+  group: 'Grupo (3)',
+  quad: 'Grupo (4)',
 }
 
 /**
@@ -436,7 +437,8 @@ async function syncReservationToContactFields(
     if (nights > 0) wanted['Noches'] = String(nights)
     if (r.guests && r.guests > 0) {
       wanted['Huéspedes'] = String(r.guests)
-      wanted['Ocupación'] = OCCUPANCY_LABEL_ES[occupancyForGuests(r.guests)]
+      const occupancy = occupancyForGuests(r.guests)
+      wanted['Ocupación'] = occupancy ? OCCUPANCY_LABEL_ES[occupancy] : 'Grupo grande (5+)'
     }
     if (r.service_name) {
       wanted[r.category === 'paquetes' ? 'Paquete' : 'Habitación'] = r.service_name

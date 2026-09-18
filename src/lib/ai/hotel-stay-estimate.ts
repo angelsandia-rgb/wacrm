@@ -77,6 +77,12 @@ export async function loadHotelStayEstimate(
   if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return null
   const guests = rr.guests
   const occupancy = occupancyForGuests(guests)
+  // 5+ guests has no tier at all, by design (Angel, 2026-09-18): never
+  // auto-estimate that large a group — the bot's existing "no estimate
+  // calculated" fallback ("un compañero prepara la cotización") already
+  // does exactly what's wanted here, so this is a plain bail-out rather
+  // than building a text that would show a misleading Q0 subtotal.
+  if (occupancy === null) return null
   const quote = quoteStay(rates, rr.check_in, rr.check_out, occupancy)
   if (quote.nights.length === 0) return null
 

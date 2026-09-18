@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs'
-import { parseRoomRatesCell } from '@/lib/products/rates'
+import { parseRoomRatesCell, type DayOfWeek, type Occupancy } from '@/lib/products/rates'
 
 /**
  * .xlsx parsing for the products import dialog. Expects the same
@@ -11,8 +11,8 @@ import { parseRoomRatesCell } from '@/lib/products/rates'
  */
 
 export interface ParsedRate {
-  day_of_week: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
-  occupancy: 'standard' | 'couple' | 'group'
+  day_of_week: DayOfWeek
+  occupancy: Occupancy
   price: number
 }
 

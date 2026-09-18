@@ -7,6 +7,8 @@ import {
   parseRates,
   summarizeRates,
   occupancyForGuests,
+  formatRoomRatesCell,
+  parseRoomRatesCell,
   DAY_ORDER,
   type ProductRate,
 } from './rates'
@@ -25,12 +27,18 @@ describe('dayOfWeekOf', () => {
 })
 
 describe('occupancyForGuests', () => {
-  it('1 → standard, 2 → couple, 3+ → group', () => {
+  it('1 → standard, 2 → couple, 3 → group, 4 → quad', () => {
     expect(occupancyForGuests(1)).toBe('standard')
     expect(occupancyForGuests(2)).toBe('couple')
     expect(occupancyForGuests(3)).toBe('group')
-    expect(occupancyForGuests(9)).toBe('group')
+    expect(occupancyForGuests(4)).toBe('quad')
     expect(occupancyForGuests(0)).toBe('standard')
+  })
+
+  it('5+ has no tier at all — never auto-priced, always forwarded to a person', () => {
+    expect(occupancyForGuests(5)).toBeNull()
+    expect(occupancyForGuests(9)).toBeNull()
+    expect(occupancyForGuests(200)).toBeNull()
   })
 })
 
@@ -108,6 +116,19 @@ describe('resolveNightlyRate', () => {
     expect(resolveNightlyRate([], '2026-03-05', 'standard')).toBeNull()
     expect(resolveNightlyRate(RATES, '2026-03-02', 'standard')).toBeNull() // Mon, unpriced
   })
+
+  it('uses an explicit quad (4 guests) rate, and falls back to standard when absent', () => {
+    const withQuad: ProductRate[] = [
+      ...RATES,
+      { day_of_week: 'thu', occupancy: 'quad', price: 1300, date_from: null, date_to: null },
+    ]
+    expect(resolveNightlyRate(withQuad, '2026-03-05', 'quad')).toBe(1300) // Thu, explicit
+    expect(resolveNightlyRate(withQuad, '2026-03-06', 'quad')).toBe(1000) // Fri, no quad → standard
+  })
+
+  it('occupancy: null (5+ guests) never resolves, even with rates on file', () => {
+    expect(resolveNightlyRate(RATES, '2026-03-05', null)).toBeNull() // Thu has a standard rate, but no tier to use it
+  })
 })
 
 describe('quoteStay', () => {
@@ -129,6 +150,13 @@ describe('quoteStay', () => {
 
   it('empty for a bad range', () => {
     expect(quoteStay(RATES, '2026-03-08', '2026-03-05').nights).toEqual([])
+  })
+
+  it('occupancy: null (5+ guests) prices nothing — every night comes back missing', () => {
+    const q = quoteStay(RATES, '2026-03-05', '2026-03-08', null)
+    expect(q.total).toBe(0)
+    expect(q.nights.map((n) => n.price)).toEqual([null, null, null])
+    expect(q.missing).toEqual(['2026-03-05', '2026-03-06', '2026-03-07'])
   })
 })
 
@@ -262,6 +290,12 @@ describe('parseRates', () => {
     if (res.ok) expect(res.rates[0]).toMatchObject({ occupancy: 'group', price: 1600 })
   })
 
+  it("accepts occupancy 'quad'", () => {
+    const res = parseRates([{ day_of_week: 'sat', occupancy: 'quad', price: 1900 }])
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.rates[0]).toMatchObject({ occupancy: 'quad', price: 1900 })
+  })
+
   it('requires both dates or neither, and date_to >= date_from', () => {
     expect(parseRates([{ day_of_week: 'mon', price: 1, date_from: '2026-12-24' }]).ok).toBe(false)
     expect(
@@ -271,11 +305,43 @@ describe('parseRates', () => {
   })
 
   it('caps the number of rates', () => {
-    const many = Array.from({ length: 64 }, () => ({ day_of_week: 'mon' as const, price: 1 }))
+    const many = Array.from({ length: 85 }, () => ({ day_of_week: 'mon' as const, price: 1 }))
     expect(parseRates(many).ok).toBe(false)
   })
 
   it('rejects a non-array', () => {
     expect(parseRates({ day_of_week: 'mon' }).ok).toBe(false)
+  })
+})
+
+describe('formatRoomRatesCell / parseRoomRatesCell (quad round trip)', () => {
+  it('round-trips a 4-slot cell including the quad tier', () => {
+    const rates: ProductRate[] = [
+      { day_of_week: 'mon', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'mon', occupancy: 'couple', price: 600, date_from: null, date_to: null },
+      { day_of_week: 'mon', occupancy: 'group', price: 850, date_from: null, date_to: null },
+      { day_of_week: 'mon', occupancy: 'quad', price: 1100, date_from: null, date_to: null },
+    ]
+    const cell = formatRoomRatesCell(rates)
+    expect(cell).toBe('mon=300/600/850/1100')
+    expect(parseRoomRatesCell(cell)).toEqual([
+      { day_of_week: 'mon', occupancy: 'standard', price: 300 },
+      { day_of_week: 'mon', occupancy: 'couple', price: 600 },
+      { day_of_week: 'mon', occupancy: 'group', price: 850 },
+      { day_of_week: 'mon', occupancy: 'quad', price: 1100 },
+    ])
+  })
+
+  it('a skipped middle tier (no group) leaves an empty slot before quad', () => {
+    const rates: ProductRate[] = [
+      { day_of_week: 'fri', occupancy: 'standard', price: 400, date_from: null, date_to: null },
+      { day_of_week: 'fri', occupancy: 'quad', price: 1400, date_from: null, date_to: null },
+    ]
+    const cell = formatRoomRatesCell(rates)
+    expect(cell).toBe('fri=400///1400')
+    expect(parseRoomRatesCell(cell)).toEqual([
+      { day_of_week: 'fri', occupancy: 'standard', price: 400 },
+      { day_of_week: 'fri', occupancy: 'quad', price: 1400 },
+    ])
   })
 })

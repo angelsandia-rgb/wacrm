@@ -30,13 +30,15 @@ export const DAY_LABEL_ES: Record<DayOfWeek, string> = {
   sun: 'Dom',
 }
 
-/** standard = base / 1 guest · couple = 2 guests · group = 3+ guests.
- *  `couple` and `group` are optional tiers — a missing one falls back
- *  to the standard rate. */
-export type Occupancy = 'standard' | 'couple' | 'group'
+/** standard = 1 guest · couple = 2 guests · group = 3 guests · quad = 4
+ *  guests. `couple`, `group` and `quad` are optional tiers — a missing
+ *  one falls back to the standard rate. 5+ guests has no tier at all
+ *  (Angel, 2026-09-18: never estimate for a group that large — always
+ *  forward the request to a person instead); see `occupancyForGuests`. */
+export type Occupancy = 'standard' | 'couple' | 'group' | 'quad'
 
 /** Display order for the occupancy tiers (used by every rate summary). */
-export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group']
+export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group', 'quad']
 
 /** A row of `product_rates`, request-body or DB shape (only the fields
  *  the resolver needs). */
@@ -50,7 +52,7 @@ export interface ProductRate {
   date_to: string | null
 }
 
-export const MAX_PRODUCT_RATES = 63 // 7 days × 3 occupancies × up to 3 seasons
+export const MAX_PRODUCT_RATES = 84 // 7 days × 4 occupancies × up to 3 seasons
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -104,16 +106,21 @@ function seasonContains(rate: ProductRate, nightISO: string): boolean {
  * Resolution order:
  *   1. exact occupancy + day of week, seasonal row covering the night
  *   2. exact occupancy + day of week, always-on row
- *   3. (occupancy 'couple' / 'group' only) fall back to the 'standard'
- *      rate for the same day — the couple and group rates are optional
+ *   3. (occupancy 'couple' / 'group' / 'quad' only) fall back to the
+ *      'standard' rate for the same day — those tiers are optional
+ *
+ * `occupancy: null` (5+ guests — see `occupancyForGuests`) always
+ * returns `null`: there is no tier to resolve or fall back to, by
+ * design — a group that large is never priced automatically.
  *
  * Returns `null` when nothing matches (the caller surfaces it as a gap).
  */
 export function resolveNightlyRate(
   rates: ProductRate[],
   nightISO: string,
-  occupancy: Occupancy,
+  occupancy: Occupancy | null,
 ): number | null {
+  if (occupancy === null) return null
   const day = dayOfWeekOf(nightISO)
   const tryOccupancy = (occ: Occupancy): number | null | 'ambiguous' => {
     const forDay = rates.filter((r) => r.day_of_week === day && r.occupancy === occ && Number.isFinite(r.price) && r.price > 0)
@@ -127,16 +134,21 @@ export function resolveNightlyRate(
   const exact = tryOccupancy(occupancy)
   if (exact === 'ambiguous') return null
   if (exact !== null) return exact
-  if (occupancy === 'couple' || occupancy === 'group') {
+  if (occupancy === 'couple' || occupancy === 'group' || occupancy === 'quad') {
     const fallback = tryOccupancy('standard')
     return fallback === 'ambiguous' ? null : fallback
   }
   return null
 }
 
-/** Map a guest count to an occupancy tier: 1 → standard, 2 → couple, 3+ → group. */
-export function occupancyForGuests(guests: number): Occupancy {
-  if (guests >= 3) return 'group'
+/** Map a guest count to an occupancy tier: 1 → standard, 2 → couple,
+ *  3 → group, 4 → quad. `null` for 5+ — deliberately no tier at all,
+ *  so a stay for that many guests is never auto-priced; the caller
+ *  must forward the request to a person instead (Angel, 2026-09-18). */
+export function occupancyForGuests(guests: number): Occupancy | null {
+  if (guests >= 5) return null
+  if (guests === 4) return 'quad'
+  if (guests === 3) return 'group'
   if (guests === 2) return 'couple'
   return 'standard'
 }
@@ -155,12 +167,13 @@ export interface StayQuote {
   missing: string[]
 }
 
-/** Price a whole stay night-by-night. */
+/** Price a whole stay night-by-night. `occupancy: null` (5+ guests)
+ *  prices nothing — every night comes back in `missing`. */
 export function quoteStay(
   rates: ProductRate[],
   checkInISO: string,
   checkOutISO: string,
-  occupancy: Occupancy = 'standard',
+  occupancy: Occupancy | null = 'standard',
 ): StayQuote {
   const nights = nightsBetween(checkInISO, checkOutISO).map((date): StayNight => {
     const price = resolveNightlyRate(rates, date, occupancy)
@@ -179,6 +192,7 @@ export const OCCUPANCY_LABEL_ES: Record<Occupancy, string> = {
   standard: '',
   couple: 'pareja ',
   group: 'grupo ',
+  quad: '4 personas ',
 }
 
 /** Rank a rate for display: standard → couple → group, Mon→Sun within
@@ -274,14 +288,14 @@ export function summarizeRates(
 
 // ------------------------------------------------------------
 // Compact single-cell encoding for the products Excel export/import.
-// One `room_rates` column instead of 21 rate_* columns. Always-on
+// One `room_rates` column instead of 28 rate_* columns. Always-on
 // rates only — seasonal overrides are not round-tripped via Excel.
 //
 //   "mon=800/950/1600;fri=1200;sat=1400//1700"
 //
-// entry = `<day>=<standard>[/<couple>[/<group>]]`; a skipped middle
-// tier is an empty slot ("1400//1700" = standard 1400, no couple,
-// group 1700).
+// entry = `<day>=<standard>[/<couple>[/<group>[/<quad>]]]`, following
+// OCCUPANCY_ORDER; a skipped middle tier is an empty slot ("1400//1700"
+// = standard 1400, no couple, group 1700, no quad).
 // ------------------------------------------------------------
 
 type RoomRateLite = Pick<ProductRate, 'day_of_week' | 'occupancy' | 'price' | 'date_from' | 'date_to'>
@@ -372,8 +386,13 @@ export function parseRates(raw: unknown): ParseRatesResult {
       }
     }
     const occupancy = row.occupancy ?? 'standard'
-    if (occupancy !== 'standard' && occupancy !== 'couple' && occupancy !== 'group') {
-      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple' or 'group'` }
+    if (
+      occupancy !== 'standard' &&
+      occupancy !== 'couple' &&
+      occupancy !== 'group' &&
+      occupancy !== 'quad'
+    ) {
+      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple', 'group' or 'quad'` }
     }
     const price = Number(row.price)
     if (!Number.isFinite(price) || price < 0) {
