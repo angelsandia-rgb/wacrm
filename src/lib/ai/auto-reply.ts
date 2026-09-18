@@ -578,7 +578,7 @@ export async function dispatchInboundToAiReply(
     let hasRestaurantMenu = false
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
-    let hotelCategoryBanners: string[] = []
+    let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
     let clinicAppointment: Awaited<ReturnType<typeof loadClinicAppointmentContext>> = null
     let calendarContext: AutoReplyCalendarContext | null = null
     let knownContactFacts: string | null = null
@@ -731,7 +731,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1284,6 +1284,8 @@ export async function dispatchInboundToAiReply(
           configOwnerUserId,
           conversationId,
           categoryName: sendCategoryBannerName,
+          variant: sendCategoryBannerVariant,
+          sinceISO: conv.ai_context_reset_at,
         })
       } catch (err) {
         console.error('[ai auto-reply] autonomous send_category_banner failed:', describeError(err))
@@ -2591,20 +2593,23 @@ async function autoSendProductPhoto(args: {
   return product.id
 }
 
-/** Category names that have a banner image on file — shown to the
- *  model as the only valid targets for `SEND_CATEGORY_BANNER_SENTINEL`.
- *  Empty for a non-hotel account (never called) or a hotel account
- *  that hasn't uploaded any category banners yet. */
+/** Categories that have a banner image on file — shown to the model
+ *  as the only valid targets for `SEND_CATEGORY_BANNER_SENTINEL`, with
+ *  `hasWeekendVariant` telling it whether it must resolve a
+ *  weekday/weekend variant before sending. Empty for a non-hotel
+ *  account (never called) or a hotel account that hasn't uploaded any
+ *  category banners yet. */
 async function loadHotelCategoryBanners(
   db: SupabaseClient,
   accountId: string,
-): Promise<string[]> {
+): Promise<{ name: string; hasWeekendVariant: boolean }[]> {
   const { data } = await db
     .from('product_categories')
-    .select('name')
+    .select('name, banner_url, banner_url_weekend')
     .eq('account_id', accountId)
-    .not('banner_url', 'is', null)
-  return ((data ?? []) as { name: string }[]).map((c) => c.name)
+  return ((data ?? []) as { name: string; banner_url: string | null; banner_url_weekend: string | null }[])
+    .filter((c) => c.banner_url || c.banner_url_weekend)
+    .map((c) => ({ name: c.name, hasWeekendVariant: Boolean(c.banner_url && c.banner_url_weekend) }))
 }
 
 /**
@@ -2614,6 +2619,17 @@ async function loadHotelCategoryBanners(
  * strategy as `autoSendProductPhoto` (exact, then case-insensitive,
  * then a last-resort containment match only when it resolves to
  * exactly one candidate) against the account's `product_categories`.
+ *
+ * Two guards beyond the basic lookup:
+ *  - `variant` picks `banner_url_weekend` over the default `banner_url`
+ *    only when the model asked for 'weekend' AND that field is set;
+ *    every other case (no variant, 'weekday', or a category with no
+ *    weekend banner) uses the default.
+ *  - Never sends the same category's banner twice in one conversation
+ *    (Angel, 2026-09-18: guests kept getting it re-sent every time
+ *    they mentioned the category again) — checked against
+ *    `ai_action_log`, scoped to rows AFTER `sinceISO` so an AI-memory
+ *    reset (`ai_context_reset_at`) correctly allows it to send again.
  */
 async function autoSendCategoryBanner(args: {
   db: SupabaseClient
@@ -2621,14 +2637,21 @@ async function autoSendCategoryBanner(args: {
   configOwnerUserId: string
   conversationId: string
   categoryName: string
+  variant: 'weekday' | 'weekend' | null
+  sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, categoryName } = args
+  const { db, accountId, configOwnerUserId, conversationId, categoryName, variant, sinceISO } = args
 
   const { data: categories } = await db
     .from('product_categories')
-    .select('id, name, banner_url')
+    .select('id, name, banner_url, banner_url_weekend')
     .eq('account_id', accountId)
-  const categoryList = (categories ?? []) as { id: string; name: string; banner_url: string | null }[]
+  const categoryList = (categories ?? []) as {
+    id: string
+    name: string
+    banner_url: string | null
+    banner_url_weekend: string | null
+  }[]
 
   let category = categoryList.find(
     (c) => c.name.trim().toLowerCase() === categoryName.trim().toLowerCase(),
@@ -2645,15 +2668,29 @@ async function autoSendCategoryBanner(args: {
     console.warn(`[ai auto-reply] send_category_banner: no category matches "${categoryName}"`)
     return
   }
-  if (!category.banner_url) {
+  const bannerUrl = (variant === 'weekend' && category.banner_url_weekend) || category.banner_url
+  if (!bannerUrl) {
     console.warn(`[ai auto-reply] send_category_banner: category "${category.name}" has no banner on file`)
     return
   }
 
+  const { data: priorSends } = await db
+    .from('ai_action_log')
+    .select('input, created_at')
+    .eq('account_id', accountId)
+    .eq('action', 'send_category_banner')
+    .eq('target_id', category.id)
+  const alreadySentThisConversation = ((priorSends ?? []) as { input: unknown; created_at: string }[]).some(
+    (row) =>
+      (row.input as { conversation_id?: string } | null)?.conversation_id === conversationId &&
+      (!sinceISO || row.created_at > sinceISO),
+  )
+  if (alreadySentThisConversation) return
+
   await sendMessageToConversation(db, accountId, {
     conversationId,
     messageType: 'image',
-    mediaUrl: category.banner_url,
+    mediaUrl: bannerUrl,
     contentText: category.name,
     senderType: 'bot',
   })
@@ -2663,7 +2700,7 @@ async function autoSendCategoryBanner(args: {
     actor_user_id: configOwnerUserId,
     action: 'send_category_banner',
     target_id: category.id,
-    input: { category_name: category.name, source: 'auto_reply_autonomous' },
+    input: { category_name: category.name, conversation_id: conversationId, source: 'auto_reply_autonomous' },
     result: { category_id: category.id },
   })
 }

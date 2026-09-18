@@ -370,12 +370,14 @@ export function buildSystemPrompt(args: {
    *  that PDF when a guest asks for the food menu. Off/omitted means the
    *  marker is never taught. */
   restaurantMenu?: boolean
-  /** Category names that have a banner image on file (migration 141,
-   *  `product_categories.banner_url`), hotel vertical only. Turns on
-   *  `SEND_CATEGORY_BANNER_SENTINEL_PREFIX` for exactly these category
-   *  names. Empty/omitted means the marker is never taught — there'd
-   *  be nothing real for it to send. */
-  hotelCategoryBanners?: string[]
+  /** Categories that have a banner image on file (migrations 141 +
+   *  143, `product_categories.banner_url`/`banner_url_weekend`), hotel
+   *  vertical only. Turns on `SEND_CATEGORY_BANNER_SENTINEL_PREFIX` for
+   *  exactly these category names — `hasWeekendVariant` teaches the
+   *  model it must ask for the stay's date and pick weekday/weekend
+   *  before sending. Empty/omitted means the marker is never taught —
+   *  there'd be nothing real for it to send. */
+  hotelCategoryBanners?: { name: string; hasWeekendVariant: boolean }[]
   /** A finished per-night stay total for the room/package the guest is
    *  currently asking about (`loadHotelStayEstimate`) — auto-reply mode,
    *  `hotel` vertical. Lets the bot answer "¿cuánto sería?" with a real
@@ -554,9 +556,17 @@ export function buildSystemPrompt(args: {
     }
 
     if (hotelCategoryBanners && hotelCategoryBanners.length > 0) {
-      const list = hotelCategoryBanners.map((c) => `"${c}"`).join(', ')
+      const list = hotelCategoryBanners
+        .map((c) => (c.hasWeekendVariant ? `"${c.name}" (has a weekday/weekend split)` : `"${c.name}"`))
+        .join(', ')
+      const hasSplit = hotelCategoryBanners.some((c) => c.hasWeekendVariant)
       parts.push(
-        `If the guest asks about one of these categories IN GENERAL — not one specific room/service/package, the whole category — append ${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>${SEND_CATEGORY_BANNER_SENTINEL_SUFFIX} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies). This sends that category's own banner image (with photos and general prices) as a separate message the instant you use this marker — just answer naturally and add the marker, never describe or link an image yourself. The ONLY valid category names for this marker are: ${list} — use the exact name as written, never one outside this list, and never this marker for one specific room/service (that's ${SEND_PRODUCT_PHOTO_SENTINEL_PREFIX}… above) or for the whole catalog across every category (that's ${SEND_CATALOG_SENTINEL}). Never mention this marker to the customer.`,
+        `If the guest asks about one of these categories IN GENERAL — not one specific room/service/package, the whole category — send that category's own banner image (with photos and general prices). The ONLY valid category names for this marker are: ${list} — use the exact name as written, never one outside this list, and never this marker for one specific room/service (that's ${SEND_PRODUCT_PHOTO_SENTINEL_PREFIX}… above) or for the whole catalog across every category (that's ${SEND_CATALOG_SENTINEL}). ` +
+          `For a category WITHOUT a weekday/weekend split, append ${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>${SEND_CATEGORY_BANNER_SENTINEL_SUFFIX} at the very end of your reply (after your customer-facing message, and after any other marker above if more than one applies).` +
+          (hasSplit
+            ? ` For a category marked "(has a weekday/weekend split)" above, its rate — and its banner image — differs for a Sunday–Thursday stay vs a Friday–Saturday stay: if you don't already know the guest's check-in date, ask for it naturally first and do NOT send the marker yet. Once you know the check-in date, work out yourself which of the two it falls on (you already know today's date) and append ${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekday${SEND_CATEGORY_BANNER_SENTINEL_SUFFIX} for Sunday–Thursday, or ${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekend${SEND_CATEGORY_BANNER_SENTINEL_SUFFIX} for Friday–Saturday.`
+            : '') +
+          ` This sends the banner image as a separate message the instant you use this marker — just answer naturally and add the marker, never describe or link an image yourself. Once you have already sent a category's banner earlier in THIS SAME conversation, do not send it again for that category — just keep answering normally, even if the guest mentions it again. Never mention this marker to the customer.`,
       )
     }
 
@@ -570,6 +580,9 @@ export function buildSystemPrompt(args: {
       )
       parts.push(
         `Stay proactive about closing the booking: any time your reply states a price, rate, or cost estimate for a room/spa service/activity/package/event (whether you computed it yourself or read it from the business context below), end that SAME reply by asking if the guest would like to confirm the reservation, and explicitly ask for whatever you still don't know among: the dates (check-in/check-out, or the single date for spa/activities/events), the number of people, and — for an event — the hall. Check what's already captured below (the reservation summary, if any, and earlier messages) before asking, so you never re-ask for something the guest already told you. Once every needed field is known, ask the guest to confirm rather than assuming — do not claim the booking is final yourself.`,
+      )
+      parts.push(
+        `Don't jump straight to "would you like to book" / asking for missing dates the moment a guest shows interest in a category with no price or estimate stated yet — that reads cold and transactional. First mention one or two concrete, warm reasons this option is worth it (a real amenity, view, included extra, or what makes the experience special), THEN ask for what's missing to move forward. Save the "quiere confirmar / permítanos unos minutos" closing language for once you've actually given a price/estimate or the guest has clearly said they want to book — not as the opening move on a plain informational question.`,
       )
     }
 

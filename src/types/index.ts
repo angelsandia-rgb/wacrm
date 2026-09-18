@@ -511,10 +511,15 @@ export interface ProductCategory {
   account_id: string;
   name: string;
   position: number;
-  /** One banner image for the whole category (migration 141) — the
-   *  AI sends it when a guest asks about the category in general
-   *  rather than one specific item. Hotel vertical only for now. */
+  /** Banner image for the whole category (migration 141) — the AI
+   *  sends it when a guest asks about the category in general rather
+   *  than one specific item. Hotel vertical only for now. */
   banner_url?: string | null;
+  /** Optional second banner for a Friday–Saturday ("weekend") rate
+   *  (migration 143) — when set, the AI asks for the stay's date and
+   *  picks whichever of the two matches; `banner_url` above is the
+   *  default/weekday one. */
+  banner_url_weekend?: string | null;
   created_at: string;
   updated_at: string;
 }

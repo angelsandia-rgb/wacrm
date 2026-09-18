@@ -1845,7 +1845,9 @@
     },
     "categoryBanners": {
       "title": "Banners por categoría",
-      "description": "Una imagen por categoría (fotos + precios generales) — la IA la envía cuando alguien pregunta por toda la categoría en vez de una habitación o servicio específico.",
+      "description": "Imagen(es) de banner por categoría (fotos + precios generales) — la IA la envía cuando alguien pregunta por toda la categoría en vez de una habitación o servicio específico. Agrega también un banner de fin de semana si la tarifa cambia viernes-sábado; la IA preguntará la fecha de la estadía y elegirá el correcto.",
+      "weekdaySlot": "Banner (tarifa entre semana / por defecto)",
+      "weekendSlot": "Banner de fin de semana (opcional, tarifa vie-sáb)",
       "uploadBtn": "Subir banner",
       "replaceBtn": "Reemplazar",
       "removeBtn": "Quitar banner",

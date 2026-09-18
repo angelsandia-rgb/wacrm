@@ -14,12 +14,18 @@ import type { ProductCategory } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
+type BannerField = 'banner_url' | 'banner_url_weekend';
+
 /**
- * One banner image per catalog category (migration 141) — sent by the
- * AI when a guest asks about a whole category ("qué habitaciones
- * tienen", "precios de spa") instead of one specific room/service. The
- * image itself (photos + general prices) is designed outside the CRM;
- * this card only uploads and stores it.
+ * Banner image(s) per catalog category (migrations 141 + 143) — sent
+ * by the AI when a guest asks about a whole category ("qué
+ * habitaciones tienen", "precios de spa") instead of one specific
+ * room/service. `banner_url` is the default/weekday image;
+ * `banner_url_weekend` is an optional second image for a Friday–
+ * Saturday rate — when both are set, the AI asks for the stay's date
+ * and picks whichever applies. The images themselves (photos +
+ * general prices) are designed outside the CRM; this card only
+ * uploads and stores them.
  *
  * Hotel vertical only, for now (Angel, 2026-09-18: "de momento quiero
  * que quede solo... para las hoteleras") — self-gates on
@@ -34,7 +40,7 @@ export function CategoryBannersCard() {
 
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isHotel) {
@@ -58,7 +64,7 @@ export function CategoryBannersCard() {
     };
   }, [isHotel]);
 
-  async function handleFile(category: ProductCategory, file: File) {
+  async function handleFile(category: ProductCategory, field: BannerField, file: File) {
     if (!file.type.startsWith('image/')) {
       toast.error(t('invalidImage'));
       return;
@@ -67,13 +73,14 @@ export function CategoryBannersCard() {
       toast.error(t('fileTooLarge'));
       return;
     }
-    setUploadingId(category.id);
+    const key = `${category.id}:${field}`;
+    setBusyKey(key);
     try {
       const { publicUrl } = await uploadAccountMedia('catalog-media', file);
       const res = await fetch(`/api/product-categories/${category.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ banner_url: publicUrl }),
+        body: JSON.stringify({ [field]: publicUrl }),
       });
       if (!res.ok) {
         const body = await readResponseJson(res).catch(() => ({}));
@@ -81,23 +88,24 @@ export function CategoryBannersCard() {
         return;
       }
       setCategories((prev) =>
-        prev.map((c) => (c.id === category.id ? { ...c, banner_url: publicUrl } : c)),
+        prev.map((c) => (c.id === category.id ? { ...c, [field]: publicUrl } : c)),
       );
       toast.success(t('uploadSuccess'));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('uploadFailed'));
     } finally {
-      setUploadingId(null);
+      setBusyKey(null);
     }
   }
 
-  async function handleRemove(category: ProductCategory) {
-    setUploadingId(category.id);
+  async function handleRemove(category: ProductCategory, field: BannerField) {
+    const key = `${category.id}:${field}`;
+    setBusyKey(key);
     try {
       const res = await fetch(`/api/product-categories/${category.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ banner_url: null }),
+        body: JSON.stringify({ [field]: null }),
       });
       if (!res.ok) {
         const body = await readResponseJson(res).catch(() => ({}));
@@ -105,11 +113,11 @@ export function CategoryBannersCard() {
         return;
       }
       setCategories((prev) =>
-        prev.map((c) => (c.id === category.id ? { ...c, banner_url: null } : c)),
+        prev.map((c) => (c.id === category.id ? { ...c, [field]: null } : c)),
       );
       toast.success(t('removeSuccess'));
     } finally {
-      setUploadingId(null);
+      setBusyKey(null);
     }
   }
 
@@ -120,82 +128,122 @@ export function CategoryBannersCard() {
       <CardHeader>
         <CardTitle className="text-base">{t('title')}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <p className="text-muted-foreground text-sm">{t('description')}</p>
         <ul className="divide-border divide-y">
-          {categories.map((category) => {
-            const busy = uploadingId === category.id;
-            return (
-              <li
-                key={category.id}
-                className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-              >
-                <div className="bg-muted flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md">
-                  {category.banner_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- Supabase Storage URL, same convention as product-form.tsx
-                    <img
-                      src={category.banner_url}
-                      alt={category.name}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <ImageIcon className="text-muted-foreground/50 size-5" />
-                  )}
-                </div>
-                <span className="text-foreground min-w-0 flex-1 truncate text-sm font-medium">
-                  {category.name}
-                </span>
-                {canManage && (
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <label>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        disabled={busy}
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) void handleFile(category, file);
-                          e.target.value = '';
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={(e) =>
-                          (e.currentTarget.previousElementSibling as HTMLInputElement)?.click()
-                        }
-                      >
-                        {busy ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <Upload className="size-3.5" />
-                        )}
-                        {category.banner_url ? t('replaceBtn') : t('uploadBtn')}
-                      </Button>
-                    </label>
-                    {category.banner_url && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => handleRemove(category)}
-                        aria-label={t('removeBtn')}
-                        className="text-muted-foreground hover:text-destructive px-2"
-                      >
-                        <X className="size-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
+          {categories.map((category) => (
+            <li key={category.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
+              <span className="text-foreground block text-sm font-medium">
+                {category.name}
+              </span>
+              <BannerSlot
+                label={t('weekdaySlot')}
+                url={category.banner_url ?? null}
+                busy={busyKey === `${category.id}:banner_url`}
+                canManage={canManage}
+                onUpload={(file) => handleFile(category, 'banner_url', file)}
+                onRemove={() => handleRemove(category, 'banner_url')}
+                uploadLabel={category.banner_url ? t('replaceBtn') : t('uploadBtn')}
+                removeLabel={t('removeBtn')}
+                altText={category.name}
+              />
+              <BannerSlot
+                label={t('weekendSlot')}
+                url={category.banner_url_weekend ?? null}
+                busy={busyKey === `${category.id}:banner_url_weekend`}
+                canManage={canManage}
+                onUpload={(file) => handleFile(category, 'banner_url_weekend', file)}
+                onRemove={() => handleRemove(category, 'banner_url_weekend')}
+                uploadLabel={category.banner_url_weekend ? t('replaceBtn') : t('uploadBtn')}
+                removeLabel={t('removeBtn')}
+                altText={category.name}
+              />
+            </li>
+          ))}
         </ul>
       </CardContent>
     </Card>
+  );
+}
+
+function BannerSlot({
+  label,
+  url,
+  busy,
+  canManage,
+  onUpload,
+  onRemove,
+  uploadLabel,
+  removeLabel,
+  altText,
+}: {
+  label: string;
+  url: string | null;
+  busy: boolean;
+  canManage: boolean;
+  onUpload: (file: File) => void;
+  onRemove: () => void;
+  uploadLabel: string;
+  removeLabel: string;
+  altText: string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="bg-muted flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md">
+        {url ? (
+          // eslint-disable-next-line @next/next/no-img-element -- Supabase Storage URL, same convention as product-form.tsx
+          <img src={url} alt={altText} className="h-full w-full object-cover" />
+        ) : (
+          <ImageIcon className="text-muted-foreground/50 size-5" />
+        )}
+      </div>
+      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{label}</span>
+      {canManage && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <label>
+            <input
+              type="file"
+              accept="image/*"
+              disabled={busy}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onUpload(file);
+                e.target.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={(e) =>
+                (e.currentTarget.previousElementSibling as HTMLInputElement)?.click()
+              }
+            >
+              {busy ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Upload className="size-3.5" />
+              )}
+              {uploadLabel}
+            </Button>
+          </label>
+          {url && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={onRemove}
+              aria-label={removeLabel}
+              className="text-muted-foreground hover:text-destructive px-2"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

@@ -65,6 +65,14 @@ const h = vi.hoisted(() => ({
     /** `product_categories.name` for whatever `category_id` a test's
      *  product carries — feeds `sendHotelBookingNudge`'s cold-start path. */
     productCategoryName: null as string | null,
+    /** The account's full `product_categories` rows (id/name/banner
+     *  urls) — `loadHotelCategoryBanners`/`autoSendCategoryBanner`'s
+     *  multi-row lookup. */
+    categories: [] as { id: string; name: string; banner_url?: string | null; banner_url_weekend?: string | null }[],
+    /** Prior `ai_action_log` rows with `action: 'send_category_banner'`
+     *  — `autoSendCategoryBanner`'s "already sent in this conversation"
+     *  dedup guard reads these back. */
+    categoryBannerLogRows: [] as { input: Record<string, unknown>; created_at: string }[],
     /** Rows inserted via `db.from('messages').insert(...)` — currently only handOffToHuman's internal note. */
     messageInserts: [] as Record<string, unknown>[],
     /** `messages` read for `tryRecoverTransientHandoff` — a human's own
@@ -251,15 +259,22 @@ vi.mock('./admin-client', () => ({
         return selectManyChain(() => h.state.stages)
       }
       if (table === 'ai_action_log') {
-        // Read path: autoScheduleAppointment's idempotency guard does
-        // .select('input').eq().eq().eq().order().limit(20) → prior
-        // successful schedule_appointment rows for the contact.
-        const readChain = {
+        // Two read shapes share this table:
+        //  - autoScheduleAppointment's idempotency guard:
+        //    .select('input').eq().eq().eq().order().limit(20) → prior
+        //    successful schedule_appointment rows for the contact.
+        //  - autoSendCategoryBanner's dedup guard: .select('input,
+        //    created_at').eq().eq().eq(), awaited directly (no
+        //    .limit()) → prior send_category_banner rows for this
+        //    category.
+        const readChain: Record<string, unknown> = {
           select: () => readChain,
           eq: () => readChain,
           order: () => readChain,
           limit: () =>
             Promise.resolve({ data: h.state.priorScheduleBookings ?? [], error: null }),
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve({ data: h.state.categoryBannerLogRows ?? [], error: null }).then(onFulfilled),
         }
         return {
           ...readChain,
@@ -334,8 +349,13 @@ vi.mock('./admin-client', () => ({
         return chain
       }
       if (table === 'product_categories') {
-        // .select('name').eq('id', ...).maybeSingle()
-        const chain = {
+        // Two shapes share this table:
+        //  - .select('name').eq('id', ...).maybeSingle() →
+        //    sendHotelBookingNudge's cold-start lookup for one category.
+        //  - .select('...').eq('account_id', ...), awaited directly →
+        //    loadHotelCategoryBanners / autoSendCategoryBanner's full
+        //    account-wide list.
+        const chain: Record<string, unknown> = {
           select: () => chain,
           eq: () => chain,
           maybeSingle: () =>
@@ -343,6 +363,8 @@ vi.mock('./admin-client', () => ({
               data: h.state.productCategoryName ? { name: h.state.productCategoryName } : null,
               error: null,
             }),
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve({ data: h.state.categories ?? [], error: null }).then(onFulfilled),
         }
         return chain
       }
@@ -505,6 +527,8 @@ beforeEach(() => {
   h.state.reservationRow = null
   h.state.activeReservationRows = []
   h.state.productCategoryName = null
+  h.state.categories = []
+  h.state.categoryBannerLogRows = []
   h.state.accountProfiles = [{ user_id: 'user-1' }, { user_id: 'user-2' }]
   h.state.notificationInserts = []
   h.state.messageInserts = []
@@ -2158,6 +2182,183 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
+  beforeEach(() => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+  })
+
+  it('sends the matched category\'s default banner when the model asks for one', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le comparto las opciones.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageType: 'image',
+        mediaUrl: 'https://cdn.example.com/rooms.jpg',
+        contentText: 'Habitaciones',
+        senderType: 'bot',
+      }),
+    )
+  })
+
+  it('does not send anything when the model does not ask for a category banner', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    await dispatchInboundToAiReply(ARGS) // default mock: sendCategoryBannerName undefined
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('sends the weekend banner when the model resolves the stay to Fri-Sat', async () => {
+    h.state.categories = [
+      {
+        id: 'cat-1',
+        name: 'Habitaciones',
+        banner_url: 'https://cdn.example.com/weekday.jpg',
+        banner_url_weekend: 'https://cdn.example.com/weekend.jpg',
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Para ese fin de semana, le comparto las opciones.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+      sendCategoryBannerVariant: 'weekend',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/weekend.jpg' }),
+    )
+  })
+
+  it('falls back to the default banner when the weekend variant is not on file', async () => {
+    h.state.categories = [
+      { id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/weekday.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto las opciones.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+      sendCategoryBannerVariant: 'weekend',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/weekday.jpg' }),
+    )
+  })
+
+  it('never sends the same category\'s banner twice in one conversation', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.categoryBannerLogRows = [
+      { input: { conversation_id: 'conv-1', category_name: 'Habitaciones' }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene de nuevo.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('a prior send in a DIFFERENT conversation does not block sending in this one', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.categoryBannerLogRows = [
+      { input: { conversation_id: 'some-other-conv' }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalled()
+  })
+
+  it('a reset (ai_context_reset_at) allows the banner to be sent again', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_transient: null,
+      ai_handoff_at: null,
+      ai_context_reset_at: '2026-09-18T17:00:00.000Z',
+    }
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.categoryBannerLogRows = [
+      // Sent BEFORE the reset — must not count.
+      { input: { conversation_id: 'conv-1' }, created_at: '2026-09-10T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalled()
+  })
+
+  it('sends nothing when the name matches no real category — never an arbitrary image', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Categoría Inventada',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('logs the send with the conversation_id so the dedup guard can find it later', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.aiActionLogInserts).toContainEqual(
+      expect.objectContaining({
+        action: 'send_category_banner',
+        target_id: 'cat-1',
+        input: expect.objectContaining({ conversation_id: 'conv-1', category_name: 'Habitaciones' }),
+      }),
+    )
   })
 })
 
