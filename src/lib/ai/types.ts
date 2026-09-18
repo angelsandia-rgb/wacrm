@@ -173,6 +173,14 @@ export interface GenerateResult {
     category: 'habitaciones' | 'spa' | 'actividades' | 'paquetes' | 'eventos'
     fields: Record<string, string>
   } | null
+  /** True when the guest just explicitly confirmed they want to
+   *  proceed with the reservation `reservationProposal` is tracking
+   *  this same turn (auto-reply mode, `hotel` vertical only) — see
+   *  `CONFIRM_RESERVATION_SENTINEL`. This is what actually routes a
+   *  completed request to a human; being "complete" alone is not
+   *  enough (2026-09-18 incident: a hand-off fired the instant every
+   *  field had a value, cutting the guest off mid-question). */
+  confirmReservation: boolean
   /** The patient confirmed or cancelled their upcoming appointment this
    *  turn (auto-reply, `clinica` vertical only) — see
    *  `APPOINTMENT_ACTION_SENTINEL_PREFIX`. `auto-reply.ts` applies the

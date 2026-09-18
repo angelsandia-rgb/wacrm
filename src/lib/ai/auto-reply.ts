@@ -731,7 +731,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, confirmReservation, appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1409,6 +1409,7 @@ export async function dispatchInboundToAiReply(
             category: reservationProposal.category as ReservationCategory,
             handoffAgentId: config.handoffAgentId,
             alreadyAssigned: Boolean(conv.assigned_agent_id),
+            confirmed: confirmReservation,
           })
         } catch (err) {
           console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
@@ -2723,15 +2724,22 @@ async function autoSendCategoryBanner(args: {
  * marker alone, since completeness can be reached by a field captured
  * on an earlier turn.
  *
- * Because this can fire on the SAME turn as a reply that was still
- * asking the guest a question (`missingReservationFields` reads the
- * row fresh, so a field the model captured via the marker but never
- * mentioned closing on in its own text still counts as complete), the
- * guest could be left with the bot going silent right after asking
- * them something — `handOffToHuman` itself never sends anything
- * customer-facing (traced live, DEMO account, 2026-09-18: the guest
- * got no reply at all once their data was "complete"). Always send an
- * explicit closing line first, so the guest is never just cut off.
+ * Requires `confirmed` (CONFIRM_RESERVATION_SENTINEL) — every field
+ * being known is NOT enough by itself. An earlier version fired the
+ * instant the record became complete, with no regard for whether the
+ * guest had actually agreed to anything; traced live twice in the
+ * DEMO account, 2026-09-18: first it handed off completely silently
+ * (fixed by always sending a closing line), then — with a "does the
+ * bot's own reply end in '?'" heuristic in between — it still fired
+ * one second after the bot asked "¿Le gustaría confirmarla?" and told
+ * the guest "ya tengo lista su solicitud" before they'd answered
+ * anything. Gating on an explicit confirmation marker (mirrors
+ * `MARK_DEAL_WON_SENTINEL`'s "explicit and unmistakable" bar) is the
+ * real fix: it can only fire in response to something the guest
+ * actually said, never a guess about the bot's own phrasing.
+ *
+ * Always sends an explicit closing line before pausing the bot —
+ * `handOffToHuman` itself never sends anything customer-facing.
  */
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
@@ -2741,8 +2749,12 @@ async function handOffIfReservationComplete(args: {
   category: ReservationCategory
   handoffAgentId: string | null
   alreadyAssigned: boolean
+  /** CONFIRM_RESERVATION_SENTINEL this turn — see the doc comment above. */
+  confirmed: boolean
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned } = args
+  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed } = args
+
+  if (!confirmed) return
 
   const { data: row } = await db
     .from('reservation_requests')

@@ -2367,7 +2367,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
   })
 
-  it('sends an explicit closing message before pausing the bot — never leaves the guest with no reply', async () => {
+  it('sends an explicit closing message before pausing the bot, once the guest explicitly confirms', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
       guests: 4,
@@ -2377,12 +2377,13 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       hall: null,
     }
     h.generateReply.mockResolvedValue({
-      text: '¡Qué buena elección! Si me comparte sus fechas, le registro la solicitud.',
+      text: '¡Perfecto, Carlos! Quedó registrada su solicitud.',
       handoff: false,
       markDealWon: false,
       moveToStageName: null,
       sendCatalog: false,
       reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
+      confirmReservation: true,
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
@@ -2397,7 +2398,30 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 
-  it('does not hand off (and sends no closing message) while a required field is still missing', async () => {
+  it('does not hand off (and sends no closing message) when every field is known but the guest has not explicitly confirmed', async () => {
+    h.state.reservationRow = {
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Para 4 personas el estimado es GTQ 1,500. ¿Le gustaría confirmarla?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
+      // confirmReservation omitted — the bot is still asking, not closing.
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+  })
+
+  it('does not hand off (and sends no closing message) while a required field is still missing, even if confirmed is set', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
       guests: null,
@@ -2413,6 +2437,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       moveToStageName: null,
       sendCatalog: false,
       reservationProposal: { category: 'habitaciones', fields: {} },
+      confirmReservation: true,
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
