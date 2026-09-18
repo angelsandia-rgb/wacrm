@@ -2362,6 +2362,64 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
   })
 })
 
+describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
+  beforeEach(() => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+  })
+
+  it('sends an explicit closing message before pausing the bot — never leaves the guest with no reply', async () => {
+    h.state.reservationRow = {
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: '¡Qué buena elección! Si me comparte sus fechas, le registro la solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageType: 'text',
+        contentText: expect.stringContaining('compañero del equipo'),
+      }),
+    )
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('does not hand off (and sends no closing message) while a required field is still missing', async () => {
+    h.state.reservationRow = {
+      category: 'habitaciones',
+      guests: null,
+      check_in: null,
+      check_out: null,
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: '¿Para cuántas personas sería?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposal: { category: 'habitaciones', fields: {} },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+  })
+})
+
 describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
   it('sends the menu when the model asks for it and a menu URL is configured', async () => {
     h.state.account = { default_currency: 'USD', restaurant_menu_url: 'https://x/menu.pdf' }
