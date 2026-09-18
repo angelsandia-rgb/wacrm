@@ -7,6 +7,7 @@ import {
   parseRates,
   summarizeRates,
   occupancyForGuests,
+  DAY_ORDER,
   type ProductRate,
 } from './rates'
 
@@ -174,6 +175,57 @@ describe('summarizeRates', () => {
       { day_of_week: 'mon', occupancy: 'group', price: 0, date_from: null, date_to: null },
     ]
     expect(summarizeRates(rates, fmt)).toBe('Lun Q300')
+  })
+
+  it('wraps Sunday into a Monday-starting run when they share a price — a "domingo a jueves" corporate rate (real Villa San Ricardo data, 2026-09-18)', () => {
+    const rates: ProductRate[] = [
+      { day_of_week: 'mon', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'tue', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'wed', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'thu', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'fri', occupancy: 'standard', price: 400, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'standard', price: 400, date_from: null, date_to: null },
+      { day_of_week: 'sun', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+    ]
+    expect(summarizeRates(rates, fmt)).toBe('Dom–Jue Q300 · Vie–Sáb Q400')
+  })
+
+  it('does not wrap when Sunday\'s price differs from the Monday-starting run', () => {
+    const rates: ProductRate[] = [
+      { day_of_week: 'mon', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'tue', occupancy: 'standard', price: 300, date_from: null, date_to: null },
+      { day_of_week: 'fri', occupancy: 'standard', price: 400, date_from: null, date_to: null },
+      { day_of_week: 'sun', occupancy: 'standard', price: 500, date_from: null, date_to: null },
+    ]
+    expect(summarizeRates(rates, fmt)).toBe('Lun–Mar Q300 · Vie Q400 · Dom Q500')
+  })
+
+  it('does not wrap when every day already shares one price (already a single Lun–Dom run)', () => {
+    const rates: ProductRate[] = DAY_ORDER.map((day_of_week) => ({
+      day_of_week,
+      occupancy: 'standard' as const,
+      price: 1400,
+      date_from: null,
+      date_to: null,
+    }))
+    expect(summarizeRates(rates, fmt)).toBe('Lun–Dom Q1400')
+  })
+
+  it('wraps independently per occupancy tier (real Suite Clásica data, Villa San Ricardo)', () => {
+    const week = (occupancy: ProductRate['occupancy'], sunThu: number, friSat: number): ProductRate[] => [
+      ...(['mon', 'tue', 'wed', 'thu', 'sun'] as const).map(
+        (day_of_week): ProductRate => ({ day_of_week, occupancy, price: sunThu, date_from: null, date_to: null }),
+      ),
+      ...(['fri', 'sat'] as const).map(
+        (day_of_week): ProductRate => ({ day_of_week, occupancy, price: friSat, date_from: null, date_to: null }),
+      ),
+    ]
+    const rates: ProductRate[] = [...week('standard', 300, 400), ...week('couple', 600, 800)]
+    // The occupancy label prefixes the whole tier's body once, not each
+    // run inside it — matches the existing single-run-per-tier tests.
+    expect(summarizeRates(rates, fmt)).toBe(
+      'Dom–Jue Q300 · Vie–Sáb Q400 · pareja Dom–Jue Q600 · Vie–Sáb Q800',
+    )
   })
 })
 
