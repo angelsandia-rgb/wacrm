@@ -249,3 +249,72 @@ describe('buildSystemPrompt — category banner marker gate', () => {
     expect(p.toLowerCase()).toContain('do not send it again')
   })
 })
+
+describe('buildSystemPrompt — hotel dynamic welcome (first reply) + no-repeat-menu', () => {
+  it('teaches the greeting + active-categories list only on the first reply', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [
+        { name: 'Habitaciones', hasWeekendVariant: false },
+        { name: 'Spa', hasWeekendVariant: false },
+      ],
+      hotelIsFirstReply: true,
+    })
+    expect(p.toLowerCase()).toContain('this is your first reply')
+    expect(p).toContain('Habitaciones, Spa')
+  })
+
+  it('says nothing about the first-reply greeting on a later turn', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+      hotelIsFirstReply: false,
+    })
+    expect(p.toLowerCase()).not.toContain('this is your first reply')
+  })
+
+  it('teaches never to show the category menu again once intent is clear, on every turn (not just the first)', () => {
+    const first = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+      hotelIsFirstReply: true,
+    })
+    const later = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+      hotelIsFirstReply: false,
+    })
+    expect(first.toLowerCase()).toContain('never show the full list of categories again')
+    expect(later.toLowerCase()).toContain('never show the full list of categories again')
+  })
+
+  it('never mentions the first-reply greeting when there are no active category banners at all', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelIsFirstReply: true })
+    expect(p.toLowerCase()).not.toContain('this is your first reply')
+  })
+})
+
+describe('buildSystemPrompt — hotel multi-intent reservation marker (up to 2 per turn)', () => {
+  it('teaches up to two markers, one per distinct category raised this same turn', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('up to two')
+    expect(p.toLowerCase()).toContain('never two for the same category')
+  })
+})
+
+describe('buildSystemPrompt — hotel recap before confirming + no-availability-checking', () => {
+  it('requires a recap of category/dates/people/price/deposit before asking to confirm', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('recap')
+    expect(p.toLowerCase()).toContain('what it includes if you know it')
+  })
+
+  it('explicitly forbids the bot from checking/determining availability itself', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('you never check, promise, or determine room/service availability yourself')
+  })
+})

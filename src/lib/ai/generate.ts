@@ -120,7 +120,6 @@ export function parseGeneration(
   const markDealWon = raw.includes(MARK_DEAL_WON_SENTINEL)
   const sendCatalog = raw.includes(SEND_CATALOG_SENTINEL)
   const sendRestaurantMenu = raw.includes(SEND_RESTAURANT_MENU_SENTINEL)
-  const confirmReservation = raw.includes(CONFIRM_RESERVATION_SENTINEL)
 
   const sendPhotoMatch = raw.match(
     new RegExp(
@@ -233,16 +232,32 @@ export function parseGeneration(
   )
   const quickReplyId = quickReplyMatch ? quickReplyMatch[1].trim() : null
 
-  const reservationMatch = raw.match(
-    new RegExp(
-      `${escapeRegExp(RECORD_RESERVATION_SENTINEL_PREFIX)}(.+?)${escapeRegExp(RECORD_RESERVATION_SENTINEL_SUFFIX)}`,
-    ),
+  // Up to 2 markers per reply — one per DISTINCT category the guest
+  // mentioned this same turn (see the prompt instruction next to
+  // RECORD_RESERVATION_SENTINEL_PREFIX in defaults.ts). A global regex
+  // instead of the old single `.match()` so a second, different-category
+  // marker isn't silently discarded (2026-09-19: "quiero habitación y
+  // masaje" only ever captured the room). A second marker for the SAME
+  // category is a correction, not a new intent — the LAST one wins, same
+  // as always. Hard-capped at 2 regardless of how many the model emits —
+  // never trust the model to police its own count.
+  const RESERVATION_MARKER_RE = new RegExp(
+    `${escapeRegExp(RECORD_RESERVATION_SENTINEL_PREFIX)}(.+?)${escapeRegExp(RECORD_RESERVATION_SENTINEL_SUFFIX)}`,
+    'g',
   )
-  let reservationProposal: GenerateResult['reservationProposal'] = null
-  if (reservationMatch) {
-    const [catRaw, ...restParts] = reservationMatch[1].split('|')
-    const category = (catRaw ?? '').trim().toLowerCase()
-    if ((RESERVATION_MARKER_CATEGORIES as readonly string[]).includes(category)) {
+  const MAX_RESERVATION_PROPOSALS_PER_TURN = 2
+  const reservationProposals: GenerateResult['reservationProposals'] = []
+  {
+    let match: RegExpExecArray | null
+    // CONFIRM_RESERVATION_SENTINEL is only meaningful directly after the
+    // marker it's confirming (the prompt says "append it right after") —
+    // and at most ONE proposal per turn may carry `confirmed`, so a
+    // hallucinated double-confirm can never fire a hand-off twice.
+    let confirmedAssigned = false
+    while ((match = RESERVATION_MARKER_RE.exec(raw))) {
+      const [catRaw, ...restParts] = match[1].split('|')
+      const category = (catRaw ?? '').trim().toLowerCase()
+      if (!(RESERVATION_MARKER_CATEGORIES as readonly string[]).includes(category)) continue
       const fields: Record<string, string> = {}
       for (const pair of restParts.join('|').split(';')) {
         const eq = pair.indexOf('=')
@@ -251,14 +266,27 @@ export function parseGeneration(
         const val = pair.slice(eq + 1).trim()
         if (key && val) fields[key] = val
       }
+      const afterMarker = raw.slice(match.index + match[0].length)
+      const confirmed =
+        !confirmedAssigned && afterMarker.trimStart().startsWith(CONFIRM_RESERVATION_SENTINEL)
+      if (confirmed) confirmedAssigned = true
+
       // A category with nothing else is still worth recording (a bare
       // "guest is asking about a room") — but only if the model gave us
       // at least the category cleanly.
-      reservationProposal = {
-        category: category as NonNullable<GenerateResult['reservationProposal']>['category'],
+      const proposal = {
+        category: category as GenerateResult['reservationProposals'][number]['category'],
         fields,
+        confirmed,
+      }
+      const existingIdx = reservationProposals.findIndex((p) => p.category === category)
+      if (existingIdx >= 0) {
+        reservationProposals[existingIdx] = proposal
+      } else if (reservationProposals.length < MAX_RESERVATION_PROPOSALS_PER_TURN) {
+        reservationProposals.push(proposal)
       }
     }
+    RESERVATION_MARKER_RE.lastIndex = 0
   }
 
   const apptActionMatch = raw.match(
@@ -290,17 +318,19 @@ export function parseGeneration(
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
-    .replace(reservationMatch ? reservationMatch[0] : '', '')
+    .replace(RESERVATION_MARKER_RE, '') // strips EVERY record_reservation marker, not just the first
     .replace(apptActionMatch ? apptActionMatch[0] : '', '')
     .trim()
 
   // --- second-pass cleanup, in order of increasing severity ---
   //
   // The named extraction above only pulls the FIRST occurrence of each
-  // payload marker and only its exact shape. The model can still leave
-  // behind: a duplicate marker, one whose payload the named parser
-  // couldn't read (a stray "]" mid-value, a rogue line break), or one
-  // it wrote on its own line. On the hotel vertical — which stacks the
+  // payload marker (and, for `record_reservation` specifically, up to the
+  // first 2 well-formed ones) and only its exact shape. The model can
+  // still leave behind: a 3rd+ reservation marker, a duplicate of another
+  // marker, one whose payload the named parser couldn't read (a stray "]"
+  // mid-value, a rogue line break), or one it wrote on its own line. On
+  // the hotel vertical — which stacks the
   // most trailing markers of any config — that used to be common and
   // *every* leftover forced a sticky handoff. Split by how much a
   // missed marker actually matters:
@@ -353,7 +383,6 @@ export function parseGeneration(
     sendPhotoProductName,
     sendCategoryBannerName,
     sendCategoryBannerVariant,
-    confirmReservation,
     sendRestaurantMenu,
     leadTemperature,
     contactName,
@@ -361,7 +390,7 @@ export function parseGeneration(
     sentinelLeakDetected,
     quoteProposal,
     quickReplyId,
-    reservationProposal,
+    reservationProposals,
     appointmentAction,
     usage,
   }

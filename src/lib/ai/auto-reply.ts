@@ -682,6 +682,13 @@ export async function dispatchInboundToAiReply(
     // 118) — prepended to the prompt for this reply, then cleared below.
     const flowDirective = (conv.ai_flow_directive as string | null)?.trim() || undefined
 
+    // No prior 'assistant' turn in the window the model is about to see
+    // means the bot has never replied in this conversation yet (within
+    // the context window `buildConversationContext` fetched — bounded the
+    // same way `ai_context_reset_at` already bounds everything else here).
+    // Only meaningful for the hotel welcome-message instruction below.
+    const hotelIsFirstReply = isHotel && !messages.some((m) => m.role === 'assistant')
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -695,6 +702,7 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
+      hotelIsFirstReply,
       hotelStayEstimate,
       clinicGuardrails: clinicSafetyMode,
       clinicAppointment: clinicAppointment
@@ -732,7 +740,7 @@ export async function dispatchInboundToAiReply(
       return
     }
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposal, confirmReservation, appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1249,6 +1257,7 @@ export async function dispatchInboundToAiReply(
           configOwnerUserId,
           conversationId,
           productName: resolvedSendPhotoProductName,
+          sinceISO: conv.ai_context_reset_at,
         })
       } catch (err) {
         // Same reasoning as send_catalog above: never rethrow, always
@@ -1394,26 +1403,33 @@ export async function dispatchInboundToAiReply(
 
     // Defense in depth, same reasoning as the checks above: the marker
     // is only ever taught to a `hotel` account, but re-verify here so a
-    // stray marker on a non-hotel account never writes a row.
-    if (reservationProposal && isHotel) {
-      try {
-        await autoRecordReservation({
-          db, accountId, contactId, conversationId, configOwnerUserId, proposal: reservationProposal,
-        })
-      } catch (err) {
-        console.error('[ai auto-reply] autonomous record_reservation failed:', err)
-      }
-      if (!conv.ai_handoff_at) {
+    // stray marker on a non-hotel account never writes a row. Up to 2
+    // proposals — one per distinct category the guest raised this turn
+    // (e.g. "quiero habitación y masaje") — each recorded and checked for
+    // hand-off independently; `parseGeneration` already guarantees at
+    // most one carries `confirmed: true`, so this loop can never fire
+    // `handOffIfReservationComplete`'s hand-off twice in the same turn.
+    if (isHotel) {
+      for (const proposal of reservationProposals) {
         try {
-          await handOffIfReservationComplete({
-            db, accountId, conversationId, configOwnerUserId,
-            category: reservationProposal.category as ReservationCategory,
-            handoffAgentId: config.handoffAgentId,
-            alreadyAssigned: Boolean(conv.assigned_agent_id),
-            confirmed: confirmReservation,
+          await autoRecordReservation({
+            db, accountId, contactId, conversationId, configOwnerUserId, proposal,
           })
         } catch (err) {
-          console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
+          console.error('[ai auto-reply] autonomous record_reservation failed:', err)
+        }
+        if (!conv.ai_handoff_at) {
+          try {
+            await handOffIfReservationComplete({
+              db, accountId, conversationId, configOwnerUserId,
+              category: proposal.category as ReservationCategory,
+              handoffAgentId: config.handoffAgentId,
+              alreadyAssigned: Boolean(conv.assigned_agent_id),
+              confirmed: proposal.confirmed,
+            })
+          } catch (err) {
+            console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
+          }
         }
       }
     }
@@ -2286,7 +2302,7 @@ async function autoRecordReservation(args: {
   contactId: string
   conversationId: string
   configOwnerUserId: string
-  proposal: NonNullable<GenerateResult['reservationProposal']>
+  proposal: GenerateResult['reservationProposals'][number]
 }): Promise<void> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, proposal } = args
   const f = proposal.fields
@@ -2476,9 +2492,13 @@ async function autoSetContactName(args: {
  * alerting fires only for that — note this means a failure partway
  * through a multi-photo gallery leaves the earlier photos sent but
  * unlogged in `ai_action_log`, same tradeoff `sendCatalogToConversation`
- * already accepts for its own photo loop. Returns the sent product's
- * id (so the caller can follow up with `sendHotelBookingNudge`), or
- * `null` for either no-op case above.
+ * already accepts for its own photo loop. Never re-sends the same
+ * product's photo twice in one conversation — same `ai_action_log` guard
+ * `autoSendCategoryBanner` uses for category banners (2026-09-18: this one
+ * was missing it, so a guest re-asking about a room got the gallery again
+ * every time). Returns the sent product's id (so the caller can follow up
+ * with `sendHotelBookingNudge`), or `null` for a no-op: no match, no photo
+ * on file, or already sent this conversation.
  */
 /** Lowercases, trims, and drops a trailing parenthetical qualifier
  *  ("Suite Clásica (Individual o Pareja)" -> "suite clásica") so a
@@ -2522,8 +2542,12 @@ async function autoSendProductPhoto(args: {
   configOwnerUserId: string
   conversationId: string
   productName: string
+  /** Same reasoning as `autoSendCategoryBanner`'s `sinceISO`: an
+   *  `ai_context_reset_at` after the prior send correctly allows a
+   *  re-send following an agent's AI-memory reset. */
+  sinceISO: string | null
 }): Promise<string | null> {
-  const { db, accountId, configOwnerUserId, conversationId, productName } = args
+  const { db, accountId, configOwnerUserId, conversationId, productName, sinceISO } = args
 
   const { data: products } = await db
     .from('products')
@@ -2573,6 +2597,21 @@ async function autoSendProductPhoto(args: {
     return null
   }
 
+  // Never re-send the same product's photo twice in one conversation —
+  // same guard `autoSendCategoryBanner` uses for category banners.
+  const { data: priorSends } = await db
+    .from('ai_action_log')
+    .select('input, created_at')
+    .eq('account_id', accountId)
+    .eq('action', 'send_photo')
+    .eq('target_id', product.id)
+  const alreadySentThisConversation = ((priorSends ?? []) as { input: unknown; created_at: string }[]).some(
+    (row) =>
+      (row.input as { conversation_id?: string } | null)?.conversation_id === conversationId &&
+      (!sinceISO || row.created_at > sinceISO),
+  )
+  if (alreadySentThisConversation) return null
+
   for (const photoUrl of photoUrls) {
     await sendMessageToConversation(db, accountId, {
       conversationId,
@@ -2588,7 +2627,12 @@ async function autoSendProductPhoto(args: {
     actor_user_id: configOwnerUserId,
     action: 'send_photo',
     target_id: product.id,
-    input: { product_name: product.name, source: 'auto_reply_autonomous', photo_count: photoUrls.length },
+    input: {
+      product_name: product.name,
+      conversation_id: conversationId,
+      source: 'auto_reply_autonomous',
+      photo_count: photoUrls.length,
+    },
     result: { product_id: product.id, photo_count: photoUrls.length },
   })
 

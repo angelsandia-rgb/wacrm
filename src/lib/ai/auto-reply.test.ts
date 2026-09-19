@@ -69,10 +69,13 @@ const h = vi.hoisted(() => ({
      *  urls) — `loadHotelCategoryBanners`/`autoSendCategoryBanner`'s
      *  multi-row lookup. */
     categories: [] as { id: string; name: string; banner_url?: string | null; banner_url_weekend?: string | null }[],
-    /** Prior `ai_action_log` rows with `action: 'send_category_banner'`
-     *  — `autoSendCategoryBanner`'s "already sent in this conversation"
-     *  dedup guard reads these back. */
-    categoryBannerLogRows: [] as { input: Record<string, unknown>; created_at: string }[],
+    /** Prior `ai_action_log` rows the mock hands back to WHICHEVER
+     *  dedup guard reads them (`autoSendCategoryBanner`'s
+     *  `send_category_banner` check, or `autoSendProductPhoto`'s
+     *  `send_photo` one) — the mock doesn't distinguish by `action`
+     *  since `.eq()` is inert here, same as the real query only
+     *  filters differ. */
+    dedupeActionLogRows: [] as { input: Record<string, unknown>; created_at: string }[],
     /** Rows inserted via `db.from('messages').insert(...)` — currently only handOffToHuman's internal note. */
     messageInserts: [] as Record<string, unknown>[],
     /** `messages` read for `tryRecoverTransientHandoff` — a human's own
@@ -263,10 +266,12 @@ vi.mock('./admin-client', () => ({
         //  - autoScheduleAppointment's idempotency guard:
         //    .select('input').eq().eq().eq().order().limit(20) → prior
         //    successful schedule_appointment rows for the contact.
-        //  - autoSendCategoryBanner's dedup guard: .select('input,
-        //    created_at').eq().eq().eq(), awaited directly (no
-        //    .limit()) → prior send_category_banner rows for this
-        //    category.
+        //  - autoSendCategoryBanner's AND autoSendProductPhoto's dedup
+        //    guards: .select('input, created_at').eq().eq(), awaited
+        //    directly (no .limit()) → prior send_category_banner /
+        //    send_photo rows. The mock doesn't filter by `action` (the
+        //    real query does), so both guards read the same
+        //    `dedupeActionLogRows` bucket.
         const readChain: Record<string, unknown> = {
           select: () => readChain,
           eq: () => readChain,
@@ -274,7 +279,7 @@ vi.mock('./admin-client', () => ({
           limit: () =>
             Promise.resolve({ data: h.state.priorScheduleBookings ?? [], error: null }),
           then: (onFulfilled: (v: unknown) => unknown) =>
-            Promise.resolve({ data: h.state.categoryBannerLogRows ?? [], error: null }).then(onFulfilled),
+            Promise.resolve({ data: h.state.dedupeActionLogRows ?? [], error: null }).then(onFulfilled),
         }
         return {
           ...readChain,
@@ -528,7 +533,7 @@ beforeEach(() => {
   h.state.activeReservationRows = []
   h.state.productCategoryName = null
   h.state.categories = []
-  h.state.categoryBannerLogRows = []
+  h.state.dedupeActionLogRows = []
   h.state.accountProfiles = [{ user_id: 'user-1' }, { user_id: 'user-2' }]
   h.state.notificationInserts = []
   h.state.messageInserts = []
@@ -1962,6 +1967,66 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     )
   })
 
+  it('never sends the same product\'s photo twice in one conversation', async () => {
+    h.state.products = [{ id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg' }]
+    h.state.dedupeActionLogRows = [
+      { input: { conversation_id: 'conv-1', product_name: 'Suite Premium' }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene de nuevo.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('a prior photo send in a DIFFERENT conversation does not block sending in this one', async () => {
+    h.state.products = [{ id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg' }]
+    h.state.dedupeActionLogRows = [
+      { input: { conversation_id: 'some-other-conv' }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalled()
+  })
+
+  it('a reset (ai_context_reset_at) allows the product photo to be sent again', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_transient: null,
+      ai_handoff_at: null,
+      ai_context_reset_at: '2026-09-18T17:00:00.000Z',
+    }
+    h.state.products = [{ id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg' }]
+    h.state.dedupeActionLogRows = [
+      // Sent BEFORE the reset — must not count.
+      { input: { conversation_id: 'conv-1' }, created_at: '2026-09-10T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Aquí tiene.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalled()
+  })
+
   it('swallows an actual send failure and alerts — the already-sent reply is unaffected', async () => {
     h.state.products = [{ id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg' }]
     h.generateReply.mockResolvedValue({
@@ -2269,7 +2334,7 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
 
   it('never sends the same category\'s banner twice in one conversation', async () => {
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
-    h.state.categoryBannerLogRows = [
+    h.state.dedupeActionLogRows = [
       { input: { conversation_id: 'conv-1', category_name: 'Habitaciones' }, created_at: '2026-09-01T00:00:00.000Z' },
     ]
     h.generateReply.mockResolvedValue({
@@ -2286,7 +2351,7 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
 
   it('a prior send in a DIFFERENT conversation does not block sending in this one', async () => {
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
-    h.state.categoryBannerLogRows = [
+    h.state.dedupeActionLogRows = [
       { input: { conversation_id: 'some-other-conv' }, created_at: '2026-09-01T00:00:00.000Z' },
     ]
     h.generateReply.mockResolvedValue({
@@ -2311,7 +2376,7 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
       ai_context_reset_at: '2026-09-18T17:00:00.000Z',
     }
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
-    h.state.categoryBannerLogRows = [
+    h.state.dedupeActionLogRows = [
       // Sent BEFORE the reset — must not count.
       { input: { conversation_id: 'conv-1' }, created_at: '2026-09-10T00:00:00.000Z' },
     ]
@@ -2382,8 +2447,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       markDealWon: false,
       moveToStageName: null,
       sendCatalog: false,
-      reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
-      confirmReservation: true,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '4' }, confirmed: true }],
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
@@ -2413,8 +2477,8 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       markDealWon: false,
       moveToStageName: null,
       sendCatalog: false,
-      reservationProposal: { category: 'habitaciones', fields: { personas: '4' } },
-      // confirmReservation omitted — the bot is still asking, not closing.
+      // confirmed: false — the bot is still asking, not closing.
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '4' }, confirmed: false }],
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
@@ -2436,12 +2500,41 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       markDealWon: false,
       moveToStageName: null,
       sendCatalog: false,
-      reservationProposal: { category: 'habitaciones', fields: {} },
-      confirmReservation: true,
+      reservationProposals: [{ category: 'habitaciones', fields: {}, confirmed: true }],
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
     expect(h.state.updatePayload).toBeNull()
+  })
+
+  it('two proposals in one turn (multi-intent) only hand off once — the unconfirmed one is a no-op', async () => {
+    h.state.reservationRow = {
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo con ambas cosas.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { personas: '4' }, confirmed: true },
+        { category: 'spa', fields: { personas: '2' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: expect.stringContaining('compañero del equipo') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 })
 
