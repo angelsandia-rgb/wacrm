@@ -162,25 +162,29 @@ export interface GenerateResult {
    *  conversation's persisted history (and therefore the model's own
    *  context on the next turn) reflects exactly what was actually sent. */
   quickReplyId: string | null
-  /** A hotel reservation/service detail the model logged this turn
+  /** Up to 2 hotel reservation/service details the model logged this turn
    *  (auto-reply mode, `hotel` vertical only) — see
-   *  `RECORD_RESERVATION_SENTINEL_PREFIX`. `fields` is a partial,
-   *  Spanish-keyed bag (`servicio`, `personas`, `entrada`, `salida`,
-   *  `fecha`, `minutos`, `salon`, `decoracion`, `precio`, and `nueva=1`
-   *  to start a separate booking rather than extend the current one);
-   *  `auto-reply.ts` maps and upserts it into `reservation_requests`. */
-  reservationProposal: {
+   *  `RECORD_RESERVATION_SENTINEL_PREFIX`. One entry per DISTINCT category
+   *  the guest raised this same turn (2026-09-19: "quiero habitación y
+   *  masaje" used to lose one of the two — `parseGeneration` now collects
+   *  every well-formed marker, capped at 2, latest-wins per category).
+   *  `fields` is a partial, Spanish-keyed bag (`servicio`, `personas`,
+   *  `entrada`, `salida`, `fecha`, `minutos`, `salon`, `decoracion`,
+   *  `precio`, and `nueva=1` to start a separate booking rather than
+   *  extend the current one); `auto-reply.ts` maps and upserts each into
+   *  `reservation_requests`. `confirmed` is true when the guest just
+   *  explicitly confirmed THIS proposal this same turn — see
+   *  `CONFIRM_RESERVATION_SENTINEL`. It's what actually routes a completed
+   *  request to a human; being "complete" alone is not enough (2026-09-18
+   *  incident: a hand-off fired the instant every field had a value,
+   *  cutting the guest off mid-question). At most one entry per turn can
+   *  be `confirmed` — `parseGeneration` only honors a confirm sentinel
+   *  immediately following its own marker, and only the first such match. */
+  reservationProposals: {
     category: 'habitaciones' | 'spa' | 'actividades' | 'paquetes' | 'eventos'
     fields: Record<string, string>
-  } | null
-  /** True when the guest just explicitly confirmed they want to
-   *  proceed with the reservation `reservationProposal` is tracking
-   *  this same turn (auto-reply mode, `hotel` vertical only) — see
-   *  `CONFIRM_RESERVATION_SENTINEL`. This is what actually routes a
-   *  completed request to a human; being "complete" alone is not
-   *  enough (2026-09-18 incident: a hand-off fired the instant every
-   *  field had a value, cutting the guest off mid-question). */
-  confirmReservation: boolean
+    confirmed: boolean
+  }[]
   /** The patient confirmed or cancelled their upcoming appointment this
    *  turn (auto-reply, `clinica` vertical only) — see
    *  `APPOINTMENT_ACTION_SENTINEL_PREFIX`. `auto-reply.ts` applies the

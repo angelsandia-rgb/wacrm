@@ -58,8 +58,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -82,8 +81,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -103,8 +101,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -127,8 +124,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -158,8 +154,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -197,8 +192,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -251,8 +245,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: null,
     })
@@ -333,8 +326,7 @@ describe('parseGeneration', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage,
     })
@@ -453,7 +445,7 @@ describe('parseGeneration', () => {
     const res = parseGeneration(
       'Perfecto, te confirmo disponibilidad en un momento. [[ACTION:record_reservation:habitaciones|servicio=Suite Deluxe;personas=2;entrada=2026-05-01;salida=2026-05-04]]',
     )
-    expect(res.reservationProposal).toEqual({
+    expect(res.reservationProposals).toEqual([{
       category: 'habitaciones',
       fields: {
         servicio: 'Suite Deluxe',
@@ -461,17 +453,18 @@ describe('parseGeneration', () => {
         entrada: '2026-05-01',
         salida: '2026-05-04',
       },
-    })
+      confirmed: false,
+    }])
     expect(res.text).toBe('Perfecto, te confirmo disponibilidad en un momento.')
   })
 
   it('accepts a reservation marker with just the category (bare interest)', () => {
     const res = parseGeneration('¿Para cuántas personas sería el spa? [[ACTION:record_reservation:spa|]]')
-    expect(res.reservationProposal).toEqual({ category: 'spa', fields: {} })
+    expect(res.reservationProposals).toEqual([{ category: 'spa', fields: {}, confirmed: false }])
   })
 
   it('ignores a reservation marker with an unknown category', () => {
-    expect(parseGeneration('ok [[ACTION:record_reservation:golf|personas=4]]').reservationProposal).toBeNull()
+    expect(parseGeneration('ok [[ACTION:record_reservation:golf|personas=4]]').reservationProposals).toEqual([])
   })
 
   it('allows a reservation marker alongside the temperature marker', () => {
@@ -479,9 +472,57 @@ describe('parseGeneration', () => {
       'Con gusto. [[ACTION:set_temperature:warm]] [[ACTION:record_reservation:eventos|servicio=Boda;fecha=2026-06-20;personas=120]]',
     )
     expect(res.leadTemperature).toBe('warm')
-    expect(res.reservationProposal?.category).toBe('eventos')
-    expect(res.reservationProposal?.fields).toMatchObject({ servicio: 'Boda', fecha: '2026-06-20', personas: '120' })
+    expect(res.reservationProposals[0]?.category).toBe('eventos')
+    expect(res.reservationProposals[0]?.fields).toMatchObject({ servicio: 'Boda', fecha: '2026-06-20', personas: '120' })
     expect(res.text).toBe('Con gusto.')
+  })
+
+  it('captures BOTH categories when the guest raises two in the same turn ("quiero habitación y masaje")', () => {
+    const res = parseGeneration(
+      'Con gusto le ayudo con ambas. [[ACTION:record_reservation:habitaciones|personas=2;entrada=2026-05-01]][[ACTION:record_reservation:spa|personas=2]]',
+    )
+    expect(res.reservationProposals).toEqual([
+      { category: 'habitaciones', fields: { personas: '2', entrada: '2026-05-01' }, confirmed: false },
+      { category: 'spa', fields: { personas: '2' }, confirmed: false },
+    ])
+    expect(res.text).toBe('Con gusto le ayudo con ambas.')
+    expect(res.text).not.toContain('[[')
+  })
+
+  it('a second marker for the SAME category this turn is a correction — the LAST one wins, not a second proposal', () => {
+    const res = parseGeneration(
+      'Ajusto los datos. [[ACTION:record_reservation:habitaciones|personas=2]][[ACTION:record_reservation:habitaciones|personas=4]]',
+    )
+    expect(res.reservationProposals).toEqual([
+      { category: 'habitaciones', fields: { personas: '4' }, confirmed: false },
+    ])
+  })
+
+  it('caps at 2 proposals per turn even if the model emits a 3rd distinct category', () => {
+    const res = parseGeneration(
+      '[[ACTION:record_reservation:habitaciones|personas=2]][[ACTION:record_reservation:spa|personas=2]][[ACTION:record_reservation:eventos|personas=50]]',
+    )
+    expect(res.reservationProposals).toHaveLength(2)
+    expect(res.reservationProposals.map((p) => p.category)).toEqual(['habitaciones', 'spa'])
+  })
+
+  it('only marks `confirmed` on the proposal CONFIRM_RESERVATION_SENTINEL immediately follows', () => {
+    const res = parseGeneration(
+      'Listo. [[ACTION:record_reservation:habitaciones|personas=2]][[ACTION:confirm_reservation]][[ACTION:record_reservation:spa|personas=2]]',
+    )
+    expect(res.reservationProposals).toEqual([
+      { category: 'habitaciones', fields: { personas: '2' }, confirmed: true },
+      { category: 'spa', fields: { personas: '2' }, confirmed: false },
+    ])
+  })
+
+  it('never lets a 2nd hallucinated confirm sentinel confirm a 2nd proposal in the same turn', () => {
+    const res = parseGeneration(
+      '[[ACTION:record_reservation:habitaciones|personas=2]][[ACTION:confirm_reservation]][[ACTION:record_reservation:spa|personas=2]][[ACTION:confirm_reservation]]',
+    )
+    const confirmedCount = res.reservationProposals.filter((p) => p.confirmed).length
+    expect(confirmedCount).toBe(1)
+    expect(res.reservationProposals[0]?.confirmed).toBe(true)
   })
 
   it('detects + strips the quick-reply sentinel, capturing the id', () => {
@@ -503,12 +544,11 @@ describe('parseGeneration', () => {
 
   // --- second-pass cleanup robustness (2026-09 hardening) ---
 
-  it('silently strips a DUPLICATE low-stakes marker — no handoff', () => {
+  it('silently strips a truly DUPLICATE marker (same category, repeated verbatim) — no handoff', () => {
     const res = parseGeneration(
-      'Listo. [[ACTION:record_reservation:spa|personas=2]] [[ACTION:record_reservation:habitaciones|personas=2;entrada=2026-05-01]]',
+      'Listo. [[ACTION:record_reservation:spa|personas=2]] [[ACTION:record_reservation:spa|personas=2]]',
     )
-    // the first marker is the one captured
-    expect(res.reservationProposal?.category).toBe('spa')
+    expect(res.reservationProposals).toEqual([{ category: 'spa', fields: { personas: '2' }, confirmed: false }])
     expect(res.text).toBe('Listo.')
     expect(res.text).not.toContain('[[')
     expect(res.sentinelLeakDetected).toBe(false)
@@ -603,8 +643,7 @@ describe('generateReply — OpenAI', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 },
     })
@@ -678,8 +717,7 @@ describe('generateReply — Anthropic', () => {
       quoteProposal: null,
       sentinelLeakDetected: false,
       quickReplyId: null,
-      reservationProposal: null,
-      confirmReservation: false,
+      reservationProposals: [],
       appointmentAction: null,
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
     })
