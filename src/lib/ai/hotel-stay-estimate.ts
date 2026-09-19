@@ -7,7 +7,7 @@ import {
   OCCUPANCY_LABEL_ES,
   type ProductRate,
 } from '@/lib/products/rates'
-import { resolveStayProductId } from '@/lib/reservations/price'
+import { resolveStayProductId, estimateDeposit } from '@/lib/reservations/price'
 
 // ============================================================
 // Pre-computed stay total for the auto-reply hotel bot.
@@ -47,6 +47,7 @@ export async function loadHotelStayEstimate(
   accountId: string,
   conversationId: string,
   currency: string,
+  depositPercent = 50,
 ): Promise<string | null> {
   const { data: rr } = await db
     .from('reservation_requests')
@@ -99,6 +100,11 @@ export async function loadHotelStayEstimate(
     `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}: ${formatCurrency(quote.total, currency)}.`
   if (quote.missing.length > 0) {
     text += ` (${quote.missing.join(', ')} sin tarifa publicada — esas noches las cotiza una persona.)`
+  } else {
+    // Deposit only makes sense once the total is real, not a partial
+    // subtotal — matches "never fake a complete quote" (price.ts).
+    const deposit = estimateDeposit(quote.total, depositPercent)
+    text += ` Para apartar se requiere un anticipo del ${depositPercent}%, equivalente a ${formatCurrency(deposit, currency)}.`
   }
   text +=
     ' Este total sale de las tarifas publicadas del hotel; es un estimado — la disponibilidad y el precio final los confirma una persona.'

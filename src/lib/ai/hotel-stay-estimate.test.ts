@@ -90,6 +90,46 @@ describe('loadHotelStayEstimate', () => {
     expect(res).toContain('estimado')
   })
 
+  it('includes the deposit amount, computed from the account deposit_percent, when the total is complete', async () => {
+    const res = await loadHotelStayEstimate(
+      makeDb({ reservation: RESV, rates: RATES, products: [{ id: 'p1', name: 'Master Suite Deluxe' }] }),
+      'acct-1',
+      'cv-1',
+      'GTQ',
+      50,
+    )
+    expect(res).toContain('anticipo')
+    expect(res).toContain('50%')
+    expect(res).toMatch(/anticipo.*250/) // 50% of 500
+  })
+
+  it('respects a non-default deposit_percent', async () => {
+    const res = await loadHotelStayEstimate(
+      makeDb({ reservation: RESV, rates: RATES, products: [{ id: 'p1', name: 'Master Suite Deluxe' }] }),
+      'acct-1',
+      'cv-1',
+      'GTQ',
+      30,
+    )
+    expect(res).toContain('30%')
+    expect(res).toMatch(/anticipo.*150/) // 30% of 500
+  })
+
+  it('does NOT mention a deposit when a night has no published rate (partial subtotal)', async () => {
+    const res = await loadHotelStayEstimate(
+      makeDb({
+        reservation: { ...RESV, check_out: '2026-09-13' },
+        rates: RATES,
+        products: [{ id: 'p1', name: 'Master Suite Deluxe' }],
+      }),
+      'acct-1',
+      'cv-1',
+      'GTQ',
+      50,
+    )
+    expect(res).not.toContain('anticipo')
+  })
+
   it('back-fills reservation_requests.estimated_price when every night priced', async () => {
     const updates: { id: string; patch: Record<string, unknown> }[] = []
     await loadHotelStayEstimate(
