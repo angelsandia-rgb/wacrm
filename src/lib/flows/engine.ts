@@ -34,6 +34,7 @@
 
 import { supabaseAdmin } from "./admin-client";
 import { describeError } from "@/lib/observability/describe-error";
+import { dispatchSystemAlert } from "@/lib/observability/alerts";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -541,22 +542,29 @@ async function sendListAndSuspend(
 }
 
 /**
- * A send_buttons / send_list node failed to deliver its menu (Meta /
- * Zernio rejected the interactive message — an over-long title, a
- * provider hiccup). Unlike send_text / send_media, these branches used
- * to let the exception escape and be swallowed by the top-level catch,
- * leaving the customer with no menu, no error and no fallback while the
- * run stayed parked on the previous node. Now: log it and escalate to a
- * human so the conversation isn't a dead end.
+ * A node failed to deliver a message — a menu (send_buttons/send_list),
+ * plain text, media, or a collect_input prompt (Meta/Zernio rejected it,
+ * an over-long title, a provider timeout). Used to let the exception
+ * escape and be swallowed by the top-level catch, or — for send_message/
+ * send_media/collect_input specifically — just quietly end the run as
+ * "failed" with `logEvent` alone: no alert reached anyone, and nothing
+ * outside that one run's own log ever surfaced it, so a transient
+ * provider hiccup (a Zernio timeout) could strand a guest mid-flow
+ * indefinitely with no human aware (2026-09-19 finding, alongside the
+ * matching gap in `ai/auto-reply.ts`'s own send failure path). Now every
+ * node type gets the same treatment: log it, alert loudly, put the
+ * conversation in the "pending" queue, and end the run as "handed_off"
+ * (not "failed") so a human actually sees and can pick it up.
  */
-async function menuSendFailedToHandoff(
+async function sendFailedToHandoff(
   db: AdminClient,
   run: FlowRunRow,
   node: FlowNodeRow,
   err: unknown,
+  reason: string,
 ): Promise<void> {
   await logEvent(db, run.id, "error", node.node_key, {
-    reason: "send_menu_failed",
+    reason,
     detail: describeError(err),
   });
   if (run.conversation_id) {
@@ -565,10 +573,24 @@ async function menuSendFailedToHandoff(
       .update({ status: "pending", updated_at: new Date().toISOString() })
       .eq("id", run.conversation_id);
   }
-  await logEvent(db, run.id, "handoff", node.node_key, {
-    reason: "send_menu_failed",
+  await logEvent(db, run.id, "handoff", node.node_key, { reason });
+  await endRun(db, run.id, "handed_off", reason);
+  void dispatchSystemAlert({
+    severity: "critical",
+    source: "flow_dispatch_error",
+    title: "A flow could not deliver a message — handed off to a human",
+    detail: {
+      account_id: run.account_id,
+      conversation_id: run.conversation_id,
+      flow_run_id: run.id,
+      node_key: node.node_key,
+      reason,
+      message: describeError(err).slice(0, 300),
+    },
+    dedupKey: `flow_send_failed:${run.account_id}`,
+    accountId: run.account_id,
+    throttleMinutes: 60,
   });
-  await endRun(db, run.id, "handed_off", "send_menu_failed");
 }
 
 /**
@@ -775,12 +797,8 @@ async function advanceFromNodeKey(
           whatsapp_message_id,
         });
       } catch (err) {
-        await logEvent(db, run.id, "error", node.node_key, {
-          reason: "send_text_failed",
-          detail: describeError(err),
-        });
-        await endRun(db, run.id, "failed", "send_text_failed");
-        return { outcome: "completed" };
+        await sendFailedToHandoff(db, run, node, err, "send_text_failed");
+        return { outcome: "handed_off" };
       }
       currentKey = cfg.next_node_key;
       continue;
@@ -806,12 +824,8 @@ async function advanceFromNodeKey(
           whatsapp_message_id,
         });
       } catch (err) {
-        await logEvent(db, run.id, "error", node.node_key, {
-          reason: "send_media_failed",
-          detail: describeError(err),
-        });
-        await endRun(db, run.id, "failed", "send_media_failed");
-        return { outcome: "completed" };
+        await sendFailedToHandoff(db, run, node, err, "send_media_failed");
+        return { outcome: "handed_off" };
       }
       currentKey = cfg.next_node_key;
       continue;
@@ -844,12 +858,8 @@ async function advanceFromNodeKey(
           })
           .eq("id", run.id);
       } catch (err) {
-        await logEvent(db, run.id, "error", node.node_key, {
-          reason: "collect_input_prompt_failed",
-          detail: describeError(err),
-        });
-        await endRun(db, run.id, "failed", "collect_input_prompt_failed");
-        return { outcome: "completed" };
+        await sendFailedToHandoff(db, run, node, err, "collect_input_prompt_failed");
+        return { outcome: "handed_off" };
       }
       const advanced = await advanceCurrentNodeKey(
         db,
@@ -927,7 +937,7 @@ async function advanceFromNodeKey(
           await sendListAndSuspend(db, run, node);
         }
       } catch (err) {
-        await menuSendFailedToHandoff(db, run, node, err);
+        await sendFailedToHandoff(db, run, node, err, "send_menu_failed");
         return { outcome: "handed_off" };
       }
       // Persist the new current_node_key via optimistic UPDATE.
@@ -1220,7 +1230,7 @@ async function handleReplyForActiveRun(
           await sendListAndSuspend(db, run, currentNode);
         }
       } catch (err) {
-        await menuSendFailedToHandoff(db, run, currentNode, err);
+        await sendFailedToHandoff(db, run, currentNode, err, "send_menu_failed");
         return { consumed: true, flow_run_id: run.id, outcome: "handed_off" };
       }
     } else if (currentNode.node_type === "collect_input") {
@@ -1236,10 +1246,8 @@ async function handleReplyForActiveRun(
           text: interpolateVars(cfg.prompt_text, run.vars),
         });
       } catch (err) {
-        await logEvent(db, run.id, "error", currentNode.node_key, {
-          reason: "reprompt_send_failed",
-          detail: describeError(err),
-        });
+        await sendFailedToHandoff(db, run, currentNode, err, "reprompt_send_failed");
+        return { consumed: true, flow_run_id: run.id, outcome: "handed_off" };
       }
     }
     return { consumed: true, flow_run_id: run.id, outcome: "fallback_fired" };

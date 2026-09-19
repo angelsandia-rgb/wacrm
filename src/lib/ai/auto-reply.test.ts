@@ -1054,6 +1054,68 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
   })
 })
 
+describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)', () => {
+  // 2026-09-19 real incident: generation succeeded but the channel send
+  // itself failed (a Zernio API timeout) — every vertical except clinic
+  // used to just re-throw to the outer catch, which only raises a
+  // `warning` alert with no retry, no holding message, and no hand-off.
+  // The conversation sat unanswered for 1h45min+ with nothing but a
+  // background alert. This must now behave like the clinic
+  // send-after-mutation case: alert critical, attempt a holding message,
+  // and hand off so a human actually sees it.
+  it('alerts critical, sends a holding message, and hands off when the reply send fails', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'La Junior Suite Familiar no trae desayuno incluido en esa tarifa.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+    h.engineSendText.mockRejectedValueOnce(new Error('Zernio API request timed out.'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'critical',
+        source: 'ai_dispatch_error',
+        dedupKey: 'ai_send_failed:acct-1',
+      }),
+    )
+    // The holding message goes out on the SAME channel via the
+    // self-contained continuity fallback (never the raw failed reply).
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      ai_handoff_transient: true,
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('el envío falló')
+  })
+
+  it('still hands off even when the holding message ALSO fails to send', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+    h.engineSendText.mockRejectedValue(new Error('channel completely down'))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'critical', dedupKey: 'ai_send_failed:acct-1' }),
+    )
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'critical', dedupKey: 'ai_fallback_send_failed:acct-1' }),
+    )
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+})
+
 describe('dispatchInboundToAiReply — deal-stage prompt context', () => {
   it('tells the model the current stage and the other non-won stages it can move to', async () => {
     h.state.openDeal = { id: 'deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' }

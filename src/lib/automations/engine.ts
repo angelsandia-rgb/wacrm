@@ -23,6 +23,7 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { describeError } from '@/lib/observability/describe-error'
+import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import { addContactTagIfAbsent } from '@/lib/contacts/tag-write'
 import { MAX_TAG_CHAIN_DEPTH, getTagChainDepth } from '@/lib/contacts/tag-chain'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
@@ -369,6 +370,29 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
       })
       status = 'failed'
       errorMessage = msg
+      // Until 2026-09-19 a failed step only left a `status: 'failed'` row
+      // in `automation_logs` — visible, but nobody was actively notified;
+      // a customer-facing send failing here (the same class of Zernio/
+      // Meta timeout found in ai/auto-reply.ts) was as invisible as
+      // anywhere else unless someone happened to open this automation's
+      // log screen. Note this fires for a step inside a nested `condition`
+      // branch too, even though only the OUTERMOST scope's status ends up
+      // in the log — a human should still hear about it either way.
+      void dispatchSystemAlert({
+        severity: 'warning',
+        source: 'automation_step_failed',
+        title: 'An automation step failed',
+        detail: {
+          account_id: args.automation.account_id,
+          automation_id: args.automation.id,
+          step_id: step.id,
+          step_type: step.step_type,
+          message: msg.slice(0, 300),
+        },
+        dedupKey: `automation_step_failed:${args.automation.id}`,
+        accountId: args.automation.account_id,
+        throttleMinutes: 60,
+      })
       break
     }
   }
