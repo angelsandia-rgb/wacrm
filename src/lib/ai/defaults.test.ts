@@ -78,7 +78,7 @@ describe('buildSystemPrompt — send_catalog', () => {
 })
 
 describe('buildSystemPrompt — hotel category concrete-options-before-catalog', () => {
-  it('tells the model to lead with 2-3 concrete priced options before/alongside the banner', () => {
+  it('tells the model to lead with 2-3 concrete priced options', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
@@ -87,7 +87,24 @@ describe('buildSystemPrompt — hotel category concrete-options-before-catalog',
     })
     expect(p.toLowerCase()).toContain('lead with 2–3 concrete options')
     expect(p).toContain(SEND_CATALOG_SENTINEL)
-    expect(p.toLowerCase()).toContain('prefer this concrete-options reply over')
+    expect(p.toLowerCase()).toContain('prefer this concrete-options-plus-banner reply over')
+  })
+
+  it('requires the banner marker in the SAME reply, not optional or "for later" — 2026-09-19 finding', () => {
+    // Real incident: Villa San Ricardo answered a "Paquetes" question with
+    // the concrete-options text but never once sent the category banner,
+    // for any category besides one earlier "Habitaciones" turn — the old
+    // "before or alongside" wording let the model treat the banner as
+    // skippable. This must now read as a requirement, not a suggestion.
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Paquete Romántico (Q1,100)'],
+      hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
+    })
+    expect(p.toLowerCase()).toContain('is not optional extra flair to skip')
+    expect(p.toLowerCase()).toContain('also append the')
+    expect(p.toLowerCase()).toContain('never text now and the banner "later"')
   })
 
   it('is silent when no category has a banner', () => {
