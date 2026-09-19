@@ -1128,7 +1128,48 @@ export async function dispatchInboundToAiReply(
         })
         return
       }
-      throw err
+      // Every OTHER vertical used to just `throw err` here, which the
+      // outer catch (bottom of this function) turns into nothing more
+      // than a `warning`-severity alert — no retry, no fallback message,
+      // no hand-off. A transient channel failure (a Zernio/Meta timeout)
+      // then left the conversation silently orphaned: the customer's
+      // message sat unanswered indefinitely with only a background alert
+      // nobody was guaranteed to notice (real incident, 2026-09-19 —
+      // Villa San Ricardo, over an hour with no reply). Mirror the
+      // clinic branch above instead: alert loudly, attempt a holding
+      // message via the same self-contained fallback the "empty reply"
+      // path already trusts, and hand off so a human actually sees it.
+      console.error(
+        `[ai auto-reply] conversation ${conversationId}: sending the reply failed:`,
+        err,
+      )
+      void dispatchSystemAlert({
+        severity: 'critical',
+        source: 'ai_dispatch_error',
+        title: 'AI auto-reply: the reply failed to send — the customer got no response',
+        detail: {
+          account_id: accountId,
+          conversation_id: conversationId,
+          message: describeError(err).slice(0, 300),
+        },
+        dedupKey: `ai_send_failed:${accountId}`,
+        accountId,
+        throttleMinutes: 60,
+      })
+      await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
+      await handOffToHuman({
+        db,
+        accountId,
+        conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary:
+          '🤖 La IA generó una respuesta pero el envío falló (el canal/proveedor no respondió a tiempo). El cliente puede seguir esperando — revísalo y contéstale directamente.',
+        transient: true,
+      }).catch((hoErr) => {
+        console.error('[ai auto-reply] handoff after reply-send failure also failed:', hoErr)
+      })
+      return
     }
 
     if (clinicActionNeedsHandoff) {

@@ -21,6 +21,7 @@ import {
   sendMessageToConversation,
   SendMessageError,
 } from '@/lib/whatsapp/send-message';
+import { dispatchSystemAlert } from '@/lib/observability/alerts';
 import type { SendMessageParams } from '@/lib/messaging/types';
 import {
   parseFollowupSteps,
@@ -176,6 +177,29 @@ export async function runFollowupSweep(
               : String(e);
         res.failed++;
         console.error('[followups] send failed', c.id, errText);
+        // Console-only until 2026-09-19: a transient send failure here
+        // (a Zernio/Meta timeout, same class as the real incident found
+        // in ai/auto-reply.ts) was invisible to everyone — no row in
+        // `system_alerts`, so nothing ever paged a human, and the step
+        // below still gets marked consumed. Deliberately NOT retrying
+        // here (a `sendMessageToConversation` failure can be ambiguous —
+        // the request may have still landed — and blind retry risks a
+        // duplicate nudge reaching the guest); this only makes the
+        // failure visible so a human can check and follow up by hand.
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_followup_send_failed',
+          title: 'A follow-up nudge failed to send',
+          detail: {
+            account_id: cfg.account_id,
+            conversation_id: c.id,
+            step_index: stepIndex,
+            message: errText.slice(0, 300),
+          },
+          dedupKey: `followups_send_failed:${cfg.account_id}`,
+          accountId: cfg.account_id,
+          throttleMinutes: 60,
+        });
       }
 
       // Record the attempt (success OR failure) so this step is consumed

@@ -86,15 +86,24 @@ const engineSendInteractiveList = vi.fn(async () => ({
   whatsapp_message_id: "wamid.4",
 }));
 
+const engineSendMedia = vi.fn(async () => ({ whatsapp_message_id: "wamid.2" }));
+
 vi.mock("./meta-send", () => ({
   engineSendText: (...a: unknown[]) =>
     (engineSendText as unknown as (...x: unknown[]) => unknown)(...a),
-  engineSendMedia: vi.fn(async () => ({ whatsapp_message_id: "wamid.2" })),
+  engineSendMedia: (...a: unknown[]) =>
+    (engineSendMedia as unknown as (...x: unknown[]) => unknown)(...a),
   engineSendInteractiveButtons: vi.fn(async () => ({
     whatsapp_message_id: "wamid.3",
   })),
   engineSendInteractiveList: (...a: unknown[]) =>
     (engineSendInteractiveList as unknown as (...x: unknown[]) => unknown)(...a),
+}));
+
+const dispatchSystemAlert = vi.fn(async () => ({ opened: true, notified: true, alertId: "a1" }));
+vi.mock("@/lib/observability/alerts", () => ({
+  dispatchSystemAlert: (...a: unknown[]) =>
+    (dispatchSystemAlert as unknown as (...x: unknown[]) => unknown)(...a),
 }));
 
 import { dispatchInboundToFlows, entryTriggerTexts } from "./engine";
@@ -160,8 +169,12 @@ beforeEach(() => {
   h.state.insertedRun = null;
   h.state.rpcCalls = [];
   engineSendText.mockClear();
+  engineSendText.mockResolvedValue({ whatsapp_message_id: "wamid.1" });
+  engineSendMedia.mockClear();
+  engineSendMedia.mockResolvedValue({ whatsapp_message_id: "wamid.2" });
   engineSendInteractiveList.mockClear();
   engineSendInteractiveList.mockResolvedValue({ whatsapp_message_id: "wamid.4" });
+  dispatchSystemAlert.mockClear();
 });
 
 describe("entryTriggerTexts", () => {
@@ -375,6 +388,86 @@ describe("dispatchInboundToFlows — a menu that fails to send hands off, not si
         (e) =>
           e.event_type === "handoff" &&
           (e.payload as { reason?: string })?.reason === "send_menu_failed",
+      ),
+    ).toBe(true);
+    expect(result.outcome).toBe("handed_off");
+  });
+});
+
+describe("dispatchInboundToFlows — send_message/send_media failures hand off, not silence (2026-09-19)", () => {
+  // Before this fix, a send_message/send_media/collect_input node that
+  // failed to deliver just ended the run as "failed" via `logEvent`
+  // alone — no `dispatchSystemAlert`, no conversation state change, no
+  // human ever notified. A transient provider timeout (Zernio, in the
+  // real incident) then stranded the guest mid-flow indefinitely. Now
+  // every node type gets the same treatment the menu nodes already had.
+  it("hands off (not 'failed') and alerts when a send_message node's send throws", async () => {
+    h.state.flows = [KEYWORD_FLOW];
+    h.state.nodes = NODES; // "greet" is a send_message node
+    engineSendText.mockRejectedValueOnce(new Error("Zernio API request timed out."));
+
+    const result = await dispatch({
+      kind: "text",
+      text: "order status",
+      meta_message_id: "m1",
+    });
+
+    const events = h.state.inserted
+      .filter((i) => i.table === "flow_run_events")
+      .map((i) => i.row);
+    expect(
+      events.some(
+        (e) =>
+          e.event_type === "error" &&
+          (e.payload as { reason?: string })?.reason === "send_text_failed",
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (e) =>
+          e.event_type === "handoff" &&
+          (e.payload as { reason?: string })?.reason === "send_text_failed",
+      ),
+    ).toBe(true);
+    expect(result.outcome).toBe("handed_off");
+    expect(dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: "critical",
+        source: "flow_dispatch_error",
+        dedupKey: "flow_send_failed:acct-1",
+      }),
+    );
+  });
+
+  it("hands off (not 'failed') when a send_media node's send throws", async () => {
+    h.state.flows = [KEYWORD_FLOW];
+    h.state.nodes = [
+      NODES[0],
+      {
+        id: "n2",
+        flow_id: "flow-1",
+        node_key: "greet",
+        node_type: "send_media",
+        config: { media_type: "image", media_url: "https://x/room.jpg", next_node_key: "done" },
+      },
+      NODES[2],
+    ];
+    engineSendMedia.mockRejectedValueOnce(new Error("Zernio API request timed out."));
+
+    const result = await dispatch({
+      kind: "text",
+      text: "order status",
+      meta_message_id: "m1",
+    });
+
+    const events = h.state.inserted
+      .filter((i) => i.table === "flow_run_events")
+      .map((i) => i.row);
+    expect(
+      events.some(
+        (e) =>
+          e.event_type === "handoff" &&
+          (e.payload as { reason?: string })?.reason === "send_media_failed",
       ),
     ).toBe(true);
     expect(result.outcome).toBe("handed_off");
