@@ -5,6 +5,7 @@ import {
   SEND_RESTAURANT_MENU_SENTINEL,
   SEND_CATEGORY_BANNER_SENTINEL_PREFIX,
   SET_CONTACT_NAME_SENTINEL_PREFIX,
+  SEND_CATALOG_SENTINEL,
 } from './defaults'
 
 describe('buildSystemPrompt — hotel reservation marker gate', () => {
@@ -63,6 +64,72 @@ describe('buildSystemPrompt — send_catalog', () => {
     })
     expect(p).toContain('[[ACTION:send_catalog]]')
     expect(p.toLowerCase()).toContain('do not write the catalog link')
+  })
+
+  it('teaches not to re-send the full catalog once already sent in this conversation', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Widget (Q10)'],
+    })
+    expect(p.toLowerCase()).toContain('do not send it again')
+    expect(p.toLowerCase()).toContain('answer from the catalog data you already have')
+  })
+})
+
+describe('buildSystemPrompt — hotel category concrete-options-before-catalog', () => {
+  it('tells the model to lead with 2-3 concrete priced options before/alongside the banner', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Paquete Romántico (Q1,100)'],
+      hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
+    })
+    expect(p.toLowerCase()).toContain('lead with 2–3 concrete options')
+    expect(p).toContain(SEND_CATALOG_SENTINEL)
+    expect(p.toLowerCase()).toContain('prefer this concrete-options reply over')
+  })
+
+  it('is silent when no category has a banner', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Widget (Q10)'],
+      hotelCategoryBanners: [],
+    })
+    expect(p.toLowerCase()).not.toContain('lead with 2–3 concrete options')
+  })
+})
+
+describe('buildSystemPrompt — hotel objection protocol and single CTA', () => {
+  it('teaches acknowledge-answer-alternatives-one CTA when hotelReservations is on', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('objection / pushback protocol')
+    expect(p.toLowerCase()).toContain('exactly one clear next-step question')
+    expect(p.toLowerCase()).toContain('never more than one stacked in the same reply')
+  })
+
+  it('is silent when hotelReservations is off', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: false })
+    expect(p.toLowerCase()).not.toContain('objection / pushback protocol')
+  })
+
+  it('never appears in draft mode', () => {
+    const draft = buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelReservations: true })
+    expect(draft.toLowerCase()).not.toContain('objection / pushback protocol')
+  })
+})
+
+describe('buildSystemPrompt — deposit amount in the closing CTA', () => {
+  it('requires naming the deposit amount before asking the guest to confirm', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('anticipo')
+    expect(p).toContain('¿Desea que registre esta opción con un anticipo estimado de Q400?')
+  })
+
+  it('teaches never claiming the request is a confirmed reservation', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('never tell the guest it is "reservado"')
   })
 })
 

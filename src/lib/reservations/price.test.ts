@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { estimateStayPrice, resolveStayProductId } from './price'
+import { estimateStayPrice, resolveStayProductId, estimateDeposit } from './price'
 
 // 2026-09-09 is a Wednesday. Couple rate Wed–Thu = 500, Fri = 700.
 const RATES = [
@@ -69,5 +69,17 @@ describe('estimateStayPrice', () => {
   it('returns null when the product has no rates', async () => {
     const db = makeDb({ rates: [], products: [{ id: 'p1', name: 'Master Suite Deluxe' }] })
     expect(await estimateStayPrice(db, 'a', STAY)).toBeNull()
+  })
+})
+
+describe('estimateDeposit', () => {
+  it('computes the exact percentage of the total', () => {
+    expect(estimateDeposit(800, 50)).toBe(400)
+    expect(estimateDeposit(1000, 30)).toBe(300)
+  })
+
+  it('rounds to the nearest whole unit', () => {
+    expect(estimateDeposit(500, 33)).toBe(165) // 165.0
+    expect(estimateDeposit(333, 50)).toBe(167) // 166.5 → 167
   })
 })

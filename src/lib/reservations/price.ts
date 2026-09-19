@@ -47,6 +47,13 @@ export async function estimateStayPrice(
   return quote.total
 }
 
+/** The deposit ("anticipo") owed on a fully-priced stay total, rounded to
+ *  the nearest whole unit — same source of truth as the total itself, so
+ *  the AI never has to compute a percentage on its own. */
+export function estimateDeposit(total: number, depositPercent: number): number {
+  return Math.round((total * depositPercent) / 100)
+}
+
 /**
  * The AI's `record_reservation` marker rarely carries a `product_id`, so
  * fall back to matching the captured `service_name` against an active

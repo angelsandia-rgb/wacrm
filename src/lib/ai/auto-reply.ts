@@ -603,7 +603,7 @@ export async function dispatchInboundToAiReply(
       // whether a restaurant menu PDF is on file (migration 114).
       const { data: catalogModeRow, error: accountMetadataError } = await db
         .from('accounts')
-        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency, catalog_slug')
+        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency, catalog_slug, deposit_percent')
         .eq('id', accountId)
         .maybeSingle()
       if (accountMetadataError) {
@@ -626,8 +626,9 @@ export async function dispatchInboundToAiReply(
       // sería?" with a real number instead of deferring every quote.
       if (isHotel) {
         const currency = (catalogModeRow?.default_currency as string | undefined) ?? 'USD'
+        const depositPercent = (catalogModeRow?.deposit_percent as number | undefined) ?? 50
         hotelStayEstimate =
-          (await loadHotelStayEstimate(db, accountId, conversationId, currency).catch(
+          (await loadHotelStayEstimate(db, accountId, conversationId, currency, depositPercent).catch(
             () => null,
           )) ?? undefined
         activeReservations = await loadActiveReservationsSummary(
