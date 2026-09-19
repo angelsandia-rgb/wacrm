@@ -318,3 +318,46 @@ describe('buildSystemPrompt — hotel recap before confirming + no-availability-
     expect(p.toLowerCase()).toContain('you never check, promise, or determine room/service availability yourself')
   })
 })
+
+describe('buildSystemPrompt — hotel category with no banner falls back to catalog/KB', () => {
+  it('teaches that a category outside the banner list is not an error — just answer from data', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+    })
+    expect(p.toLowerCase()).toContain('has no banner on file')
+    expect(p.toLowerCase()).toContain('not an error')
+  })
+
+  it('says nothing about it when there are no category banners at all (nothing to contrast against)', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelCategoryBanners: [] })
+    expect(p.toLowerCase()).not.toContain('has no banner on file')
+  })
+})
+
+describe('buildSystemPrompt — hotel error/delay recovery protocol', () => {
+  it('teaches acknowledge → fix with real data → hand off only via the two-step protocol if truly stuck', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('error / delay recovery protocol')
+    expect(p.toLowerCase()).toContain('never invent a hand-off path outside that two-step protocol')
+  })
+
+  it('never mentions it in draft mode or when hotelReservations is off', () => {
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelReservations: true }).toLowerCase(),
+    ).not.toContain('error / delay recovery protocol')
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: false }).toLowerCase(),
+    ).not.toContain('error / delay recovery protocol')
+  })
+})
+
+describe('buildSystemPrompt — hotel modify/cancel existing request', () => {
+  it('teaches capturing which request + motivo, then the two-step hand-off — never claims to modify/cancel itself', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('modify / cancel an existing request')
+    expect(p.toLowerCase()).toContain('"motivo"')
+    expect(p.toLowerCase()).toContain('you have no tool to change or cancel a reservation/request yourself')
+  })
+})
