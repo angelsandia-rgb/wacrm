@@ -794,7 +794,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updatePayload?.ai_handoff_summary).not.toContain('Solicitudes activas')
   })
 
-  it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
+  it('disables auto-reply, writes a summary, and never uses the normal AI-reply send path on handoff', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
@@ -805,6 +805,47 @@ describe('dispatchInboundToAiReply — handoff', () => {
     )
     // No handoff target configured → conversation left unassigned.
     expect(h.state.updatePayload).not.toHaveProperty('assigned_agent_id')
+  })
+
+  it('acknowledges the transfer to the customer instead of leaving them with silence — real gap found 2026-09-20', async () => {
+    // The model is told to emit ONLY [[HANDOFF]] on this turn (no other
+    // text), so `outboundText` is empty here, same as every other test
+    // in this block — before this fix, the guest who just confirmed
+    // "sí, pásame con alguien" got nothing at all until a human opened
+    // the thread.
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageType: 'text',
+        contentText: expect.stringContaining('en un momento'),
+      }),
+    )
+  })
+
+  it('sends whatever text the model left alongside the sentinel instead of the default, if any', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto, ya le conecto.',
+      handoff: true,
+      markDealWon: false,
+      moveToStageName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: 'Con gusto, ya le conecto.' }),
+    )
+  })
+
+  it('still hands off even when the acknowledgment send itself fails', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    h.sendMessageToConversation.mockRejectedValue(new Error('network blip'))
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 
   it('routes to the configured handoff agent on handoff', async () => {
@@ -2485,6 +2526,144 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
         target_id: 'cat-1',
         input: expect.objectContaining({ conversation_id: 'conv-1', category_name: 'Habitaciones' }),
       }),
+    )
+  })
+})
+
+describe('dispatchInboundToAiReply — deterministic category banner (tied to record_reservation, not the model)', () => {
+  // Real gap found 2026-09-20 testing the Villa San Ricardo prompt fusion:
+  // gpt-5.4-mini repeatedly gave concrete category options in text without
+  // ever emitting SEND_CATEGORY_BANNER_SENTINEL, so the banner PR #175 made
+  // "mandatory" silently never sent. record_reservation fires reliably every
+  // time the guest engages with a category, so the banner is now tied to
+  // THAT instead of trusting the model to also remember its own marker.
+  beforeEach(() => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+  })
+
+  it('sends the banner the moment a record_reservation proposal names a category that has one — no marker from the model needed', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto — tenemos Master Deluxe, Premium y Clásica Doble. ¿Cuál le interesa?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      // No sendCategoryBannerName — the model never asked for it.
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '2' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageType: 'image',
+        mediaUrl: 'https://cdn.example.com/rooms.jpg',
+        contentText: 'Habitaciones',
+      }),
+    )
+  })
+
+  it('does nothing when the proposal\'s category has no banner on file', async () => {
+    h.state.categories = [] // no banner-holding categories at all
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, cuénteme para cuántas personas.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [{ category: 'eventos', fields: {}, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('still respects the same-conversation dedupe — never resends a banner already sent', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.dedupeActionLogRows = [
+      { input: { conversation_id: 'conv-1', category_name: 'Habitaciones' }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, ¿qué fechas tiene en mente?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '2' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('resolves the weekend variant itself from the proposal\'s own check-in date — no model reasoning needed', async () => {
+    h.state.categories = [
+      {
+        id: 'cat-1',
+        name: 'Habitaciones',
+        banner_url: 'https://cdn.example.com/weekday.jpg',
+        banner_url_weekend: 'https://cdn.example.com/weekend.jpg',
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: '¿Para cuántas personas sería?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      // 2026-10-16 is a Friday.
+      reservationProposals: [{ category: 'habitaciones', fields: { entrada: '2026-10-16' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/weekend.jpg' }),
+    )
+  })
+
+  it('defaults to the weekday banner when the check-in date is not known yet', async () => {
+    h.state.categories = [
+      {
+        id: 'cat-1',
+        name: 'Habitaciones',
+        banner_url: 'https://cdn.example.com/weekday.jpg',
+        banner_url_weekend: 'https://cdn.example.com/weekend.jpg',
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: '¿Para cuántas personas y qué fechas tiene en mente?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [{ category: 'habitaciones', fields: {}, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/weekday.jpg' }),
+    )
+  })
+
+  it('also fires deterministically for the SECOND category in a multi-intent turn', async () => {
+    h.state.categories = [
+      { id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' },
+      { id: 'cat-2', name: 'Spa', banner_url: 'https://cdn.example.com/spa.jpg' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo con ambas cosas.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: {}, confirmed: false },
+        { category: 'spa', fields: {}, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(), 'acct-1', expect.objectContaining({ mediaUrl: 'https://cdn.example.com/rooms.jpg' }),
+    )
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(), 'acct-1', expect.objectContaining({ mediaUrl: 'https://cdn.example.com/spa.jpg' }),
     )
   })
 })

@@ -77,44 +77,45 @@ describe('buildSystemPrompt — send_catalog', () => {
   })
 })
 
-describe('buildSystemPrompt — hotel category concrete-options-before-catalog', () => {
-  it('tells the model to lead with 2-3 concrete priced options', () => {
+describe('buildSystemPrompt — hotel category: ask-which-item, not a repeated description', () => {
+  // 2026-09-20 redesign: the banner (photos + general prices) is now sent
+  // deterministically by the app the moment record_reservation captures
+  // interest in a category (see auto-reply.ts) — the model is no longer
+  // taught the banner marker at all, and is told NOT to re-describe the
+  // category's items/prices in text since the banner already shows them.
+  it('tells the model the system sends the banner automatically and it should not use a marker itself', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       catalog: ['- Paquete Romántico (Q1,100)'],
       hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
     })
-    expect(p.toLowerCase()).toContain('lead with 2–3 concrete options')
+    expect(p.toLowerCase()).toContain('the system automatically sends')
+    expect(p.toLowerCase()).toContain('you do not send this yourself')
+    expect(p).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+  })
+
+  it('tells the model to ask which specific item interests the guest instead of restating prices/benefits in text', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      catalog: ['- Paquete Romántico (Q1,100)'],
+      hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
+    })
+    expect(p.toLowerCase()).toContain('must not re-list the category')
+    expect(p.toLowerCase()).toContain('ask which one interests them')
     expect(p).toContain(SEND_CATALOG_SENTINEL)
-    expect(p.toLowerCase()).toContain('prefer this concrete-options-plus-banner reply over')
   })
 
-  it('requires the banner marker in the SAME reply, not optional or "for later" — 2026-09-19 finding', () => {
-    // Real incident: Villa San Ricardo answered a "Paquetes" question with
-    // the concrete-options text but never once sent the category banner,
-    // for any category besides one earlier "Habitaciones" turn — the old
-    // "before or alongside" wording let the model treat the banner as
-    // skippable. This must now read as a requirement, not a suggestion.
-    const p = buildSystemPrompt({
-      userPrompt: null,
-      mode: 'auto_reply',
-      catalog: ['- Paquete Romántico (Q1,100)'],
-      hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
-    })
-    expect(p.toLowerCase()).toContain('is not optional extra flair to skip')
-    expect(p.toLowerCase()).toContain('also append the')
-    expect(p.toLowerCase()).toContain('never text now and the banner "later"')
-  })
-
-  it('is silent when no category has a banner', () => {
+  it('is silent about this behavior when no category has a banner', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       catalog: ['- Widget (Q10)'],
       hotelCategoryBanners: [],
     })
-    expect(p.toLowerCase()).not.toContain('lead with 2–3 concrete options')
+    expect(p.toLowerCase()).not.toContain('must not re-list the category')
+    expect(p.toLowerCase()).not.toContain('the system automatically sends')
   })
 })
 
@@ -198,72 +199,60 @@ describe('buildSystemPrompt — restaurant menu marker gate', () => {
   })
 })
 
-describe('buildSystemPrompt — category banner marker gate', () => {
-  it('teaches SEND_CATEGORY_BANNER with the exact category names when at least one has a banner', () => {
+describe('buildSystemPrompt — category banner is now app-side, never a model marker', () => {
+  // 2026-09-20: sending the banner reliably matters more than letting the
+  // model manage it, so the app sends it deterministically (tied to
+  // record_reservation, see auto-reply.ts) and the model is never taught
+  // SEND_CATEGORY_BANNER_SENTINEL at all anymore — for any hotel account,
+  // with or without a weekday/weekend split (that's also resolved in code
+  // now, from the proposal's own date field).
+  it('never teaches the marker, even with banner categories present — but does name them', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       hotelCategoryBanners: [
         { name: 'Habitaciones', hasWeekendVariant: false },
-        { name: 'Spa', hasWeekendVariant: false },
+        { name: 'Spa', hasWeekendVariant: true },
       ],
     })
-    expect(p).toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
-    expect(p).toContain('"Habitaciones", "Spa"')
+    expect(p).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+    expect(p).toContain('Habitaciones, Spa')
   })
 
-  it('never mentions the marker when no category has a banner', () => {
+  it('never mentions it when no category has a banner, or in draft mode', () => {
     expect(
       buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelCategoryBanners: [] }),
     ).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
     expect(
       buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' }),
     ).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
+    expect(
+      buildSystemPrompt({
+        userPrompt: null,
+        mode: 'draft',
+        hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+      }),
+    ).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
   })
 
-  it('never mentions the marker in draft mode', () => {
-    const draft = buildSystemPrompt({
-      userPrompt: null,
-      mode: 'draft',
-      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
-    })
-    expect(draft).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
-  })
-
-  it('teaches the weekday/weekend split only for a category that has both banners', () => {
+  it('says nothing about a weekday/weekend split to the model — that is resolved in code now', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
-      hotelCategoryBanners: [
-        { name: 'Habitaciones', hasWeekendVariant: true },
-        { name: 'Spa', hasWeekendVariant: false },
-      ],
-    })
-    expect(p).toContain('"Habitaciones" (has a weekday/weekend split)')
-    expect(p).toContain('"Spa"')
-    expect(p).not.toContain('"Spa" (has a weekday/weekend split)')
-    expect(p).toContain(`${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekday`)
-    expect(p).toContain(`${SEND_CATEGORY_BANNER_SENTINEL_PREFIX}<exact category name>|weekend`)
-  })
-
-  it('says nothing about resolving a weekday/weekend variant when no category has one', () => {
-    const p = buildSystemPrompt({
-      userPrompt: null,
-      mode: 'auto_reply',
-      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
+      hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: true }],
     })
     expect(p).not.toContain('(has a weekday/weekend split)')
     expect(p).not.toContain('|weekday')
     expect(p).not.toContain('|weekend')
   })
 
-  it('teaches not to re-send an already-sent category banner', () => {
+  it('tells the model the system never sends the same category banner twice', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
     })
-    expect(p.toLowerCase()).toContain('do not send it again')
+    expect(p.toLowerCase()).toContain('never sends the same category')
   })
 })
 
