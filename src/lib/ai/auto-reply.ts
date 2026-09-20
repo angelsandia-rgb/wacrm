@@ -769,6 +769,60 @@ export async function dispatchInboundToAiReply(
       })
       return
     }
+
+    // Real incident, 2026-09-20 (Villa San Ricardo, live test): on the
+    // heaviest-marker turn (a reservation confirmation — record_reservation
+    // re-emitted, CONFIRM_RESERVATION_SENTINEL, temperature, sometimes a
+    // deal move too) gpt-5.4-mini twice in a row wrote ONLY the trailing
+    // action markers with no customer-facing prose at all. The raw
+    // completion isn't blank — providers/openai.ts's own `empty_response`
+    // check (and `generateReplyWithOneRetry`'s retry-on-thrown-error) never
+    // fires, since the markers themselves are non-whitespace text — but
+    // `parseGeneration` strips every one of them and what's left for the
+    // customer is nothing. The guest had to repeat "sí, regístralo" three
+    // times before it went through, and nothing was ever raised for an
+    // owner to notice — confirmed live: zero `system_alerts` rows across
+    // two such failures in the same conversation. Retry once here, same
+    // as a thrown error would get, BEFORE any of the post-processing below
+    // runs on what would otherwise be stale, empty text. Skipped when
+    // `handoff` is true — a bare `[[HANDOFF]]` with no other text is the
+    // expected shape there, not a compliance miss.
+    if (!generation.text.trim() && !generation.handoff) {
+      console.warn(
+        `[ai auto-reply] conversation ${conversationId}: generation produced only action markers, no customer-facing text — retrying once`,
+      )
+      try {
+        const retry = await generateReplyWithOneRetry({ config, systemPrompt, messages })
+        if (retry.text.trim() || retry.handoff) {
+          generation = retry
+        } else {
+          void dispatchSystemAlert({
+            severity: 'warning',
+            source: 'ai_dispatch_error',
+            title: 'AI generated marker-only replies with no customer-facing text, twice in a row',
+            detail: { account_id: accountId, conversation_id: conversationId, model: config.model },
+            dedupKey: `ai_blank_after_markers:${accountId}`,
+            accountId,
+            throttleMinutes: 60,
+          })
+        }
+      } catch (err) {
+        // A thrown error on the retry is a normal generation failure —
+        // handle it exactly like the first call would have.
+        await handleAiGenerationFailure({
+          db,
+          accountId,
+          conversationId,
+          contactId,
+          configOwnerUserId,
+          config,
+          alreadyAssigned: Boolean(conv.assigned_agent_id),
+          err,
+        })
+        return
+      }
+    }
+
     const {
       text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
