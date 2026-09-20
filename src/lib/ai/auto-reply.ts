@@ -1118,6 +1118,55 @@ export async function dispatchInboundToAiReply(
       }
     }
 
+    // Deterministic banner send — BEFORE the text reply below, not after.
+    // Do NOT rely on the model also emitting SEND_CATEGORY_BANNER_SENTINEL.
+    // Real gap found 2026-09-20 testing the Villa San Ricardo prompt:
+    // gpt-5.4-mini repeatedly gave concrete category options in text
+    // without the marker, so the banner PR #175 made "mandatory" silently
+    // never sent. record_reservation, by contrast, fires reliably every
+    // time the guest engages with a category (that's its whole job), so
+    // tie the banner to IT instead: the instant a category this account
+    // has a banner for shows up in a proposal, send it.
+    // `autoSendCategoryBanner`'s own ai_action_log dedupe makes this safe
+    // to call every turn the category reappears — a resend is a no-op,
+    // not a duplicate. Hotel only (`bannerCategoryBySlug` is empty for
+    // every other vertical). Sent ahead of the reply text itself (Angel,
+    // 2026-09-20: seeing the banner before the "¿cuál le interesa?"
+    // question reads more naturally than the other way around) — this
+    // must stay ahead of the `engineSendText` call right below.
+    if (isHotel) {
+      for (const proposal of reservationProposals) {
+        const bannerCategory = bannerCategoryBySlug.get(proposal.category)
+        if (!bannerCategory) continue
+        try {
+          await autoSendCategoryBanner({
+            db,
+            accountId,
+            configOwnerUserId,
+            conversationId,
+            categoryName: bannerCategory.name,
+            variant: resolveBannerVariantFromReservationFields(proposal.fields, bannerCategory.hasWeekendVariant),
+            sinceISO: conv.ai_context_reset_at,
+          })
+        } catch (err) {
+          console.error('[ai auto-reply] deterministic send_category_banner failed:', describeError(err))
+          void dispatchSystemAlert({
+            severity: 'warning',
+            source: 'ai_dispatch_error',
+            title: 'AI category banner auto-send (deterministic) failed',
+            detail: {
+              account_id: accountId,
+              conversation_id: conversationId,
+              message: describeError(err).slice(0, 300),
+            },
+            dedupKey: `ai_send_category_banner_failed:${accountId}`,
+            accountId,
+            throttleMinutes: 60,
+          })
+        }
+      }
+    }
+
     try {
       await engineSendText({
         accountId,
@@ -1494,48 +1543,6 @@ export async function dispatchInboundToAiReply(
     // `handOffIfReservationComplete`'s hand-off twice in the same turn.
     if (isHotel) {
       for (const proposal of reservationProposals) {
-        // Deterministic banner send — do NOT rely on the model also
-        // emitting SEND_CATEGORY_BANNER_SENTINEL. Real gap found
-        // 2026-09-20 testing the Villa San Ricardo prompt: gpt-5.4-mini
-        // repeatedly gave concrete category options in text without the
-        // marker, so the banner PR #175 made "mandatory" silently never
-        // sent. record_reservation, by contrast, fires reliably every
-        // time the guest engages with a category (that's its whole job),
-        // so tie the banner to IT instead: the instant a category this
-        // account has a banner for shows up in a proposal, send it.
-        // `autoSendCategoryBanner`'s own ai_action_log dedupe makes this
-        // safe to call every turn the category reappears — a resend is a
-        // no-op, not a duplicate. Hotel only (`bannerCategoryBySlug` is
-        // empty for every other vertical).
-        const bannerCategory = bannerCategoryBySlug.get(proposal.category)
-        if (bannerCategory) {
-          try {
-            await autoSendCategoryBanner({
-              db,
-              accountId,
-              configOwnerUserId,
-              conversationId,
-              categoryName: bannerCategory.name,
-              variant: resolveBannerVariantFromReservationFields(proposal.fields, bannerCategory.hasWeekendVariant),
-              sinceISO: conv.ai_context_reset_at,
-            })
-          } catch (err) {
-            console.error('[ai auto-reply] deterministic send_category_banner failed:', describeError(err))
-            void dispatchSystemAlert({
-              severity: 'warning',
-              source: 'ai_dispatch_error',
-              title: 'AI category banner auto-send (deterministic) failed',
-              detail: {
-                account_id: accountId,
-                conversation_id: conversationId,
-                message: describeError(err).slice(0, 300),
-              },
-              dedupKey: `ai_send_category_banner_failed:${accountId}`,
-              accountId,
-              throttleMinutes: 60,
-            })
-          }
-        }
         try {
           await autoRecordReservation({
             db, accountId, contactId, conversationId, configOwnerUserId, proposal,
