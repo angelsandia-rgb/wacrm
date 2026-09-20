@@ -169,6 +169,18 @@ const CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT =
 const AI_PROVIDER_FALLBACK_TEXT =
   'Estoy teniendo una dificultad temporal para procesar tu mensaje. Ya avisé al equipo para que te dé seguimiento por este chat.'
 
+/** Sent to the customer the moment the explicit-human-request handoff
+ *  fires (HANDOFF_SENTINEL). Real gap found 2026-09-20: `buildSystemPrompt`
+ *  tells the model to reply with ONLY the sentinel, no other text, on the
+ *  turn it confirms the transfer — but the `if (handoff)` branch below
+ *  used to just pause the bot and write an INTERNAL note, so the customer
+ *  who just answered "sí, pásame con alguien" got total silence until a
+ *  human happened to open the thread. Used only as a fallback: if the
+ *  model left some text alongside the sentinel anyway, that text is sent
+ *  instead (see the call site). */
+const HUMAN_HANDOFF_ACK_TEXT =
+  'Listo, en un momento te conecto con alguien del equipo para que te ayude. 🙌'
+
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
   accountId: string
@@ -689,6 +701,19 @@ export async function dispatchInboundToAiReply(
     // Only meaningful for the hotel welcome-message instruction below.
     const hotelIsFirstReply = isHotel && !messages.some((m) => m.role === 'assistant')
 
+    // Reverse-index this account's banner-holding categories by the SAME
+    // canonical slug `record_reservation` proposals use (habitaciones,
+    // spa, actividades, paquetes, eventos) — lets the deterministic banner
+    // send below (in the reservationProposals loop) look a proposal's
+    // category straight up instead of re-deriving it. First category name
+    // that resolves to a given slug wins; two banner categories mapping to
+    // the same slug is a data-entry edge case no current account hits.
+    const bannerCategoryBySlug = new Map<string, { name: string; hasWeekendVariant: boolean }>()
+    for (const c of hotelCategoryBanners) {
+      const slug = categorySlugFromName(c.name)
+      if (slug && !bannerCategoryBySlug.has(slug)) bannerCategoryBySlug.set(slug, c)
+    }
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -982,6 +1007,23 @@ export async function dispatchInboundToAiReply(
       // and (c) leave a short internal note so whoever picks it up has
       // context. Assigning fires the `on_conversation_assigned` trigger,
       // which notifies the agent.
+      //
+      // Also acknowledge the transfer to the CUSTOMER — the model is
+      // told to emit ONLY the sentinel here, so `outboundText` is
+      // normally empty; without this, the guest who just confirmed
+      // "sí, pásame con alguien" got silence until a human opened the
+      // thread (real gap, 2026-09-20). Best-effort: a failed send must
+      // never skip the handoff itself.
+      try {
+        await sendMessageToConversation(db, accountId, {
+          conversationId,
+          messageType: 'text',
+          contentText: outboundText || HUMAN_HANDOFF_ACK_TEXT,
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
+      }
+
       const summary = buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
@@ -1452,6 +1494,48 @@ export async function dispatchInboundToAiReply(
     // `handOffIfReservationComplete`'s hand-off twice in the same turn.
     if (isHotel) {
       for (const proposal of reservationProposals) {
+        // Deterministic banner send — do NOT rely on the model also
+        // emitting SEND_CATEGORY_BANNER_SENTINEL. Real gap found
+        // 2026-09-20 testing the Villa San Ricardo prompt: gpt-5.4-mini
+        // repeatedly gave concrete category options in text without the
+        // marker, so the banner PR #175 made "mandatory" silently never
+        // sent. record_reservation, by contrast, fires reliably every
+        // time the guest engages with a category (that's its whole job),
+        // so tie the banner to IT instead: the instant a category this
+        // account has a banner for shows up in a proposal, send it.
+        // `autoSendCategoryBanner`'s own ai_action_log dedupe makes this
+        // safe to call every turn the category reappears — a resend is a
+        // no-op, not a duplicate. Hotel only (`bannerCategoryBySlug` is
+        // empty for every other vertical).
+        const bannerCategory = bannerCategoryBySlug.get(proposal.category)
+        if (bannerCategory) {
+          try {
+            await autoSendCategoryBanner({
+              db,
+              accountId,
+              configOwnerUserId,
+              conversationId,
+              categoryName: bannerCategory.name,
+              variant: resolveBannerVariantFromReservationFields(proposal.fields, bannerCategory.hasWeekendVariant),
+              sinceISO: conv.ai_context_reset_at,
+            })
+          } catch (err) {
+            console.error('[ai auto-reply] deterministic send_category_banner failed:', describeError(err))
+            void dispatchSystemAlert({
+              severity: 'warning',
+              source: 'ai_dispatch_error',
+              title: 'AI category banner auto-send (deterministic) failed',
+              detail: {
+                account_id: accountId,
+                conversation_id: conversationId,
+                message: describeError(err).slice(0, 300),
+              },
+              dedupKey: `ai_send_category_banner_failed:${accountId}`,
+              accountId,
+              throttleMinutes: 60,
+            })
+          }
+        }
         try {
           await autoRecordReservation({
             db, accountId, contactId, conversationId, configOwnerUserId, proposal,
@@ -2718,6 +2802,28 @@ async function loadHotelCategoryBanners(
  *    `ai_action_log`, scoped to rows AFTER `sinceISO` so an AI-memory
  *    reset (`ai_context_reset_at`) correctly allows it to send again.
  */
+
+/**
+ * Weekday/weekend banner variant, resolved from a `record_reservation`
+ * proposal's own fields instead of trusting the model to reason about
+ * the calendar itself — same rate split the business uses everywhere
+ * else (`entrada`/`fecha` falling on Friday or Saturday = the weekend
+ * banner). Returns null (→ the default `banner_url`) when the category
+ * has no weekend variant at all, or the check-in/use date isn't known
+ * yet — never blocks the send just because the date is still missing.
+ */
+function resolveBannerVariantFromReservationFields(
+  fields: Record<string, string>,
+  hasWeekendVariant: boolean,
+): 'weekday' | 'weekend' | null {
+  if (!hasWeekendVariant) return null
+  const dateStr = fields.entrada || fields.fecha
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay() // 0=Sun .. 6=Sat
+  if (Number.isNaN(day)) return null
+  return day === 5 || day === 6 ? 'weekend' : 'weekday'
+}
+
 async function autoSendCategoryBanner(args: {
   db: SupabaseClient
   accountId: string
