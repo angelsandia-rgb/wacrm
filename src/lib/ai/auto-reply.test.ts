@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   sendQuoteToConversation: vi.fn(),
   sendQuoteByAccountPreference: vi.fn(),
   sendMessageToConversation: vi.fn(),
+  upsertReservationRequest: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     claim: true as boolean,
@@ -43,7 +44,7 @@ const h = vi.hoisted(() => ({
      *  "no per-category pipeline", falling back to `pipeline` above. */
     pipelines: [] as { id: string; name: string }[],
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
-    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null },
+    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null; deposit_percent?: number },
     accountError: null as { code: string; message: string } | null,
     dealInserts: [] as Record<string, unknown>[],
     createdDeal: { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' } as Record<string, unknown>,
@@ -62,6 +63,18 @@ const h = vi.hoisted(() => ({
     /** Rows `loadActiveReservationsSummary` sees for the handoff recap —
      *  empty means "nothing active", the default for every non-hotel test. */
     activeReservationRows: [] as Record<string, unknown>[],
+    /** `product_rates` rows for `computeStayEstimateStatus`'s proactive
+     *  stay-estimate follow-up — empty means "no rates on file" (the
+     *  function bails out to 'unpriceable'/'no_rates'), same default as
+     *  every other hotel-pricing fixture in this file. */
+    productRates: [] as Record<string, unknown>[],
+    /** Payloads passed to `reservation_requests.update(...)` — currently
+     *  only `computeStayEstimateStatus`'s price backfill/correction. */
+    reservationRequestUpdates: [] as Record<string, unknown>[],
+    /** Payloads passed to `reservation_requests.insert(...)` —
+     *  `upsertReservationRequest`'s create path (`autoRecordReservation`
+     *  when `h.state.reservationRow` is null, the default). */
+    reservationRequestInserts: [] as Record<string, unknown>[],
     /** `product_categories.name` for whatever `category_id` a test's
      *  product carries — feeds `sendHotelBookingNudge`'s cold-start path. */
     productCategoryName: null as string | null,
@@ -75,7 +88,7 @@ const h = vi.hoisted(() => ({
      *  `send_photo` one) — the mock doesn't distinguish by `action`
      *  since `.eq()` is inert here, same as the real query only
      *  filters differ. */
-    dedupeActionLogRows: [] as { input: Record<string, unknown>; created_at: string }[],
+    dedupeActionLogRows: [] as { input: Record<string, unknown>; result?: Record<string, unknown>; created_at: string }[],
     /** Rows inserted via `db.from('messages').insert(...)` — currently only handOffToHuman's internal note. */
     messageInserts: [] as Record<string, unknown>[],
     /** `messages` read for `tryRecoverTransientHandoff` — a human's own
@@ -146,6 +159,14 @@ vi.mock('@/lib/quotes/send-quote', () => ({
     }
   },
 }))
+// Only `upsertReservationRequest` is stubbed (captures exactly what
+// `autoRecordReservation` builds and hands it, e.g. to verify the
+// precio guard below) — `categorySlugFromName` keeps its real
+// implementation, since `auto-reply.ts` imports it from this same module.
+vi.mock('@/lib/reservations/upsert', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reservations/upsert')>()
+  return { ...actual, upsertReservationRequest: h.upsertReservationRequest }
+})
 vi.mock('@/lib/whatsapp/send-message', () => ({
   sendMessageToConversation: h.sendMessageToConversation,
   SendMessageError: class SendMessageError extends Error {
@@ -374,20 +395,57 @@ vi.mock('./admin-client', () => ({
         return chain
       }
       if (table === 'reservation_requests') {
-        // Two shapes share this table:
+        // Three shapes share this table:
         //  - .select(...).eq(...).eq(...).eq(...).eq(...).maybeSingle() →
         //    sendHotelBookingNudge's/sendQuoteFollowUp's own-row lookup.
         //  - .select(...).eq(...).eq(...).eq(...).eq(...).order(...) → an
         //    array, awaited directly (no .maybeSingle) →
         //    loadActiveReservationsSummary's handoff-recap query.
+        //  - .select(...).eq(...).eq(...).eq(...).in(...).not(...).not(...)
+        //    .order(...).limit(...).maybeSingle() → loadHotelStayEstimate /
+        //    computeStayEstimateStatus's own lookup (`.in`/`.not` are
+        //    plain passthroughs here, same as every other filter above).
         const chain: Record<string, unknown> = {
           select: () => chain,
           eq: () => chain,
+          in: () => chain,
+          not: () => chain,
           order: () => chain,
           limit: () => chain,
           maybeSingle: () => Promise.resolve({ data: h.state.reservationRow, error: null }),
           then: (onFulfilled: (v: unknown) => unknown) =>
             Promise.resolve({ data: h.state.activeReservationRows, error: null }).then(onFulfilled),
+          update: (patch: Record<string, unknown>) => {
+            h.state.reservationRequestUpdates.push(patch)
+            const updateChain: Record<string, unknown> = {
+              eq: () => updateChain,
+              then: (onFulfilled: (v: unknown) => unknown) =>
+                Promise.resolve({ error: null }).then(onFulfilled),
+            }
+            return updateChain
+          },
+          // `upsertReservationRequest`'s insert path (no existing row for
+          // this conversation/category — the common case, since
+          // `h.state.reservationRow` defaults to null).
+          insert: (payload: Record<string, unknown>) => {
+            h.state.reservationRequestInserts.push(payload)
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ data: { id: 'rr-new-1' }, error: null }),
+              }),
+            }
+          },
+        }
+        return chain
+      }
+      if (table === 'product_rates') {
+        // .select(...).eq('account_id', ...).eq('product_id', ...) →
+        // computeStayEstimateStatus's / loadHotelStayEstimate's rate lookup.
+        const chain: Record<string, unknown> = {
+          select: () => chain,
+          eq: () => chain,
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve({ data: h.state.productRates, error: null }).then(onFulfilled),
         }
         return chain
       }
@@ -533,6 +591,9 @@ beforeEach(() => {
   h.state.activeReservationRows = []
   h.state.productCategoryName = null
   h.state.categories = []
+  h.state.productRates = []
+  h.state.reservationRequestUpdates = []
+  h.state.reservationRequestInserts = []
   h.state.dedupeActionLogRows = []
   h.state.accountProfiles = [{ user_id: 'user-1' }, { user_id: 'user-2' }]
   h.state.notificationInserts = []
@@ -542,6 +603,7 @@ beforeEach(() => {
   h.sendQuoteToConversation.mockReset().mockResolvedValue(undefined)
   h.sendQuoteByAccountPreference.mockReset().mockResolvedValue({ mode: 'message', pdfUrl: null })
   h.sendMessageToConversation.mockReset().mockResolvedValue({ messageId: 'm1', whatsappMessageId: 'wamid1' })
+  h.upsertReservationRequest.mockReset().mockResolvedValue('rr-mock-1')
   h.checkFreeBusy.mockReset().mockResolvedValue([])
   h.createEvent.mockReset().mockResolvedValue({ eventId: 'evt-1', htmlLink: 'https://calendar.google.com/evt-1', meetLink: 'https://meet.google.com/abc' })
   h.waitForQuietPeriod.mockReset().mockResolvedValue(true)
@@ -2527,6 +2589,198 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
         input: expect.objectContaining({ conversation_id: 'conv-1', category_name: 'Habitaciones' }),
       }),
     )
+  })
+})
+
+describe('dispatchInboundToAiReply — autoRecordReservation never trusts a model-supplied precio for habitaciones/paquetes', () => {
+  // Real incident, 2026-09-20: the model wrote servicio="Suite Clásica",
+  // which matched TWO real products ambiguously, so the deterministic
+  // price calculator gave up — and the model then guessed a price
+  // itself (Q800, a single-night reference rate) instead of the real
+  // 2-night total (Q1,200). `upsertReservationRequest` only recomputes
+  // the price when the caller leaves `estimated_price` unset, so that
+  // guess silently overwrote what should have been the real number.
+  // `autoRecordReservation` must now strip `precio` before it ever
+  // reaches `upsertReservationRequest`, for habitaciones/paquetes only.
+  beforeEach(() => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+  })
+
+  it('drops a model-supplied precio for habitaciones', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto la solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { servicio: 'Suite Clásica', personas: '2', precio: '800' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ category: 'habitaciones', service_name: 'Suite Clásica', guests: 2 }),
+    )
+    const input = h.upsertReservationRequest.mock.calls[0][2] as Record<string, unknown>
+    expect(input).not.toHaveProperty('estimated_price')
+  })
+
+  it('drops a model-supplied precio for paquetes too', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto la solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'paquetes', fields: { servicio: 'Paquete Romántico', personas: '2', precio: '1100' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const input = h.upsertReservationRequest.mock.calls[0][2] as Record<string, unknown>
+    expect(input).not.toHaveProperty('estimated_price')
+  })
+
+  it('still honors a model-supplied precio for spa, actividades, and eventos — no automatic calculator exists for those', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto la solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [{ category: 'spa', fields: { personas: '1', precio: '275' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const input = h.upsertReservationRequest.mock.calls[0][2] as Record<string, unknown>
+    expect(input).toMatchObject({ estimated_price: 275 })
+  })
+})
+
+describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () => {
+  // The other half of the 2026-09-20 fix: `hotelStayEstimate` (the
+  // prompt-context figure) is always one turn stale — computed BEFORE
+  // the very turn that completes or changes it — so the model alone can
+  // never relay a fresh number on that same turn. This sends it
+  // deterministically instead, the moment `computeStayEstimateStatus`
+  // says it's clean and complete.
+  const COMPLETE_ROW = {
+    id: 'rr-1',
+    category: 'habitaciones',
+    service_name: 'Master Suite Deluxe',
+    product_id: null,
+    guests: 2,
+    check_in: '2026-09-09', // Wednesday
+    check_out: '2026-09-10',
+    estimated_price: null,
+  }
+  const COUPLE_RATES = [
+    { day_of_week: 'wed', occupancy: 'couple', price: 500, date_from: null, date_to: null },
+  ]
+
+  beforeEach(() => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel', deposit_percent: 50 }
+  })
+
+  function habReservationProposal() {
+    return [{ category: 'habitaciones' as const, fields: { personas: '2' }, confirmed: false }]
+  }
+
+  it('sends the computed total proactively the moment it is clean and complete', async () => {
+    h.state.reservationRow = COMPLETE_ROW
+    h.state.products = [{ id: 'p1', name: 'Master Suite Deluxe' }]
+    h.state.productRates = COUPLE_RATES
+    h.generateReply.mockResolvedValue({
+      text: 'Entendido, se lo dejo anotado.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: habReservationProposal(),
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageType: 'text',
+        contentText: expect.stringContaining('500'),
+      }),
+    )
+    expect(h.state.aiActionLogInserts).toContainEqual(
+      expect.objectContaining({ action: 'send_stay_estimate', target_id: 'rr-1', result: { total: 500 } }),
+    )
+  })
+
+  it('never sends the SAME total twice in one conversation', async () => {
+    h.state.reservationRow = COMPLETE_ROW
+    h.state.products = [{ id: 'p1', name: 'Master Suite Deluxe' }]
+    h.state.productRates = COUPLE_RATES
+    h.state.dedupeActionLogRows = [
+      { input: { conversation_id: 'conv-1' }, result: { total: 500 }, created_at: '2026-09-01T00:00:00.000Z' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Entendido.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: habReservationProposal(),
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('alerts an owner when the stay is complete but genuinely unpriceable (e.g. an ambiguous name) instead of staying silent', async () => {
+    h.state.reservationRow = { ...COMPLETE_ROW, service_name: 'Suite Clásica' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Clásica (Individual o Pareja)' },
+      { id: 'p2', name: 'Suite Clásica Doble' },
+    ]
+    h.state.productRates = COUPLE_RATES
+    h.generateReply.mockResolvedValue({
+      text: 'Entendido.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: habReservationProposal(),
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dedupKey: 'ai_stay_unpriceable:conv-1',
+        detail: expect.objectContaining({ reason: 'no_product_match' }),
+      }),
+    )
+  })
+
+  it('stays silent (no send, no alert) while the stay is still incomplete', async () => {
+    h.state.reservationRow = { ...COMPLETE_ROW, check_out: null }
+    h.generateReply.mockResolvedValue({
+      text: '¿Para qué fecha de salida sería?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: habReservationProposal(),
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.dispatchSystemAlert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_stay_unpriceable:conv-1' }),
+    )
+  })
+
+  it('never checks for a stay estimate when the turn touched no habitaciones/paquetes proposal', async () => {
+    h.state.reservationRow = COMPLETE_ROW
+    h.state.products = [{ id: 'p1', name: 'Master Suite Deluxe' }]
+    h.state.productRates = COUPLE_RATES
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo con el spa.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [{ category: 'spa', fields: { personas: '1' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
   })
 })
 
