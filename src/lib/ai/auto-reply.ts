@@ -6,7 +6,7 @@ import { buildConversationContext } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
-import { loadHotelStayEstimate } from './hotel-stay-estimate'
+import { loadHotelStayEstimate, computeStayEstimateStatus } from './hotel-stay-estimate'
 import { loadKnownContactFacts, loadActiveReservationsSummary } from './known-context'
 import { loadClinicAppointmentContext } from '@/lib/clinic/appointment-context'
 import { transitionAppointment } from '@/lib/clinic/appointments'
@@ -591,6 +591,11 @@ export async function dispatchInboundToAiReply(
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
+    // Hoisted out of the `if (isHotel)` block below (where they're first
+    // read) so the deterministic proactive-estimate follow-up, much
+    // later in this function, can reuse them without re-querying.
+    let hotelCurrency = 'USD'
+    let hotelDepositPercent = 50
     let clinicAppointment: Awaited<ReturnType<typeof loadClinicAppointmentContext>> = null
     let calendarContext: AutoReplyCalendarContext | null = null
     let knownContactFacts: string | null = null
@@ -637,17 +642,17 @@ export async function dispatchInboundToAiReply(
       // guest is currently asking about, so the bot can answer "¿cuánto
       // sería?" with a real number instead of deferring every quote.
       if (isHotel) {
-        const currency = (catalogModeRow?.default_currency as string | undefined) ?? 'USD'
-        const depositPercent = (catalogModeRow?.deposit_percent as number | undefined) ?? 50
+        hotelCurrency = (catalogModeRow?.default_currency as string | undefined) ?? 'USD'
+        hotelDepositPercent = (catalogModeRow?.deposit_percent as number | undefined) ?? 50
         hotelStayEstimate =
-          (await loadHotelStayEstimate(db, accountId, conversationId, currency, depositPercent).catch(
+          (await loadHotelStayEstimate(db, accountId, conversationId, hotelCurrency, hotelDepositPercent).catch(
             () => null,
           )) ?? undefined
         activeReservations = await loadActiveReservationsSummary(
           db,
           accountId,
           conversationId,
-          currency,
+          hotelCurrency,
         ).catch(() => null)
         hotelCategoryBanners = await loadHotelCategoryBanners(db, accountId).catch(() => [])
       }
@@ -1564,6 +1569,21 @@ export async function dispatchInboundToAiReply(
           }
         }
       }
+
+      // Only worth checking when this turn actually touched a
+      // stay category — computeStayEstimateStatus queries regardless of
+      // WHICH category's proposal fired, so one call covers the turn.
+      if (reservationProposals.some((p) => p.category === 'habitaciones' || p.category === 'paquetes')) {
+        try {
+          await sendStayEstimateFollowUpIfDue({
+            db, accountId, configOwnerUserId, conversationId,
+            currency: hotelCurrency, depositPercent: hotelDepositPercent,
+            sinceISO: conv.ai_context_reset_at,
+          })
+        } catch (err) {
+          console.error('[ai auto-reply] proactive stay estimate follow-up failed:', err)
+        }
+      }
     }
 
     // Runs AFTER record_reservation above so it sees this same turn's
@@ -2476,8 +2496,22 @@ async function autoRecordReservation(args: {
   if (minutes !== undefined) input.duration_minutes = minutes
   if (f.salon) input.hall = f.salon
   if (f.decoracion) input.decoration = f.decoracion
+  // habitaciones/paquetes are ALWAYS priced deterministically (see
+  // `computeStayEstimateStatus` and the proactive follow-up below) —
+  // never let a model-supplied `precio` for these two categories
+  // through, no matter how confident the marker looks. Real incident,
+  // 2026-09-20: an ambiguous room name ("Suite Clásica" matching both
+  // "Suite Clásica (Individual o Pareja)" and "Suite Clásica Doble")
+  // made the real calculation return null, so the model guessed a
+  // single-night reference rate (Q800) instead of the true 2-night
+  // total (Q1,200) — and because `upsertReservationRequest` only
+  // recomputes when the caller leaves `estimated_price` unset, that
+  // guess overwrote what should have been a real, correct number.
+  // spa/actividades/eventos have no calculator, so a stated price there
+  // is still the only source of one.
+  const isStayCategory = proposal.category === 'habitaciones' || proposal.category === 'paquetes'
   const price = toNum(f.precio)
-  if (price !== undefined) input.estimated_price = price
+  if (price !== undefined && !isStayCategory) input.estimated_price = price
 
   const id = await upsertReservationRequest(db, accountId, input)
   if (!id) return
@@ -2902,6 +2936,75 @@ async function autoSendCategoryBanner(args: {
     target_id: category.id,
     input: { category_name: category.name, conversation_id: conversationId, source: 'auto_reply_autonomous' },
     result: { category_id: category.id },
+  })
+}
+
+/**
+ * Proactively tells the guest the computed stay total the moment it's
+ * clean and complete — instead of waiting for the model to notice
+ * `hotelStayEstimate` in its OWN prompt context, which is always one
+ * turn stale (computed before the very turn that completes or changes
+ * it; real incident, 2026-09-20 — see `computeStayEstimateStatus`'s doc
+ * comment). Deduped against `ai_action_log` by the EXACT total already
+ * sent for this reservation row (same pattern `autoSendCategoryBanner`
+ * uses), so an unchanged number is never repeated — a genuinely
+ * different total (a date/guest edit, or a name that now resolves)
+ * sends again. Alerts an owner, throttled, on a genuinely broken case
+ * (`unpriceable`) rather than the normal "not complete yet" /
+ * "5+ guests, never auto-priced" states.
+ */
+async function sendStayEstimateFollowUpIfDue(args: {
+  db: SupabaseClient
+  accountId: string
+  configOwnerUserId: string
+  conversationId: string
+  currency: string
+  depositPercent: number
+  sinceISO: string | null
+}): Promise<void> {
+  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO } = args
+  const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent)
+
+  if (result.status === 'unpriceable') {
+    void dispatchSystemAlert({
+      severity: 'warning',
+      source: 'ai_dispatch_error',
+      title: 'Hotel stay could not be auto-priced despite complete dates/guests',
+      detail: { account_id: accountId, conversation_id: conversationId, reason: result.reason },
+      dedupKey: `ai_stay_unpriceable:${conversationId}`,
+      accountId,
+      throttleMinutes: 360,
+    })
+    return
+  }
+  if (result.status !== 'priced') return // incomplete / too_large_group — nothing to do yet
+
+  const { data: priorSends } = await db
+    .from('ai_action_log')
+    .select('result, created_at')
+    .eq('account_id', accountId)
+    .eq('action', 'send_stay_estimate')
+    .eq('target_id', result.reservationRequestId)
+  const alreadySentThisTotal = ((priorSends ?? []) as { result: unknown; created_at: string }[]).some(
+    (row) =>
+      (row.result as { total?: number } | null)?.total === result.total &&
+      (!sinceISO || row.created_at > sinceISO),
+  )
+  if (alreadySentThisTotal) return
+
+  await sendMessageToConversation(db, accountId, {
+    conversationId,
+    messageType: 'text',
+    contentText: result.text,
+  })
+
+  await db.from('ai_action_log').insert({
+    account_id: accountId,
+    actor_user_id: configOwnerUserId,
+    action: 'send_stay_estimate',
+    target_id: result.reservationRequestId,
+    input: { conversation_id: conversationId, source: 'auto_reply_autonomous' },
+    result: { total: result.total },
   })
 }
 

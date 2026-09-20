@@ -161,6 +161,34 @@ describe('buildSystemPrompt — hotel stay estimate', () => {
       buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelStayEstimate: est }),
     ).not.toContain(est)
   })
+
+  it('tells the model NOT to say a person will re-quote on a date/guest change — the system sends the new total itself, 2026-09-20 redesign', () => {
+    const est = 'Suite Clásica · 3 noches: Total estimado: Q4,160.'
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelStayEstimate: est })
+    expect(p.toLowerCase()).not.toContain('figure no longer applies — say a person will re-quote')
+    expect(p.toLowerCase()).toContain('sends it to the guest on its own')
+  })
+})
+
+describe('buildSystemPrompt — record_reservation: exact catalog name + no self-priced stays', () => {
+  // Real incident, 2026-09-20: the model wrote servicio=Suite Clásica (an
+  // abbreviation) which matched TWO real products ("Suite Clásica
+  // (Individual o Pareja)" and "Suite Clásica Doble") ambiguously,
+  // so the deterministic price calculator silently gave up — and the
+  // model then guessed a price itself (Q800, a single-night reference
+  // rate) instead of the real 2-night total (Q1,200), which got written
+  // straight into `reservation_requests.estimated_price`.
+  it('requires the exact catalog name for servicio on habitaciones/paquetes', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('write the exact name as it appears in the product catalog')
+    expect(p).toContain('Suite Clásica (Individual o Pareja)')
+  })
+
+  it('forbids the model from supplying its own precio for habitaciones/paquetes, but still allows it for spa/actividades/eventos', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('never include this key yourself')
+    expect(p.toLowerCase()).toContain('only for spa, actividades, or eventos')
+  })
 })
 
 describe('buildSystemPrompt — flow handoff directive', () => {

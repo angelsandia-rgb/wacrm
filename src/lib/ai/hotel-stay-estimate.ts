@@ -120,3 +120,109 @@ export async function loadHotelStayEstimate(
 
   return text
 }
+
+// ============================================================
+// Proactive stay-estimate follow-up (2026-09-20).
+//
+// Real incident: a guest asked for a Suite Clásica 2-night stay
+// (Wed–Thu, both nights the CORPORATE rate). `resolveStayProductId`'s
+// name match was ambiguous — "Suite Clásica" is a substring of BOTH
+// "Suite Clásica (Individual o Pareja)" and "Suite Clásica Doble" — so
+// it returned null, and `loadHotelStayEstimate` above returned null too.
+// With no system-computed number to draw on, the model stated a price
+// itself in its OWN reply (Q800, the single-night WEEKEND reference
+// rate lifted from the business's tariff description) and put it in the
+// `record_reservation` marker's `precio` field — which `autoRecordReservation`
+// (auto-reply.ts) then wrote straight into `reservation_requests.estimated_price`,
+// SKIPPING the real per-night calculation entirely (`upsertReservationRequest`
+// only recomputes when the caller leaves `estimated_price` unset). The
+// guest was quoted Q800 for a stay that actually totals Q1,200 (Q600 × 2
+// corporate nights).
+//
+// Two separate fixes came out of this: (1) `autoRecordReservation` now
+// never trusts a model-supplied `precio` for habitaciones/paquetes at
+// all — those two categories are ALWAYS priced here, deterministically,
+// never guessed; (2) this function proactively pushes the computed total
+// to the guest the moment it's clean and complete, instead of waiting for
+// the model to notice `hotelStayEstimate` in its own context (which is
+// always one turn stale — computed before the turn that completes it).
+// ============================================================
+
+export type StayEstimateStatus =
+  | { status: 'incomplete' }
+  | { status: 'too_large_group' } // 5+ guests — never auto-priced, by design
+  | { status: 'unpriceable'; reason: 'no_product_match' | 'no_rates' | 'bad_dates' | 'missing_night_rate' }
+  | {
+      status: 'priced'
+      reservationRequestId: string
+      text: string
+      total: number
+    }
+
+/**
+ * Same underlying data `loadHotelStayEstimate` computes, but as a
+ * customer-facing message plus a status the caller can act on —
+ * `auto-reply.ts` sends `text` proactively (deduped against
+ * `ai_action_log` so an unchanged total is never repeated) and alerts an
+ * owner on `unpriceable` (a real gap: a name that should have matched,
+ * or rates that are missing) while staying silent on `incomplete` /
+ * `too_large_group` (both expected, normal states).
+ */
+export async function computeStayEstimateStatus(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+  currency: string,
+  depositPercent = 50,
+): Promise<StayEstimateStatus> {
+  const { data: rr } = await db
+    .from('reservation_requests')
+    .select('id, category, service_name, product_id, guests, check_in, check_out, estimated_price')
+    .eq('account_id', accountId)
+    .eq('conversation_id', conversationId)
+    .eq('status', 'pending')
+    .in('category', ['habitaciones', 'paquetes'])
+    .not('check_in', 'is', null)
+    .not('check_out', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<ReservationRow>()
+  if (!rr || !rr.check_in || !rr.check_out) return { status: 'incomplete' }
+  if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return { status: 'incomplete' }
+
+  const occupancy = occupancyForGuests(rr.guests)
+  if (occupancy === null) return { status: 'too_large_group' }
+
+  const productId = await resolveStayProductId(db, accountId, rr)
+  if (!productId) return { status: 'unpriceable', reason: 'no_product_match' }
+
+  const { data: rateRows } = await db
+    .from('product_rates')
+    .select('day_of_week, occupancy, price, date_from, date_to')
+    .eq('account_id', accountId)
+    .eq('product_id', productId)
+  const rates = (rateRows ?? []) as ProductRate[]
+  if (rates.length === 0) return { status: 'unpriceable', reason: 'no_rates' }
+
+  const quote = quoteStay(rates, rr.check_in, rr.check_out, occupancy)
+  if (quote.nights.length === 0) return { status: 'unpriceable', reason: 'bad_dates' }
+  if (quote.missing.length > 0) return { status: 'unpriceable', reason: 'missing_night_rate' }
+
+  const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
+  const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
+  const deposit = estimateDeposit(quote.total, depositPercent)
+  const text =
+    `El total estimado sería de ${formatCurrency(quote.total, currency)} por ${quote.nights.length} ${nightsWord} ` +
+    `para ${rr.guests} personas en ${label}, del ${rr.check_in} al ${rr.check_out}. ` +
+    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}. ` +
+    `La disponibilidad y el precio final los confirma una persona del hotel.`
+
+  // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
+  // Panel figure correct even if this exact total was already stored
+  // (e.g. from a stale model-supplied guess this now overwrites).
+  if (rr.estimated_price == null || Number(rr.estimated_price) !== quote.total) {
+    await db.from('reservation_requests').update({ estimated_price: quote.total }).eq('id', rr.id)
+  }
+
+  return { status: 'priced', reservationRequestId: rr.id, text, total: quote.total }
+}
