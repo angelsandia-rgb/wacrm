@@ -2541,6 +2541,22 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
   })
 
+  it('sends the banner image BEFORE the text reply, not after — Angel, 2026-09-20: "quisiera que primero mande el banner y luego el mensaje... para que sea más natural"', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto, en Habitaciones tenemos Suite Master Deluxe, Suite Premium... ¿Cuál le interesa?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: {}, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const bannerCallOrder = h.sendMessageToConversation.mock.invocationCallOrder[0]
+    const textCallOrder = h.engineSendText.mock.invocationCallOrder[0]
+    expect(bannerCallOrder).toBeLessThan(textCallOrder)
+  })
+
   it('sends the banner the moment a record_reservation proposal names a category that has one — no marker from the model needed', async () => {
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
     h.generateReply.mockResolvedValue({
