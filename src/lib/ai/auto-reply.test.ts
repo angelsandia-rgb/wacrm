@@ -1157,6 +1157,91 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
   })
 })
 
+describe('dispatchInboundToAiReply — marker-only reply (no customer-facing text) retries once', () => {
+  // Real incident, 2026-09-20 (Villa San Ricardo, live test): on a
+  // reservation-confirmation turn, gpt-5.4-mini twice in a row wrote ONLY
+  // the trailing action markers (record_reservation, confirm_reservation,
+  // temperature) with no customer-facing prose. The raw completion isn't
+  // blank, so providers/openai.ts's own `empty_response` check never
+  // fires — only `parseGeneration` stripping every marker reveals nothing
+  // is left. This must retry once, same as a thrown error would, before
+  // falling back.
+  beforeEach(() => {
+    process.env.AI_AUTOREPLY_RETRY_DELAY_MS = '0'
+    process.env.AI_AUTOREPLY_MAX_RETRIES = '2'
+  })
+  afterEach(() => {
+    delete process.env.AI_AUTOREPLY_RETRY_DELAY_MS
+    delete process.env.AI_AUTOREPLY_MAX_RETRIES
+  })
+
+  it('retries once and uses the recovered reply when the first generation is markers-only', async () => {
+    h.generateReply
+      .mockResolvedValueOnce({ text: '', handoff: false, markDealWon: false, moveToStageName: null })
+      .mockResolvedValueOnce({
+        text: '¡Con gusto! Le confirmo el registro de su solicitud.',
+        handoff: false,
+        markDealWon: false,
+        moveToStageName: null,
+      })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '¡Con gusto! Le confirmo el registro de su solicitud.' }),
+    )
+    expect(h.dispatchSystemAlert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_blank_after_markers:acct-1' }),
+    )
+    // The empty-reply fallback path must not also fire.
+    expect(h.state.updatePayload).toBeNull()
+  })
+
+  it('alerts and falls back to the continuity message when the retry is ALSO markers-only', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: false, markDealWon: false, moveToStageName: null })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warning',
+        dedupKey: 'ai_blank_after_markers:acct-1',
+      }),
+    )
+    // Falls through to the existing empty-reply fallback unchanged.
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: true })
+  })
+
+  it('does not retry when handoff is true, even with blank text — that shape is expected', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.generateReply).toHaveBeenCalledTimes(1)
+    expect(h.dispatchSystemAlert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_blank_after_markers:acct-1' }),
+    )
+  })
+
+  it('hands off normally when the retry itself throws', async () => {
+    h.generateReply
+      .mockResolvedValueOnce({ text: '', handoff: false, markDealWon: false, moveToStageName: null })
+      .mockRejectedValue(new AiError('overloaded', { code: 'provider_error' }))
+
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+})
+
 describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)', () => {
   // 2026-09-19 real incident: generation succeeded but the channel send
   // itself failed (a Zernio API timeout) — every vertical except clinic
