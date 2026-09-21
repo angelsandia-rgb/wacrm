@@ -101,17 +101,45 @@ function seasonContains(rate: ProductRate, nightISO: string): boolean {
 }
 
 /**
+ * The highest occupancy tier a product has EVER been priced for, on any
+ * day or season — lets `resolveNightlyRate` tell "this room just doesn't
+ * have a rate for this ONE day at a tier it does use elsewhere" (safe to
+ * fall back to `standard`, as before) apart from "this room was never
+ * configured for this many guests at all" (must NOT fall back — see
+ * below). Ignores non-positive/invalid prices, same as `resolveNightlyRate`.
+ */
+function maxDefinedOccupancy(rates: ProductRate[]): Occupancy {
+  let max: Occupancy = 'standard'
+  for (const r of rates) {
+    if (!Number.isFinite(r.price) || r.price <= 0) continue
+    if (OCCUPANCY_ORDER.indexOf(r.occupancy) > OCCUPANCY_ORDER.indexOf(max)) max = r.occupancy
+  }
+  return max
+}
+
+/**
  * The price for one night, given all of a product's rates.
  *
  * Resolution order:
  *   1. exact occupancy + day of week, seasonal row covering the night
  *   2. exact occupancy + day of week, always-on row
- *   3. (occupancy 'couple' / 'group' / 'quad' only) fall back to the
- *      'standard' rate for the same day — those tiers are optional
+ *   3. (occupancy 'couple' / 'group' / 'quad' only, AND only when this
+ *      product has a rate for that tier on at least one OTHER day — see
+ *      `maxDefinedOccupancy`) fall back to the 'standard' rate for the
+ *      same day
  *
  * `occupancy: null` (5+ guests — see `occupancyForGuests`) always
  * returns `null`: there is no tier to resolve or fall back to, by
  * design — a group that large is never priced automatically.
+ *
+ * Real incident, 2026-09-20: a 3-guest request for a couple-only room
+ * (max tier ever configured: 'couple') fell back to the 'standard'
+ * (1-guest) rate and silently under-priced the stay by half — the room
+ * was never priced for 'group' at all, on any day, so there was no
+ * missing DAY to patch over, just a headcount the room doesn't offer.
+ * Falling back only when the tier is used elsewhere keeps the original
+ * "missing this one day" leniency while refusing to guess for a
+ * capacity that was never configured, on any day.
  *
  * Returns `null` when nothing matches (the caller surfaces it as a gap).
  */
@@ -135,6 +163,9 @@ export function resolveNightlyRate(
   if (exact === 'ambiguous') return null
   if (exact !== null) return exact
   if (occupancy === 'couple' || occupancy === 'group' || occupancy === 'quad') {
+    if (OCCUPANCY_ORDER.indexOf(occupancy) > OCCUPANCY_ORDER.indexOf(maxDefinedOccupancy(rates))) {
+      return null
+    }
     const fallback = tryOccupancy('standard')
     return fallback === 'ambiguous' ? null : fallback
   }
