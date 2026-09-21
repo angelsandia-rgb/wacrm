@@ -2955,6 +2955,50 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
   })
 
+  it('sends the banner when products share a leading word the model naturally drops while listing them — Real gap found 2026-09-21: "Tenemos estos paquetes: Romántico, San Vicente, San Ricardo y Luna de Miel" never contains the full "Paquete Romántico" product name, so a plain substring match against full names alone missed it entirely, twice in the same live conversation (a5340ecc-...)', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Paquetes', banner_url: 'https://cdn.example.com/paquetes.jpg' }]
+    h.state.products = [
+      { id: 'p1', name: 'Paquete Romántico', category_id: 'cat-1' },
+      { id: 'p2', name: 'Paquete San Vicente', category_id: 'cat-1' },
+      { id: 'p3', name: 'Paquete San Ricardo', category_id: 'cat-1' },
+      { id: 'p4', name: 'Paquete Luna de Miel', category_id: 'cat-1' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto, Sandia. Tenemos Romántico, San Vicente, San Ricardo y Luna de Miel. ¿Cuál de ellos le interesa?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/paquetes.jpg' }),
+    )
+  })
+
+  it('does not strip a leading word unless every product in the category shares the exact same one', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.products = [
+      { id: 'p1', name: 'Suite Master Deluxe', category_id: 'cat-1' },
+      { id: 'p2', name: 'Junior Suite Familiar', category_id: 'cat-1' }, // does not start with "Suite"
+    ]
+    h.generateReply.mockResolvedValue({
+      // Names a room from a DIFFERENT, unconfigured category-less product
+      // ("Familiar" alone) — must not match, since "Suite" was not
+      // stripped (not every product shares it) and "Familiar" alone was
+      // never added as a standalone match target.
+      text: 'Contamos con una opción muy buena para familias grandes.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
   it('does nothing when the proposal\'s category has no banner on file', async () => {
     h.state.categories = [] // no banner-holding categories at all
     h.generateReply.mockResolvedValue({
