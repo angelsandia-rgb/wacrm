@@ -44,7 +44,7 @@ const h = vi.hoisted(() => ({
      *  "no per-category pipeline", falling back to `pipeline` above. */
     pipelines: [] as { id: string; name: string }[],
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
-    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null; deposit_percent?: number },
+    account: { default_currency: 'USD' } as { default_currency: string; name?: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null; deposit_percent?: number },
     accountError: null as { code: string; message: string } | null,
     dealInserts: [] as Record<string, unknown>[],
     createdDeal: { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' } as Record<string, unknown>,
