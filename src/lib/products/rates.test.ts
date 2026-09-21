@@ -92,15 +92,23 @@ describe('resolveNightlyRate', () => {
     expect(resolveNightlyRate(RATES, '2026-03-07', 'couple')).toBe(1200)
   })
 
-  it('uses an explicit group (3+) rate, and falls back to standard when absent', () => {
+  it('uses an explicit group (3+) rate, and falls back to standard on a day missing it — but ONLY when the room prices group somewhere', () => {
     const withGroup: ProductRate[] = [
       ...RATES,
       { day_of_week: 'thu', occupancy: 'group', price: 1100, date_from: null, date_to: null },
     ]
     expect(resolveNightlyRate(withGroup, '2026-03-05', 'group')).toBe(1100) // Thu, explicit
     expect(resolveNightlyRate(withGroup, '2026-03-06', 'group')).toBe(1000) // Fri, no group → standard
-    // group never borrows the couple rate
-    expect(resolveNightlyRate(RATES, '2026-03-05', 'group')).toBe(700)
+  })
+
+  it('never falls back for a headcount the room was never priced for, on any day — real 2026-09-20 incident', () => {
+    // RATES only ever defines 'standard' and 'couple' — a 3-guest
+    // ('group') request used to silently borrow the 1-guest 'standard'
+    // rate (700) here, under-pricing a room that was never configured
+    // to hold that many guests at all. It must now return null (a real
+    // gap for a human to price), not a wrong number.
+    expect(resolveNightlyRate(RATES, '2026-03-05', 'group')).toBeNull()
+    expect(resolveNightlyRate(RATES, '2026-03-05', 'quad')).toBeNull()
   })
 
   it('a seasonal override wins for nights inside its range', () => {
