@@ -1693,7 +1693,14 @@ export async function dispatchInboundToAiReply(
     // turns in the same conversation).
     if (photoSentProductId && isHotel) {
       try {
-        await sendHotelBookingNudge({ db, accountId, conversationId, productId: photoSentProductId })
+        await sendHotelBookingNudge({
+          db,
+          accountId,
+          configOwnerUserId,
+          conversationId,
+          productId: photoSentProductId,
+          sinceISO: conv.ai_context_reset_at,
+        })
       } catch (err) {
         console.error('[ai auto-reply] post-photo reservation nudge failed:', err)
       }
@@ -2879,12 +2886,16 @@ async function autoSendProductPhoto(args: {
   )
   if (alreadySentThisConversation) return null
 
-  for (const photoUrl of photoUrls) {
+  // Only the first image of the gallery carries the product name as a
+  // caption — repeating it on every photo (2026-09-21 incident: 5
+  // WhatsApp bubbles in a row, each captioned "Suite Clásica (Individual
+  // o Pareja)") reads like a glitch, not a natural gallery.
+  for (const [index, photoUrl] of photoUrls.entries()) {
     await sendMessageToConversation(db, accountId, {
       conversationId,
       messageType: 'image',
       mediaUrl: photoUrl,
-      contentText: product.name,
+      contentText: index === 0 ? product.name : undefined,
       senderType: 'bot',
     })
   }
@@ -3278,10 +3289,15 @@ async function handOffIfReservationComplete(args: {
 async function sendHotelBookingNudge(args: {
   db: SupabaseClient
   accountId: string
+  configOwnerUserId: string
   conversationId: string
   productId: string
+  /** Same reasoning as `autoSendProductPhoto`'s `sinceISO`: an
+   *  `ai_context_reset_at` after the prior nudge correctly allows a
+   *  repeat nudge following an agent's AI-memory reset. */
+  sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, conversationId, productId } = args
+  const { db, accountId, configOwnerUserId, conversationId, productId, sinceISO } = args
 
   const [{ data: row }, { data: account }] = await Promise.all([
     db
@@ -3335,13 +3351,45 @@ async function sendHotelBookingNudge(args: {
     }
   }
 
+  const text = buildReservationFollowUpMessage(
+    snapshot,
+    (account as { default_currency: string | null } | null)?.default_currency ?? 'USD',
+  )
+
+  // Never repeat the exact same "would you like to book? I still need
+  // X" nudge back to back in one conversation — real incident
+  // 2026-09-21: a guest asking to see two different rooms in a row with
+  // no new dates/guests given got the identical nudge sentence twice
+  // within two minutes, which reads like a broken record rather than a
+  // natural conversation. Only skips when nothing about the request
+  // actually changed (the rendered text is identical); any real change
+  // in what's captured produces different text and still sends.
+  const { data: priorNudges } = await db
+    .from('ai_action_log')
+    .select('input, created_at')
+    .eq('account_id', accountId)
+    .eq('action', 'reservation_nudge')
+    .eq('target_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const lastNudge = ((priorNudges ?? []) as { input: unknown; created_at: string }[])[0]
+  const lastNudgeText = (lastNudge?.input as { text?: string } | null)?.text
+  const lastNudgeStillRelevant = !sinceISO || (lastNudge && lastNudge.created_at > sinceISO)
+  if (lastNudge && lastNudgeStillRelevant && lastNudgeText === text) return
+
   await sendMessageToConversation(db, accountId, {
     conversationId,
     messageType: 'text',
-    contentText: buildReservationFollowUpMessage(
-      snapshot,
-      (account as { default_currency: string | null } | null)?.default_currency ?? 'USD',
-    ),
+    contentText: text,
+  })
+
+  await db.from('ai_action_log').insert({
+    account_id: accountId,
+    actor_user_id: configOwnerUserId,
+    action: 'reservation_nudge',
+    target_id: conversationId,
+    input: { category: snapshot.category, text, source: 'auto_reply_autonomous' },
+    result: { conversation_id: conversationId },
   })
 }
 

@@ -36,8 +36,11 @@ const h = vi.hoisted(() => ({
     openDeal: null as { id: string; pipeline_id: string; stage_id: string } | null,
     stages: [] as { id: string; name: string; is_won?: boolean }[],
     aiActionLogInserts: [] as Record<string, unknown>[],
-    /** Prior successful `schedule_appointment` rows the idempotency guard reads back. */
-    priorScheduleBookings: [] as { input: Record<string, unknown> }[],
+    /** Prior successful `schedule_appointment` rows the idempotency guard
+     *  reads back — shared with `sendHotelBookingNudge`'s own dedup guard,
+     *  since the mock's `ai_action_log` chain's `.limit()` doesn't
+     *  distinguish by `action` either (see the `ai_action_log` mock below). */
+    priorScheduleBookings: [] as { input: Record<string, unknown>; created_at?: string }[],
     pipeline: null as { id: string } | null,
     /** All of the account's pipelines (id + name), for
      *  `resolveHotelCategoryPipeline`'s name-matched lookup — empty means
@@ -2165,6 +2168,47 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     })
   })
 
+  it('only captions the FIRST photo of a multi-image gallery — real incident 2026-09-21: repeating the product name on all 5 bubbles read like a glitch', async () => {
+    h.state.products = [
+      {
+        id: 'p1',
+        name: 'Suite Clásica (Individual o Pareja)',
+        image_url: 'https://cdn.example.com/clasica-1.jpg',
+        image_urls: [
+          'https://cdn.example.com/clasica-1.jpg',
+          'https://cdn.example.com/clasica-2.jpg',
+        ],
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, le envío la foto.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Clásica (Individual o Pareja)',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        mediaUrl: 'https://cdn.example.com/clasica-1.jpg',
+        contentText: 'Suite Clásica (Individual o Pareja)',
+      }),
+    )
+    expect(h.sendMessageToConversation).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        mediaUrl: 'https://cdn.example.com/clasica-2.jpg',
+        contentText: undefined,
+      }),
+    )
+  })
+
   it('falls back to the single image_url when the gallery is empty (pre-migration data)', async () => {
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', image_urls: [] },
@@ -2367,6 +2411,38 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
       expect.objectContaining({
         contentText: '¿Le gustaría confirmar la reservación? Me falta el número de personas para dejarla lista.',
       }),
+    )
+  })
+
+  it('hotel vertical, the exact same nudge was already sent: does not repeat it — real incident 2026-09-21: the same "me falta las fechas..." nudge fired twice within two minutes for two different rooms', async () => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Clásica (Individual o Pareja)', image_url: 'https://cdn.example.com/clasica.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.state.priorScheduleBookings = [
+      {
+        input: {
+          text: '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+        },
+        created_at: '2026-09-21T16:32:00.000Z',
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, le envío la foto de la Suite Clásica.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Clásica (Individual o Pareja)',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    // The photo still sends — only the repeated text nudge is skipped.
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'text' }),
     )
   })
 
