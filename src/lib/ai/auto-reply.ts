@@ -621,7 +621,7 @@ export async function dispatchInboundToAiReply(
       // whether a restaurant menu PDF is on file (migration 114).
       const { data: catalogModeRow, error: accountMetadataError } = await db
         .from('accounts')
-        .select('catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency, catalog_slug, deposit_percent')
+        .select('name, catalog_delivery_mode, industry_vertical, restaurant_menu_url, timezone, default_currency, catalog_slug, deposit_percent')
         .eq('id', accountId)
         .maybeSingle()
       if (accountMetadataError) {
@@ -656,9 +656,11 @@ export async function dispatchInboundToAiReply(
           hotelCurrency,
         ).catch(() => null)
         hotelCategoryBanners = await loadHotelCategoryBanners(db, accountId).catch(() => [])
-        hotelCategoryProductNames = await loadHotelCategoryProductNames(db, accountId).catch(
-          () => new Map<string, string[]>(),
-        )
+        hotelCategoryProductNames = await loadHotelCategoryProductNames(
+          db,
+          accountId,
+          (catalogModeRow?.name as string | null | undefined) ?? null,
+        ).catch(() => new Map<string, string[]>())
       }
 
       // Clinic: the patient's one upcoming appointment, so the bot can
@@ -1216,10 +1218,23 @@ export async function dispatchInboundToAiReply(
     // must stay ahead of the `engineSendText` call right below.
     if (isHotel) {
       const lowerOutboundText = outboundText.toLowerCase()
+      // A reply naming two or more category LABELS together (not
+      // products) is the generic "¿cuál le interesa: Habitaciones, Spa,
+      // Paquetes...?" menu, not an answer about any one of them — never
+      // treat it as "the guest is now looking at category X's items".
+      // Belt-and-suspenders alongside the account-name guard in
+      // `loadHotelCategoryProductNames`: this catches the same class of
+      // false positive for any future category/product-name collision,
+      // not just "San Ricardo".
+      const mentionedCategoryLabels = Array.from(bannerCategoryBySlug.values()).filter((c) =>
+        lowerOutboundText.includes(c.name.toLowerCase()),
+      ).length
+      const isGenericCategoryMenu = mentionedCategoryLabels >= 2
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
-        const namedInReply = productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
+        const namedInReply =
+          !isGenericCategoryMenu && productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
         if (!proposal && !namedInReply) continue
         try {
           await autoSendCategoryBanner({
@@ -2910,6 +2925,7 @@ async function loadHotelCategoryBanners(
 async function loadHotelCategoryProductNames(
   db: SupabaseClient,
   accountId: string,
+  accountName: string | null,
 ): Promise<Map<string, string[]>> {
   const [{ data: products }, { data: categories }] = await Promise.all([
     db.from('products').select('name, category_id').eq('account_id', accountId).eq('is_active', true),
@@ -2936,6 +2952,14 @@ async function loadHotelCategoryProductNames(
   // never contains verbatim — same problem silently affected Spa
   // ("Masaje X"). When every product in a category shares the same
   // first word, also match on the name with that word stripped.
+  //
+  // Guard: drop a stripped remainder that collides with the account's
+  // own business name. Real gap found 2026-09-21, same account: "Paquete
+  // San Ricardo" strips to "San Ricardo" — which is also half of "Villa
+  // San Ricardo," so it matched the opening greeting ("Bienvenido a
+  // Hotel San Ricardo...") and fired the Paquetes banner on a bare
+  // "Hola," before anything was asked about.
+  const lowerAccountName = accountName?.trim().toLowerCase() || null
   for (const [slug, names] of map) {
     if (names.length < 2) continue
     const firstWords = names.map((n) => n.trim().split(/\s+/)[0]?.toLowerCase())
@@ -2944,6 +2968,7 @@ async function loadHotelCategoryProductNames(
     const stripped = names
       .map((n) => n.trim().split(/\s+/).slice(1).join(' '))
       .filter((s) => s.length >= 4)
+      .filter((s) => !lowerAccountName || !lowerAccountName.includes(s.toLowerCase()))
     map.set(slug, [...names, ...stripped])
   }
 
