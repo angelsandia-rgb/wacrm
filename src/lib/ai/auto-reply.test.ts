@@ -2920,6 +2920,41 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     )
   })
 
+  it('sends the banner the moment the reply itself names one of the category\'s products — no record_reservation proposal needed yet. Real gap found 2026-09-21 (conversation 97052a12-...): "habitaciones por favor" got a room list back with nothing to record yet, so the banner never fired until a specific room+dates existed several turns later, landing next to an unrelated message', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.products = [
+      { id: 'p1', name: 'Suite Master Deluxe', category_id: 'cat-1' },
+      { id: 'p2', name: 'Suite Premium', category_id: 'cat-1' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Mucho gusto. Con gusto le ayudo con habitaciones. Tenemos Suite Master Deluxe, Suite Premium, Suite Clásica, Suite Clásica Doble y Junior Suite Familiar. ¿Cuál le interesa?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [], // nothing to record yet — no specific room/fields
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/rooms.jpg' }),
+    )
+  })
+
+  it('does not fire on the generic opening menu that just lists every category name, before any product is named', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.products = [{ id: 'p1', name: 'Suite Master Deluxe', category_id: 'cat-1' }]
+    h.generateReply.mockResolvedValue({
+      text: '¿Le gustaría conocer Habitaciones, Paquetes, Spa, Actividades al aire libre o Eventos?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
   it('does nothing when the proposal\'s category has no banner on file', async () => {
     h.state.categories = [] // no banner-holding categories at all
     h.generateReply.mockResolvedValue({

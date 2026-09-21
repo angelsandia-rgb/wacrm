@@ -591,6 +591,7 @@ export async function dispatchInboundToAiReply(
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
+  let hotelCategoryProductNames = new Map<string, string[]>()
     // Hoisted out of the `if (isHotel)` block below (where they're first
     // read) so the deterministic proactive-estimate follow-up, much
     // later in this function, can reuse them without re-querying.
@@ -655,6 +656,9 @@ export async function dispatchInboundToAiReply(
           hotelCurrency,
         ).catch(() => null)
         hotelCategoryBanners = await loadHotelCategoryBanners(db, accountId).catch(() => [])
+        hotelCategoryProductNames = await loadHotelCategoryProductNames(db, accountId).catch(
+          () => new Map<string, string[]>(),
+        )
       }
 
       // Clinic: the patient's one upcoming appointment, so the bot can
@@ -1182,21 +1186,41 @@ export async function dispatchInboundToAiReply(
     // Real gap found 2026-09-20 testing the Villa San Ricardo prompt:
     // gpt-5.4-mini repeatedly gave concrete category options in text
     // without the marker, so the banner PR #175 made "mandatory" silently
-    // never sent. record_reservation, by contrast, fires reliably every
-    // time the guest engages with a category (that's its whole job), so
-    // tie the banner to IT instead: the instant a category this account
-    // has a banner for shows up in a proposal, send it.
-    // `autoSendCategoryBanner`'s own ai_action_log dedupe makes this safe
-    // to call every turn the category reappears — a resend is a no-op,
-    // not a duplicate. Hotel only (`bannerCategoryBySlug` is empty for
-    // every other vertical). Sent ahead of the reply text itself (Angel,
+    // never sent.
+    //
+    // Originally tied only to `record_reservation` proposals, on the
+    // theory that it "fires reliably every time the guest engages with a
+    // category." Real gap found 2026-09-21 (live Villa San Ricardo test,
+    // conversation 97052a12-...): record_reservation only fires once the
+    // model can name a SPECIFIC item — a bare "habitaciones por favor"
+    // gets a text reply listing every room, with no proposal yet, so no
+    // banner. By the time record_reservation does fire (guest already
+    // named a room and started giving dates), the banner shows the
+    // general category overview one or more turns too late — once even
+    // landing next to an unrelated confirmation message, nowhere near the
+    // "what do you have?" question it was meant to answer.
+    //
+    // Fixed by ALSO detecting the category from the reply text itself:
+    // the moment a reply names one of that category's actual products
+    // (`hotelCategoryProductNames`) — not just the bare category label,
+    // which the opening "Habitaciones, Paquetes, Spa..." menu also
+    // contains and would over-trigger on every category at once — the
+    // guest is looking at that category's items, whether or not a
+    // reservation proposal exists yet. `autoSendCategoryBanner`'s own
+    // ai_action_log dedupe makes it safe to attempt every turn the
+    // category reappears in either signal — a resend is a no-op, not a
+    // duplicate. Hotel only (`bannerCategoryBySlug` is empty for every
+    // other vertical). Sent ahead of the reply text itself (Angel,
     // 2026-09-20: seeing the banner before the "¿cuál le interesa?"
     // question reads more naturally than the other way around) — this
     // must stay ahead of the `engineSendText` call right below.
     if (isHotel) {
-      for (const proposal of reservationProposals) {
-        const bannerCategory = bannerCategoryBySlug.get(proposal.category)
-        if (!bannerCategory) continue
+      const lowerOutboundText = outboundText.toLowerCase()
+      for (const [slug, bannerCategory] of bannerCategoryBySlug) {
+        const proposal = reservationProposals.find((p) => p.category === slug)
+        const productNames = hotelCategoryProductNames.get(slug) ?? []
+        const namedInReply = productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
+        if (!proposal && !namedInReply) continue
         try {
           await autoSendCategoryBanner({
             db,
@@ -1204,7 +1228,7 @@ export async function dispatchInboundToAiReply(
             configOwnerUserId,
             conversationId,
             categoryName: bannerCategory.name,
-            variant: resolveBannerVariantFromReservationFields(proposal.fields, bannerCategory.hasWeekendVariant),
+            variant: resolveBannerVariantFromReservationFields(proposal?.fields ?? {}, bannerCategory.hasWeekendVariant),
             sinceISO: conv.ai_context_reset_at,
           })
         } catch (err) {
@@ -2876,6 +2900,33 @@ async function loadHotelCategoryBanners(
   return ((data ?? []) as { name: string; banner_url: string | null; banner_url_weekend: string | null }[])
     .filter((c) => c.banner_url || c.banner_url_weekend)
     .map((c) => ({ name: c.name, hasWeekendVariant: Boolean(c.banner_url && c.banner_url_weekend) }))
+}
+
+/** This account's active product names, grouped by category slug —
+ * lets the deterministic banner send below detect "the reply just
+ * named one of this category's actual items" from the reply text
+ * itself, instead of waiting for a `record_reservation` proposal that
+ * may not exist yet (see the banner-send comment above its call site). */
+async function loadHotelCategoryProductNames(
+  db: SupabaseClient,
+  accountId: string,
+): Promise<Map<string, string[]>> {
+  const [{ data: products }, { data: categories }] = await Promise.all([
+    db.from('products').select('name, category_id').eq('account_id', accountId).eq('is_active', true),
+    db.from('product_categories').select('id, name').eq('account_id', accountId),
+  ])
+  const categoryNameById = new Map(
+    ((categories ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name]),
+  )
+  const map = new Map<string, string[]>()
+  for (const p of (products ?? []) as { name: string; category_id: string | null }[]) {
+    const slug = categorySlugFromName(p.category_id ? categoryNameById.get(p.category_id) : null)
+    if (!slug) continue
+    const list = map.get(slug) ?? []
+    list.push(p.name)
+    map.set(slug, list)
+  }
+  return map
 }
 
 /**
