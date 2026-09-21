@@ -2926,6 +2926,27 @@ async function loadHotelCategoryProductNames(
     list.push(p.name)
     map.set(slug, list)
   }
+
+  // The model naturally drops a shared leading word when listing several
+  // products of one category in one breath — "Tenemos estos paquetes:
+  // Romántico, San Vicente, San Ricardo y Luna de Miel", not "Paquete
+  // Romántico, Paquete San Vicente...". Real gap found 2026-09-21 (Villa
+  // San Ricardo live test): the Paquetes banner never fired because
+  // every match target was the full "Paquete X" name, which the reply
+  // never contains verbatim — same problem silently affected Spa
+  // ("Masaje X"). When every product in a category shares the same
+  // first word, also match on the name with that word stripped.
+  for (const [slug, names] of map) {
+    if (names.length < 2) continue
+    const firstWords = names.map((n) => n.trim().split(/\s+/)[0]?.toLowerCase())
+    const allShareFirstWord = firstWords.every((w) => w && w === firstWords[0])
+    if (!allShareFirstWord) continue
+    const stripped = names
+      .map((n) => n.trim().split(/\s+/).slice(1).join(' '))
+      .filter((s) => s.length >= 4)
+    map.set(slug, [...names, ...stripped])
+  }
+
   return map
 }
 
