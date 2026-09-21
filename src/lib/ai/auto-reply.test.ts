@@ -841,7 +841,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     await dispatchInboundToAiReply(ARGS)
     const expectedRecap =
-      'Solicitudes activas de este cliente:\n- Habitación: Suite Premium · 2026-10-01 → 2026-10-03 · 2 personas'
+      'Solicitudes activas de este cliente:\n- Habitación: Suite Premium · 01/10/2026 → 03/10/2026 · 2 personas'
     expect(h.state.updatePayload?.ai_handoff_summary).toEqual(
       expect.stringContaining(expectedRecap),
     )
@@ -2399,7 +2399,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
       'acct-1',
       expect.objectContaining({
         contentText: expect.stringContaining(
-          'Perfecto, esto sería: Suite Premium, del 2026-10-01 al 2026-10-03, 2 personas',
+          'Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas',
         ),
       }),
     )

@@ -1,4 +1,5 @@
 import { formatCurrency } from '@/lib/currency'
+import { formatDateEs } from '@/lib/products/rates'
 import type { ReservationCategory } from './upsert'
 
 /** The reservation fields a follow-up nudge cares about — a subset of
@@ -66,8 +67,8 @@ export function reservationFollowUpText(missing: string[]): string {
 export function reservationSummaryText(row: ReservationFieldSnapshot, currency: string): string {
   const bits: string[] = []
   if (row.service_name) bits.push(row.service_name)
-  if (row.check_in && row.check_out) bits.push(`del ${row.check_in} al ${row.check_out}`)
-  else if (row.use_date) bits.push(row.use_date)
+  if (row.check_in && row.check_out) bits.push(`del ${formatDateEs(row.check_in)} al ${formatDateEs(row.check_out)}`)
+  else if (row.use_date) bits.push(formatDateEs(row.use_date))
   if (row.guests) bits.push(`${row.guests} ${row.guests === 1 ? 'persona' : 'personas'}`)
   if (row.category === 'eventos' && row.hall) bits.push(row.hall)
   if (row.estimated_price != null && row.estimated_price > 0) {

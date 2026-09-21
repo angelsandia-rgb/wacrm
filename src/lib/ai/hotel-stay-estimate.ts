@@ -5,6 +5,7 @@ import {
   occupancyForGuests,
   DAY_LABEL_ES,
   OCCUPANCY_LABEL_ES,
+  formatDateEs,
   type ProductRate,
 } from '@/lib/products/rates'
 import { resolveStayProductId, estimateDeposit } from '@/lib/reservations/price'
@@ -91,12 +92,12 @@ export async function loadHotelStayEstimate(
   const occLabel = OCCUPANCY_LABEL_ES[occupancy].trim() || 'individual'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
   const breakdown = quote.nights
-    .map((n) => `${n.date} ${DAY_LABEL_ES[n.day_of_week].toLowerCase()} ${n.price == null ? '(sin tarifa)' : formatCurrency(n.price, currency)}`)
+    .map((n) => `${formatDateEs(n.date)} ${DAY_LABEL_ES[n.day_of_week].toLowerCase()} ${n.price == null ? '(sin tarifa)' : formatCurrency(n.price, currency)}`)
     .join(' · ')
 
   let text =
     `${label} · ${guests} personas (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
-    `(${rr.check_in} al ${rr.check_out}): ${breakdown}. ` +
+    `(${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}): ${breakdown}. ` +
     `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}: ${formatCurrency(quote.total, currency)}.`
   if (quote.missing.length > 0) {
     text += ` (${quote.missing.join(', ')} sin tarifa publicada — esas noches las cotiza una persona.)`
@@ -213,7 +214,7 @@ export async function computeStayEstimateStatus(
   const deposit = estimateDeposit(quote.total, depositPercent)
   const text =
     `El total estimado sería de ${formatCurrency(quote.total, currency)} por ${quote.nights.length} ${nightsWord} ` +
-    `para ${rr.guests} personas en ${label}, del ${rr.check_in} al ${rr.check_out}. ` +
+    `para ${rr.guests} personas en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
     `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}. ` +
     `La disponibilidad y el precio final los confirma una persona del hotel.`
 

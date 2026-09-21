@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
+import { formatDateEs } from '@/lib/products/rates'
 
 // ============================================================
 // Facts the business already has on file for this contact/conversation
@@ -41,17 +42,38 @@ interface ReservationSummaryRow {
  * for this conversation (`reservation_requests`, migrations 112/120) —
  * a guest can have a room, a spa slot, and an event request all open at
  * once, and each is captured independently. Only the CURRENT build per
- * category (`is_active_build`) and still-pending rows are included —
+ * category (`is_active_build`) and still-pending rows are considered —
  * a request that was already approved/denied, or superseded by a later
  * one in the same category, isn't something the bot should keep
- * repeating back. Returns null when there's nothing open to recap.
+ * repeating back.
+ *
+ * Split into two buckets when `todayISO` is given (the caller's own
+ * "today" in the business's timezone, `YYYY-MM-DD`):
+ *  - `current`: still relevant — no date yet, or a date today/in the
+ *    future. Same "already captured, don't re-ask" recap as before.
+ *  - `stale`: a room/package/spa/activity/event whose date (check_out,
+ *    or use_date for a single-date category) has already PASSED while
+ *    the request sat at `status: 'pending'` — i.e. staff never
+ *    confirmed or denied it and the date came and went. Real gap found
+ *    2026-09-21: a stale pending request keeps getting recapped to the
+ *    model as "already captured, don't ask again" indefinitely, with
+ *    its now-meaningless old dates, instead of being surfaced so the
+ *    guest gets asked whether to reschedule it or start fresh.
+ *
+ * `todayISO` omitted (the handoff-recap caller, `appendActiveReservationsRecap`
+ * — a human reads this, not the model) skips the split entirely: every
+ * pending row comes back in `current`, `stale` is always null, matching
+ * this function's original behavior exactly.
+ *
+ * Both fields are null when there's nothing in that bucket to recap.
  */
 export async function loadActiveReservationsSummary(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
   currency: string,
-): Promise<string | null> {
+  todayISO?: string,
+): Promise<{ current: string | null; stale: string | null }> {
   const { data } = await db
     .from('reservation_requests')
     .select(
@@ -64,14 +86,14 @@ export async function loadActiveReservationsSummary(
     .order('category', { ascending: true })
 
   const rows = (data ?? []) as ReservationSummaryRow[]
-  if (rows.length === 0) return null
+  if (rows.length === 0) return { current: null, stale: null }
 
-  const lines = rows.map((r) => {
+  const renderLine = (r: ReservationSummaryRow): string => {
     const label = CATEGORY_LABEL_ES[r.category] ?? r.category
     const service = (r.service_name ?? '').trim()
     const bits: string[] = [service ? `${label}: ${service}` : label]
-    if (r.check_in && r.check_out) bits.push(`${r.check_in} → ${r.check_out}`)
-    else if (r.use_date) bits.push(r.use_date)
+    if (r.check_in && r.check_out) bits.push(`${formatDateEs(r.check_in)} → ${formatDateEs(r.check_out)}`)
+    else if (r.use_date) bits.push(formatDateEs(r.use_date))
     if (r.guests) bits.push(`${r.guests} ${r.guests === 1 ? 'persona' : 'personas'}`)
     if (r.duration_minutes) bits.push(`${r.duration_minutes} min`)
     if (r.hall) bits.push(r.hall)
@@ -79,9 +101,21 @@ export async function loadActiveReservationsSummary(
       bits.push(`estimado ${formatCurrency(r.estimated_price, currency)}`)
     }
     return `- ${bits.join(' · ')}`
-  })
+  }
 
-  return lines.join('\n')
+  const isStale = (r: ReservationSummaryRow): boolean => {
+    if (!todayISO) return false
+    const relevantDate = r.check_out || r.use_date
+    return Boolean(relevantDate && relevantDate < todayISO)
+  }
+
+  const currentLines = rows.filter((r) => !isStale(r)).map(renderLine)
+  const staleLines = rows.filter(isStale).map(renderLine)
+
+  return {
+    current: currentLines.length > 0 ? currentLines.join('\n') : null,
+    stale: staleLines.length > 0 ? staleLines.join('\n') : null,
+  }
 }
 
 interface KnownContactRow {
