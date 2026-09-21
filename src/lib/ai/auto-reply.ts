@@ -25,7 +25,7 @@ import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation 
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
-import { formatWithOffset, describeNowInZone } from '@/lib/timezone'
+import { formatWithOffset, describeNowInZone, dateKeyInZone } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import {
@@ -601,6 +601,7 @@ export async function dispatchInboundToAiReply(
     let calendarContext: AutoReplyCalendarContext | null = null
     let knownContactFacts: string | null = null
     let activeReservations: string | null = null
+    let staleReservations: string | null = null
     try {
       // Independent reads run concurrently. One failed enrichment must
       // not prevent the other sources from grounding the reply.
@@ -649,12 +650,15 @@ export async function dispatchInboundToAiReply(
           (await loadHotelStayEstimate(db, accountId, conversationId, hotelCurrency, hotelDepositPercent).catch(
             () => null,
           )) ?? undefined
-        activeReservations = await loadActiveReservationsSummary(
+        const reservationsSummary = await loadActiveReservationsSummary(
           db,
           accountId,
           conversationId,
           hotelCurrency,
-        ).catch(() => null)
+          dateKeyInZone(new Date(), businessTimeZone),
+        ).catch(() => ({ current: null, stale: null }))
+        activeReservations = reservationsSummary.current
+        staleReservations = reservationsSummary.stale
         hotelCategoryBanners = await loadHotelCategoryBanners(db, accountId).catch(() => [])
         hotelCategoryProductNames = await loadHotelCategoryProductNames(
           db,
@@ -751,6 +755,7 @@ export async function dispatchInboundToAiReply(
       flowDirective,
       knownContactFacts,
       activeReservations,
+      staleReservations,
     })
 
     let generation: GenerateResult
@@ -2130,7 +2135,10 @@ async function appendActiveReservationsRecap(
       .eq('id', accountId)
       .maybeSingle()
     const currency = (account as { default_currency: string | null } | null)?.default_currency ?? 'USD'
-    const recap = await loadActiveReservationsSummary(db, accountId, conversationId, currency)
+    // No `todayISO` here — a human reads this recap, not the model, so
+    // every pending row is worth showing regardless of date (see
+    // `loadActiveReservationsSummary`'s doc comment).
+    const { current: recap } = await loadActiveReservationsSummary(db, accountId, conversationId, currency)
     if (!recap) return summary
     return `${summary}\n\nSolicitudes activas de este cliente:\n${recap}`
   } catch (err) {

@@ -62,6 +62,19 @@ export function isValidHotelDate(value: unknown): value is string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
+/** ISO `YYYY-MM-DD` → `DD/MM/AAAA`, the format guests in Guatemala
+ *  expect in a WhatsApp reply. Every customer-facing (and staff-facing
+ *  handoff/internal-note) date in the hotel vertical goes through this
+ *  — the model's own `record_reservation` marker keeps YYYY-MM-DD
+ *  internally (needed for day-of-week/rate lookups) and is never shown
+ *  to a guest as-is. Returns the input unchanged when it isn't a valid
+ *  ISO date, so a bad value degrades gracefully instead of throwing. */
+export function formatDateEs(iso: string): string {
+  if (!isValidHotelDate(iso)) return iso
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${y}`
+}
+
 export const MAX_STAY_NIGHTS = 366
 
 const JS_DAY_TO_CODE: DayOfWeek[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']

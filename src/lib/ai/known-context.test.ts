@@ -25,12 +25,15 @@ function makeDb(tables: Record<string, TableConfig>) {
 }
 
 describe('loadActiveReservationsSummary', () => {
-  it('returns null when there are no active requests', async () => {
+  it('returns null in both buckets when there are no active requests', async () => {
     const db = makeDb({ reservation_requests: { rows: [] } })
-    expect(await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')).toBeNull()
+    expect(await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')).toEqual({
+      current: null,
+      stale: null,
+    })
   })
 
-  it('formats a stay-dates row with guests and the estimated price', async () => {
+  it('formats a stay-dates row (DD/MM/AAAA) with guests and the estimated price', async () => {
     const db = makeDb({
       reservation_requests: {
         rows: [
@@ -49,7 +52,8 @@ describe('loadActiveReservationsSummary', () => {
       },
     })
     const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
-    expect(res).toMatch(/^- Habitación: Suite Premium · 2026-09-18 → 2026-09-19 · 2 personas · estimado .*920/)
+    expect(res.stale).toBeNull()
+    expect(res.current).toMatch(/^- Habitación: Suite Premium · 18\/09\/2026 → 19\/09\/2026 · 2 personas · estimado .*920/)
   })
 
   it('formats a use-date row (spa) without a price when none is set', async () => {
@@ -71,7 +75,7 @@ describe('loadActiveReservationsSummary', () => {
       },
     })
     const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
-    expect(res).toBe('- Spa: Masaje relajante · 2026-09-13 · 1 persona · 60 min')
+    expect(res.current).toBe('- Spa: Masaje relajante · 13/09/2026 · 1 persona · 60 min')
   })
 
   it('joins multiple open categories on separate lines, one guest can have several at once', async () => {
@@ -104,9 +108,9 @@ describe('loadActiveReservationsSummary', () => {
       },
     })
     const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
-    expect(res).toBe(
-      '- Evento: evento religioso · 2026-09-20 · 30 personas · salón\n' +
-        '- Actividad: cabalgata · 2026-09-11 · 5 personas',
+    expect(res.current).toBe(
+      '- Evento: evento religioso · 20/09/2026 · 30 personas · salón\n' +
+        '- Actividad: cabalgata · 11/09/2026 · 5 personas',
     )
   })
 
@@ -129,7 +133,81 @@ describe('loadActiveReservationsSummary', () => {
       },
     })
     const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
-    expect(res).not.toContain('estimado')
+    expect(res.current).not.toContain('estimado')
+  })
+
+  it('without todayISO, every pending row comes back as current (old behavior, the handoff-recap caller)', async () => {
+    const db = makeDb({
+      reservation_requests: {
+        rows: [
+          {
+            category: 'habitaciones',
+            service_name: 'Suite Premium',
+            guests: 2,
+            check_in: '2020-01-01',
+            check_out: '2020-01-03',
+            use_date: null,
+            duration_minutes: null,
+            hall: null,
+            estimated_price: null,
+          },
+        ],
+      },
+    })
+    const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
+    expect(res.stale).toBeNull()
+    expect(res.current).toContain('Suite Premium')
+  })
+
+  it('moves a pending request whose check_out already passed into the stale bucket', async () => {
+    const db = makeDb({
+      reservation_requests: {
+        rows: [
+          {
+            category: 'habitaciones',
+            service_name: 'Suite Premium',
+            guests: 2,
+            check_in: '2026-09-01',
+            check_out: '2026-09-03',
+            use_date: null,
+            duration_minutes: null,
+            hall: null,
+            estimated_price: null,
+          },
+        ],
+      },
+    })
+    const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ', '2026-09-21')
+    expect(res.current).toBeNull()
+    expect(res.stale).toBe('- Habitación: Suite Premium · 01/09/2026 → 03/09/2026 · 2 personas')
+  })
+
+  it('keeps a pending request whose date is today or in the future out of the stale bucket', async () => {
+    const db = makeDb({
+      reservation_requests: {
+        rows: [
+          { category: 'spa', service_name: 'Masaje', guests: 1, check_in: null, check_out: null, use_date: '2026-09-21', duration_minutes: 50, hall: null, estimated_price: null },
+          { category: 'eventos', service_name: 'Boda', guests: 80, check_in: null, check_out: null, use_date: '2026-10-01', duration_minutes: null, hall: 'Jardín', estimated_price: null },
+        ],
+      },
+    })
+    const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ', '2026-09-21')
+    expect(res.stale).toBeNull()
+    expect(res.current).toContain('Masaje')
+    expect(res.current).toContain('Boda')
+  })
+
+  it('a request with no date yet is never stale, regardless of todayISO', async () => {
+    const db = makeDb({
+      reservation_requests: {
+        rows: [
+          { category: 'habitaciones', service_name: 'Suite Premium', guests: 2, check_in: null, check_out: null, use_date: null, duration_minutes: null, hall: null, estimated_price: null },
+        ],
+      },
+    })
+    const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ', '2026-09-21')
+    expect(res.stale).toBeNull()
+    expect(res.current).toContain('Suite Premium')
   })
 })
 

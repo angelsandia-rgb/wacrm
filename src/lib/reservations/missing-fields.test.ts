@@ -106,7 +106,7 @@ describe('reservationSummaryText', () => {
         'GTQ',
       ),
     ).toBe(
-      `Perfecto, esto sería: Suite Premium, del 2026-10-01 al 2026-10-03, 2 personas, total estimado ${formatCurrency(1200, 'GTQ')}. ¿Confirmamos la reservación?`,
+      `Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas, total estimado ${formatCurrency(1200, 'GTQ')}. ¿Confirmamos la reservación?`,
     )
   })
 
@@ -116,7 +116,7 @@ describe('reservationSummaryText', () => {
         { category: 'spa', service_name: 'Masaje relajante', use_date: '2026-10-05', guests: 1 },
         'GTQ',
       ),
-    ).toBe('Perfecto, esto sería: Masaje relajante, 2026-10-05, 1 persona. ¿Confirmamos la reservación?')
+    ).toBe('Perfecto, esto sería: Masaje relajante, 05/10/2026, 1 persona. ¿Confirmamos la reservación?')
   })
 
   it('includes the hall for eventos', () => {
@@ -132,7 +132,7 @@ describe('reservationSummaryText', () => {
         'GTQ',
       ),
     ).toBe(
-      'Perfecto, esto sería: Salón de bodas, 2026-12-01, 80 personas, Salón Jardín. ¿Confirmamos la reservación?',
+      'Perfecto, esto sería: Salón de bodas, 01/12/2026, 80 personas, Salón Jardín. ¿Confirmamos la reservación?',
     )
   })
 
@@ -162,6 +162,6 @@ describe('buildReservationFollowUpMessage', () => {
         },
         'GTQ',
       ),
-    ).toBe('Perfecto, esto sería: Suite Premium, del 2026-10-01 al 2026-10-03, 2 personas. ¿Confirmamos la reservación?')
+    ).toBe('Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas. ¿Confirmamos la reservación?')
   })
 })

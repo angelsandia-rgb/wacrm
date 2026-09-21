@@ -213,7 +213,7 @@ describe('sendQuoteToConversation', () => {
       'acct-1',
       expect.objectContaining({
         contentText: expect.stringContaining(
-          'Perfecto, esto sería: Suite Premium, del 2026-10-01 al 2026-10-03, 2 personas',
+          'Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas',
         ),
       }),
     )

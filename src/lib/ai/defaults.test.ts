@@ -395,3 +395,44 @@ describe('buildSystemPrompt — hotel modify/cancel existing request', () => {
     expect(p.toLowerCase()).toContain('you have no tool to change or cancel a reservation/request yourself')
   })
 })
+
+describe('buildSystemPrompt — customer-facing dates are DD/MM/AAAA', () => {
+  it('tells the model to write DD/MM/AAAA in the reply text, never YYYY-MM-DD, in every mode', () => {
+    for (const mode of ['auto_reply', 'draft'] as const) {
+      const p = buildSystemPrompt({ userPrompt: null, mode })
+      expect(p).toContain('DD/MM/AAAA')
+      expect(p).toContain('24/09/2026')
+      expect(p.toLowerCase()).toContain('never yyyy-mm-dd')
+    }
+  })
+})
+
+describe('buildSystemPrompt — stale (past-due) reservation prompts reschedule-or-new', () => {
+  it('flags a stale request and instructs asking reschedule-vs-new, hotel only, auto_reply only', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      hotelReservations: true,
+      staleReservations: '- Habitación: Suite Premium · 01/09/2026 → 03/09/2026 · 2 personas',
+    })
+    expect(p).toContain('PAST-DUE, UNRESOLVED REQUEST')
+    expect(p).toContain('Suite Premium · 01/09/2026 → 03/09/2026')
+    expect(p.toLowerCase()).toContain('reschedule it to new dates')
+    expect(p.toLowerCase()).toContain('never quote, confirm, or act as if their old date still applies')
+  })
+
+  it('says nothing when there is nothing stale', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p).not.toContain('PAST-DUE')
+  })
+
+  it('never mentions it outside the hotel vertical or in draft mode', () => {
+    const stale = '- Habitación: Suite Premium · 01/09/2026 → 03/09/2026 · 2 personas'
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: false, staleReservations: stale }),
+    ).not.toContain('PAST-DUE')
+    expect(
+      buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelReservations: true, staleReservations: stale }),
+    ).not.toContain('PAST-DUE')
+  })
+})
