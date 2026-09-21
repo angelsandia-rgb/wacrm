@@ -44,7 +44,7 @@ const h = vi.hoisted(() => ({
      *  "no per-category pipeline", falling back to `pipeline` above. */
     pipelines: [] as { id: string; name: string }[],
     contact: { lead_temperature: null as string | null, name: 'Juan Pérez', phone: '50255551234', email: null as string | null },
-    account: { default_currency: 'USD' } as { default_currency: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null; deposit_percent?: number },
+    account: { default_currency: 'USD' } as { default_currency: string; name?: string; timezone?: string; catalog_delivery_mode?: string; industry_vertical?: string; restaurant_menu_url?: string | null; deposit_percent?: number },
     accountError: null as { code: string; message: string } | null,
     dealInserts: [] as Record<string, unknown>[],
     createdDeal: { id: 'new-deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' } as Record<string, unknown>,
@@ -2990,6 +2990,53 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
       // stripped (not every product shares it) and "Familiar" alone was
       // never added as a standalone match target.
       text: 'Contamos con una opción muy buena para familias grandes.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('does not fire on the welcome greeting even when the account name accidentally matches a stripped product name — real gap found 2026-09-21: "Bienvenido a Hotel San Ricardo... ¿Cuál de estas opciones le interesa: Habitaciones, Spa, Actividades al aire libre, Paquetes o Eventos?" fired the Paquetes banner on a bare "Hola", because "Paquete San Ricardo" strips to "San Ricardo" — also the hotel\'s own name', async () => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel', name: 'Villa San Ricardo' }
+    h.state.categories = [
+      { id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' },
+      { id: 'cat-2', name: 'Spa', banner_url: 'https://cdn.example.com/spa.jpg' },
+      { id: 'cat-3', name: 'Paquetes', banner_url: 'https://cdn.example.com/paquetes.jpg' },
+    ]
+    h.state.products = [
+      { id: 'p1', name: 'Paquete Romántico', category_id: 'cat-3' },
+      { id: 'p2', name: 'Paquete San Vicente', category_id: 'cat-3' },
+      { id: 'p3', name: 'Paquete San Ricardo', category_id: 'cat-3' },
+      { id: 'p4', name: 'Paquete Luna de Miel', category_id: 'cat-3' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'Bienvenido a Hotel San Ricardo, le saluda Angela su asistente el día de hoy 😊 ¿Con quién tengo el gusto?\n¿Cuál de estas opciones le interesa: Habitaciones, Spa, Actividades al aire libre, Paquetes o Eventos?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('excludes a stripped product name that collides with the account\'s own business name, even outside a generic menu turn', async () => {
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel', name: 'Villa San Ricardo' }
+    h.state.categories = [{ id: 'cat-1', name: 'Paquetes', banner_url: 'https://cdn.example.com/paquetes.jpg' }]
+    h.state.products = [
+      { id: 'p1', name: 'Paquete Romántico', category_id: 'cat-1' },
+      { id: 'p2', name: 'Paquete San Vicente', category_id: 'cat-1' },
+      { id: 'p3', name: 'Paquete San Ricardo', category_id: 'cat-1' },
+      { id: 'p4', name: 'Paquete Luna de Miel', category_id: 'cat-1' },
+    ]
+    h.generateReply.mockResolvedValue({
+      // Only one category-ish mention (none of the literal category
+      // labels, actually) plus the hotel's own name in a sign-off —
+      // must not match on "San Ricardo" alone.
+      text: 'Gracias por escribirle a Villa San Ricardo, en un momento le atiendo.',
       handoff: false,
       markDealWon: false,
       moveToStageName: null,
