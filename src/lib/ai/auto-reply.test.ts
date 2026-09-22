@@ -2388,6 +2388,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
     ]
+    h.state.productCategoryName = 'Habitaciones'
     h.state.reservationRow = {
       category: 'habitaciones',
       guests: null,
@@ -2451,6 +2452,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
     ]
+    h.state.productCategoryName = 'Habitaciones'
     h.state.reservationRow = {
       category: 'habitaciones',
       service_name: 'Suite Premium',
@@ -2813,6 +2815,77 @@ describe('dispatchInboundToAiReply — autoRecordReservation never trusts a mode
     await dispatchInboundToAiReply(ARGS)
     const input = h.upsertReservationRequest.mock.calls[0][2] as Record<string, unknown>
     expect(input).toMatchObject({ estimated_price: 275 })
+  })
+})
+
+describe('dispatchInboundToAiReply — autoRecordReservation tolerates a DD/MM/AAAA date in the marker', () => {
+  // Real incident, 2026-09-22: the 2026-09-21 change taught the model to
+  // write customer-facing dates as DD/MM/AAAA while keeping YYYY-MM-DD
+  // inside marker fields. In one live conversation the guest gave clear
+  // dates, the bot's own reply recapped them correctly as DD/MM/AAAA, but
+  // entrada/salida stayed null in the database — the model had reused
+  // the DD/MM/AAAA string inside the marker too, and the strict
+  // YYYY-MM-DD-only parser silently dropped it. Accepting DD/MM/AAAA as a
+  // fallback (and normalizing it) means a guest's date is captured even
+  // when the model mixes the two formats up.
+  beforeEach(() => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+  })
+
+  it('normalizes a DD/MM/AAAA entrada/salida to YYYY-MM-DD instead of dropping it', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Perfecto, ya quedó anotado del 25/09/2026 al 27/09/2026.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        {
+          category: 'habitaciones',
+          fields: { servicio: 'Junior Suite Familiar', personas: '3', entrada: '25/09/2026', salida: '27/09/2026' },
+          confirmed: false,
+        },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ check_in: '2026-09-25', check_out: '2026-09-27' }),
+    )
+  })
+
+  it('still accepts the correct YYYY-MM-DD form as before', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Perfecto, ya quedó anotado.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { entrada: '2026-09-25', salida: '2026-09-27' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ check_in: '2026-09-25', check_out: '2026-09-27' }),
+    )
+  })
+
+  it('drops a garbled date that matches neither format', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Entendido.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { entrada: '25 de septiembre', salida: '2026-09-27' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const input = h.upsertReservationRequest.mock.calls[0][2] as Record<string, unknown>
+    expect(input).not.toHaveProperty('check_in')
+    expect(input).toMatchObject({ check_out: '2026-09-27' })
   })
 })
 
@@ -3283,7 +3356,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.updatePayload).toBeNull()
   })
 
-  it('does not hand off (and sends no closing message) while a required field is still missing, even if confirmed is set', async () => {
+  it('does not hand off while a required field is still missing, even if confirmed is set — instead tells the guest what is missing (real incident, 2026-09-22: silently doing nothing here left a "Paquete Romántico" guest thinking their request was already with the team while it sat stuck, missing dates, with no one told)', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
       guests: null,
@@ -3301,7 +3374,18 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       reservationProposals: [{ category: 'habitaciones', fields: {}, confirmed: true }],
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    // The model's own reply goes out via engineSendText as always; this
+    // is the SEPARATE deterministic nudge, not a hand-off.
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({
+        messageType: 'text',
+        contentText:
+          '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+      }),
+    )
     expect(h.state.updatePayload).toBeNull()
   })
 
