@@ -3249,6 +3249,31 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     )
   })
 
+  it('still resolves the weekend variant when the marker leaks the DD/MM/AAAA display format instead of YYYY-MM-DD (same 2026-09-22 incident as autoRecordReservation)', async () => {
+    h.state.categories = [
+      {
+        id: 'cat-1',
+        name: 'Habitaciones',
+        banner_url: 'https://cdn.example.com/weekday.jpg',
+        banner_url_weekend: 'https://cdn.example.com/weekend.jpg',
+      },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: '¿Para cuántas personas sería?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      // 16/10/2026 is a Friday, written DD/MM/AAAA instead of YYYY-MM-DD.
+      reservationProposals: [{ category: 'habitaciones', fields: { entrada: '16/10/2026' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/weekend.jpg' }),
+    )
+  })
+
   it('defaults to the weekday banner when the check-in date is not known yet', async () => {
     h.state.categories = [
       {

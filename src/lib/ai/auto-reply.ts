@@ -2560,6 +2560,27 @@ const RESERVATION_ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const RESERVATION_DMY_DATE = /^(\d{2})\/(\d{2})\/(\d{4})$/
 
 /**
+ * Normalizes a `record_reservation` marker date field to YYYY-MM-DD,
+ * tolerating the DD/MM/AAAA leak described above. Shared by
+ * `autoRecordReservation` (persists the field) and
+ * `resolveBannerVariantFromReservationFields` (picks the weekday/
+ * weekend category banner from the same raw field) — both read the
+ * marker's `entrada`/`fecha` value directly, so both need the same
+ * fallback or only one of them silently mis-parses a leaked date.
+ */
+function normalizeReservationDate(v?: string): string | undefined {
+  if (!v) return undefined
+  if (RESERVATION_ISO_DATE.test(v)) return v
+  const dmy = RESERVATION_DMY_DATE.exec(v.trim())
+  if (!dmy) return undefined
+  const [, dd, mm, yyyy] = dmy
+  const day = Number(dd)
+  const month = Number(mm)
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+  return `${yyyy}-${mm}-${dd}`
+}
+
+/**
  * Logs a hotel reservation/service detail the model surfaced this turn
  * (`RECORD_RESERVATION_SENTINEL_PREFIX`, hotel accounts only) into
  * `reservation_requests` via the shared upsert — one row per
@@ -2590,17 +2611,7 @@ async function autoRecordReservation(args: {
     const n = Number(v)
     return Number.isFinite(n) && n >= 0 ? n : undefined
   }
-  const toDate = (v?: string): string | undefined => {
-    if (!v) return undefined
-    if (RESERVATION_ISO_DATE.test(v)) return v
-    const dmy = RESERVATION_DMY_DATE.exec(v.trim())
-    if (!dmy) return undefined
-    const [, dd, mm, yyyy] = dmy
-    const day = Number(dd)
-    const month = Number(mm)
-    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
-    return `${yyyy}-${mm}-${dd}`
-  }
+  const toDate = normalizeReservationDate
 
   const startNew = ['1', 'true', 'si', 'sí', 'yes', 'nueva'].includes(
     (f.nueva ?? '').trim().toLowerCase(),
@@ -3050,8 +3061,8 @@ function resolveBannerVariantFromReservationFields(
   hasWeekendVariant: boolean,
 ): 'weekday' | 'weekend' | null {
   if (!hasWeekendVariant) return null
-  const dateStr = fields.entrada || fields.fecha
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const dateStr = normalizeReservationDate(fields.entrada || fields.fecha)
+  if (!dateStr) return null
   const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay() // 0=Sun .. 6=Sat
   if (Number.isNaN(day)) return null
   return day === 5 || day === 6 ? 'weekend' : 'weekday'
