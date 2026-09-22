@@ -1661,6 +1661,8 @@ export async function dispatchInboundToAiReply(
               handoffAgentId: config.handoffAgentId,
               alreadyAssigned: Boolean(conv.assigned_agent_id),
               confirmed: proposal.confirmed,
+              currency: hotelCurrency,
+              sinceISO: conv.ai_context_reset_at,
             })
           } catch (err) {
             console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
@@ -2545,6 +2547,38 @@ async function autoMoveDealStage(args: {
  * spamming `ai_action_log` or the webhook with no-op updates.
  */
 const RESERVATION_ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+/** DD/MM/AAAA — the format the 2026-09-21 change taught the model to use
+ *  in its CUSTOMER-FACING text (see `buildSystemPrompt`'s date-format
+ *  instruction). A marker field is only ever supposed to carry the
+ *  YYYY-MM-DD form, but a model that just wrote a date in DD/MM/AAAA for
+ *  the guest can slip and reuse that same string inside the marker a
+ *  few words later — real incident, 2026-09-22: the guest gave clear
+ *  dates, the bot's own reply recapped them correctly, but check_in/
+ *  check_out stayed null in the database, so no total was ever computed
+ *  or sent. Accepted here as a fallback and normalized, rather than
+ *  silently dropping a date the guest actually gave. */
+const RESERVATION_DMY_DATE = /^(\d{2})\/(\d{2})\/(\d{4})$/
+
+/**
+ * Normalizes a `record_reservation` marker date field to YYYY-MM-DD,
+ * tolerating the DD/MM/AAAA leak described above. Shared by
+ * `autoRecordReservation` (persists the field) and
+ * `resolveBannerVariantFromReservationFields` (picks the weekday/
+ * weekend category banner from the same raw field) — both read the
+ * marker's `entrada`/`fecha` value directly, so both need the same
+ * fallback or only one of them silently mis-parses a leaked date.
+ */
+function normalizeReservationDate(v?: string): string | undefined {
+  if (!v) return undefined
+  if (RESERVATION_ISO_DATE.test(v)) return v
+  const dmy = RESERVATION_DMY_DATE.exec(v.trim())
+  if (!dmy) return undefined
+  const [, dd, mm, yyyy] = dmy
+  const day = Number(dd)
+  const month = Number(mm)
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+  return `${yyyy}-${mm}-${dd}`
+}
 
 /**
  * Logs a hotel reservation/service detail the model surfaced this turn
@@ -2577,8 +2611,7 @@ async function autoRecordReservation(args: {
     const n = Number(v)
     return Number.isFinite(n) && n >= 0 ? n : undefined
   }
-  const toDate = (v?: string): string | undefined =>
-    v && RESERVATION_ISO_DATE.test(v) ? v : undefined
+  const toDate = normalizeReservationDate
 
   const startNew = ['1', 'true', 'si', 'sí', 'yes', 'nueva'].includes(
     (f.nueva ?? '').trim().toLowerCase(),
@@ -3028,8 +3061,8 @@ function resolveBannerVariantFromReservationFields(
   hasWeekendVariant: boolean,
 ): 'weekday' | 'weekend' | null {
   if (!hasWeekendVariant) return null
-  const dateStr = fields.entrada || fields.fecha
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const dateStr = normalizeReservationDate(fields.entrada || fields.fecha)
+  if (!dateStr) return null
   const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay() // 0=Sun .. 6=Sat
   if (Number.isNaN(day)) return null
   return day === 5 || day === 6 ? 'weekend' : 'weekday'
@@ -3212,6 +3245,18 @@ async function sendStayEstimateFollowUpIfDue(args: {
  *
  * Always sends an explicit closing line before pausing the bot —
  * `handOffToHuman` itself never sends anything customer-facing.
+ *
+ * When the guest DID confirm but the record is still missing a
+ * required field (real incident, 2026-09-22, "Paquete Romántico": the
+ * model never asked for the stay dates, then told the guest "queda en
+ * seguimiento" as if it were done — this function correctly declined
+ * to hand off since dates were missing, but said nothing back, so the
+ * guest was left believing the team had it while the request sat
+ * silently stuck, unassigned, forever), sends the same deterministic
+ * "me falta X" nudge `sendHotelBookingNudge` uses instead of just
+ * doing nothing — the guest always hears SOMETHING concrete after
+ * trying to confirm, never a silent no-op behind an already-closing
+ * model reply.
  */
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
@@ -3223,21 +3268,31 @@ async function handOffIfReservationComplete(args: {
   alreadyAssigned: boolean
   /** CONFIRM_RESERVATION_SENTINEL this turn — see the doc comment above. */
   confirmed: boolean
+  currency: string
+  sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed } = args
+  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed, currency, sinceISO } = args
 
   if (!confirmed) return
 
   const { data: row } = await db
     .from('reservation_requests')
-    .select('category, guests, check_in, check_out, use_date, hall')
+    .select('category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', category)
     .eq('is_active_build', true)
     .maybeSingle()
   if (!row) return
-  if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) return
+  if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) {
+    await sendReservationNudge({
+      db, accountId, configOwnerUserId, conversationId,
+      snapshot: row as ReservationFieldSnapshot,
+      currency,
+      sinceISO,
+    })
+    return
+  }
 
   try {
     await sendMessageToConversation(db, accountId, {
@@ -3274,17 +3329,30 @@ async function handOffIfReservationComplete(args: {
 
 /**
  * Deterministic post-photo "would you like to book?" nudge (hotel
- * vertical only — called only when `isHotel`). Looks up this product's
+ * vertical only — called only when `isHotel`). Looks up the CATEGORY's
  * own `reservation_requests` row for THIS conversation (if the guest,
  * or an earlier `record_reservation` marker this same turn, already
  * started one) — naming what's still missing, or, once nothing is, a
  * full recap (service, dates/guests, estimated price) ending in the
- * confirmation ask (see `buildReservationFollowUpMessage`). A product
- * with no row yet falls back to its catalog category alone, so a guest
- * whose very first message was "send me a photo" still gets asked for
- * dates/guests instead of silence. A product outside the five hotel
- * categories (or one `categorySlugFromName` can't resolve) sends
- * nothing — not every photo is of something bookable.
+ * confirmation ask (see `buildReservationFollowUpMessage`).
+ *
+ * Matches by CATEGORY, not by this product's own id — real incident,
+ * 2026-09-22: the row `record_reservation` builds up over the chat
+ * (`autoRecordReservation`) only ever sets `service_name`, never
+ * `product_id` (that column is populated by the quote builder / catalog
+ * form only), so a lookup filtered on `product_id` never matched it.
+ * A guest who had already given complete dates and guests, then simply
+ * asked to see the room's photo, got told "me falta las fechas..." as
+ * if nothing had been captured — the exact opposite of what the row
+ * actually held. Since there is at most one active-build row per
+ * (conversation, category) by design, matching on category alone is
+ * both correct and simpler.
+ *
+ * A category with no row yet falls back to a blank snapshot, so a
+ * guest whose very first message was "send me a photo" still gets
+ * asked for dates/guests instead of silence. A product outside the
+ * five hotel categories (or one `categorySlugFromName` can't resolve)
+ * sends nothing — not every photo is of something bookable.
  */
 async function sendHotelBookingNudge(args: {
   db: SupabaseClient
@@ -3299,18 +3367,20 @@ async function sendHotelBookingNudge(args: {
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, productId, sinceISO } = args
 
-  const [{ data: row }, { data: account }] = await Promise.all([
-    db
-      .from('reservation_requests')
-      .select('category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
-      .eq('account_id', accountId)
-      .eq('conversation_id', conversationId)
-      .eq('product_id', productId)
-      .eq('is_active_build', true)
-      .eq('status', 'pending')
-      .maybeSingle(),
-    db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle(),
-  ])
+  const { data: product } = await db
+    .from('products')
+    .select('category_id')
+    .eq('id', productId)
+    .maybeSingle()
+  const categoryId = (product as { category_id: string | null } | null)?.category_id ?? null
+  if (!categoryId) return
+  const { data: category } = await db
+    .from('product_categories')
+    .select('name')
+    .eq('id', categoryId)
+    .maybeSingle()
+  const slug = categorySlugFromName((category as { name: string | null } | null)?.name ?? null)
+  if (!slug) return
 
   type Row = {
     category: ReservationCategory
@@ -3323,38 +3393,65 @@ async function sendHotelBookingNudge(args: {
     estimated_price: number | null
   }
 
-  let snapshot: Row | null = (row as Row | null) ?? null
-  if (!snapshot) {
-    const { data: product } = await db
-      .from('products')
-      .select('category_id')
-      .eq('id', productId)
-      .maybeSingle()
-    const categoryId = (product as { category_id: string | null } | null)?.category_id ?? null
-    if (!categoryId) return
-    const { data: category } = await db
-      .from('product_categories')
-      .select('name')
-      .eq('id', categoryId)
-      .maybeSingle()
-    const slug = categorySlugFromName((category as { name: string | null } | null)?.name ?? null)
-    if (!slug) return
-    snapshot = {
-      category: slug,
-      service_name: null,
-      guests: null,
-      check_in: null,
-      check_out: null,
-      use_date: null,
-      hall: null,
-      estimated_price: null,
-    }
+  const [{ data: row }, { data: account }] = await Promise.all([
+    db
+      .from('reservation_requests')
+      .select('category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
+      .eq('account_id', accountId)
+      .eq('conversation_id', conversationId)
+      .eq('category', slug)
+      .eq('is_active_build', true)
+      .eq('status', 'pending')
+      .maybeSingle(),
+    db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle(),
+  ])
+
+  const snapshot: Row = (row as Row | null) ?? {
+    category: slug,
+    service_name: null,
+    guests: null,
+    check_in: null,
+    check_out: null,
+    use_date: null,
+    hall: null,
+    estimated_price: null,
   }
 
-  const text = buildReservationFollowUpMessage(
+  await sendReservationNudge({
+    db,
+    accountId,
+    configOwnerUserId,
+    conversationId,
     snapshot,
-    (account as { default_currency: string | null } | null)?.default_currency ?? 'USD',
-  )
+    currency: (account as { default_currency: string | null } | null)?.default_currency ?? 'USD',
+    sinceISO,
+  })
+}
+
+/**
+ * Sends the deterministic "would you like to confirm? I still need X"
+ * (or, once nothing's missing, the full recap) nudge for a hotel
+ * reservation-in-progress, deduped against the last identical one sent
+ * in this conversation. Shared by `sendHotelBookingNudge` (fires after
+ * a product photo) and `handOffIfReservationComplete` (fires when the
+ * guest tries to confirm a request that's still missing something —
+ * see that function's doc comment for the incident this second call
+ * site fixes).
+ */
+async function sendReservationNudge(args: {
+  db: SupabaseClient
+  accountId: string
+  configOwnerUserId: string
+  conversationId: string
+  snapshot: ReservationFieldSnapshot
+  currency: string
+  /** Same reasoning as `autoSendProductPhoto`'s `sinceISO`: an
+   *  `ai_context_reset_at` after the prior nudge correctly allows a
+   *  repeat nudge following an agent's AI-memory reset. */
+  sinceISO: string | null
+}): Promise<void> {
+  const { db, accountId, configOwnerUserId, conversationId, snapshot, currency, sinceISO } = args
+  const text = buildReservationFollowUpMessage(snapshot, currency)
 
   // Never repeat the exact same "would you like to book? I still need
   // X" nudge back to back in one conversation — real incident
