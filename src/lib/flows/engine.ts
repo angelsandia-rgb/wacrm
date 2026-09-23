@@ -483,19 +483,7 @@ async function sendButtonsAndSuspend(
     node_type: "send_buttons",
     whatsapp_message_id,
   });
-  // Look up our internal message id so we can stash it on the run.
-  // Cheap — indexed on `messages.message_id`.
-  const { data: msg } = await db
-    .from("messages")
-    .select("id")
-    .eq("message_id", whatsapp_message_id)
-    .maybeSingle();
-  await db
-    .from("flow_runs")
-    .update({
-      last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
-    })
-    .eq("id", run.id);
+  await stashLastPromptMessageId(db, run, whatsapp_message_id);
   return { outcome: "advanced", node_key: node.node_key };
 }
 
@@ -527,17 +515,7 @@ async function sendListAndSuspend(
     node_type: "send_list",
     whatsapp_message_id,
   });
-  const { data: msg } = await db
-    .from("messages")
-    .select("id")
-    .eq("message_id", whatsapp_message_id)
-    .maybeSingle();
-  await db
-    .from("flow_runs")
-    .update({
-      last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
-    })
-    .eq("id", run.id);
+  await stashLastPromptMessageId(db, run, whatsapp_message_id);
   return { outcome: "advanced", node_key: node.node_key };
 }
 
@@ -787,7 +765,7 @@ async function advanceFromNodeKey(
       try {
         const { whatsapp_message_id } = await engineSendText({
           accountId: run.account_id,
-    userId: run.user_id,
+          userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           text: interpolateVars(cfg.text, run.vars),
@@ -808,7 +786,7 @@ async function advanceFromNodeKey(
       try {
         const { whatsapp_message_id } = await engineSendMedia({
           accountId: run.account_id,
-    userId: run.user_id,
+          userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           kind: cfg.media_type,
@@ -837,7 +815,7 @@ async function advanceFromNodeKey(
       try {
         const { whatsapp_message_id } = await engineSendText({
           accountId: run.account_id,
-    userId: run.user_id,
+          userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           text: interpolateVars(cfg.prompt_text, run.vars),
@@ -846,17 +824,7 @@ async function advanceFromNodeKey(
           node_type: "collect_input",
           whatsapp_message_id,
         });
-        const { data: msg } = await db
-          .from("messages")
-          .select("id")
-          .eq("message_id", whatsapp_message_id)
-          .maybeSingle();
-        await db
-          .from("flow_runs")
-          .update({
-            last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
-          })
-          .eq("id", run.id);
+        await stashLastPromptMessageId(db, run, whatsapp_message_id);
       } catch (err) {
         await sendFailedToHandoff(db, run, node, err, "collect_input_prompt_failed");
         return { outcome: "handed_off" };
@@ -976,6 +944,32 @@ async function advanceFromNodeKey(
   });
   await endRun(db, run.id, "failed", "advance_loop_overflow");
   return { outcome: "completed" };
+}
+
+/**
+ * Resolve the platform message id we just sent into our internal
+ * `messages.id` and stash it on the run as `last_prompt_message_id`.
+ * Scoped to the run's conversation: a platform message id is not
+ * globally unique, and an unscoped `maybeSingle()` errors on a collision
+ * and silently nulls the pointer.
+ */
+async function stashLastPromptMessageId(
+  db: AdminClient,
+  run: FlowRunRow,
+  whatsappMessageId: string,
+): Promise<void> {
+  const { data: msg } = await db
+    .from("messages")
+    .select("id")
+    .eq("message_id", whatsappMessageId)
+    .eq("conversation_id", run.conversation_id!)
+    .maybeSingle();
+  await db
+    .from("flow_runs")
+    .update({
+      last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+    })
+    .eq("id", run.id);
 }
 
 /**
@@ -1240,7 +1234,7 @@ async function handleReplyForActiveRun(
       try {
         await engineSendText({
           accountId: run.account_id,
-    userId: run.user_id,
+          userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           text: interpolateVars(cfg.prompt_text, run.vars),

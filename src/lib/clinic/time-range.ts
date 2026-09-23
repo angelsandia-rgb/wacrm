@@ -122,10 +122,6 @@ export const DASHBOARD_PERIODS: readonly DashboardPeriod[] = [
   'last_30',
 ] as const
 
-export function isDashboardPeriod(v: unknown): v is DashboardPeriod {
-  return typeof v === 'string' && (DASHBOARD_PERIODS as readonly string[]).includes(v)
-}
-
 /** `{ from, to }` (ISO, `to` exclusive) for a clinic dashboard period. */
 export function dashboardPeriodBounds(period: DashboardPeriod, tz: string, now: Date = new Date()): {
   from: string

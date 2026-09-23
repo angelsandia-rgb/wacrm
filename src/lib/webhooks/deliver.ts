@@ -49,7 +49,6 @@ export const MAX_CONSECUTIVE_FAILURES = 15;
  * schedule and the delivery is marked `failed`.
  */
 export const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000];
-export const MAX_DELIVERY_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 
 interface EndpointRow {
   id: string;

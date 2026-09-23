@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { downloadZernioWhatsAppMedia } from '@/lib/zernio/api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { resolveWhatsAppConfig } from '@/lib/whatsapp/resolve-config'
 
 export async function GET(
   request: Request,
@@ -54,7 +55,7 @@ export async function GET(
     // belongs to the caller's account before using any provider credentials.
     const { data: ownedMessage, error: ownershipError } = await supabase
       .from('messages')
-      .select('id, conversations!inner(account_id)')
+      .select('id, conversations!inner(account_id, whatsapp_config_id)')
       .eq('media_url', `/api/whatsapp/media/${mediaId}`)
       .eq('conversations.account_id', accountId)
       .limit(1)
@@ -75,14 +76,18 @@ export async function GET(
       )
     }
 
-    // Fetch and decrypt WhatsApp config
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
+    // Use the number this conversation is pinned to — an account can have
+    // several WhatsApp connections, and the media id is only valid with
+    // the credentials of the number that received it.
+    const ownerConversation = (
+      ownedMessage as { conversations: { whatsapp_config_id: string | null } | { whatsapp_config_id: string | null }[] }
+    ).conversations
+    const whatsappConfigId = Array.isArray(ownerConversation)
+      ? ownerConversation[0]?.whatsapp_config_id ?? null
+      : ownerConversation?.whatsapp_config_id ?? null
+    const config = await resolveWhatsAppConfig(supabase, accountId, whatsappConfigId)
 
-    if (configError || !config) {
+    if (!config) {
       return NextResponse.json(
         { error: 'WhatsApp not configured' },
         { status: 400 }
@@ -99,7 +104,7 @@ export async function GET(
         status: 200,
         headers: {
           'Content-Type': contentType || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=86400',
+          'Cache-Control': 'private, max-age=86400',
         },
       })
     }
@@ -119,7 +124,7 @@ export async function GET(
       status: 200,
       headers: {
         'Content-Type': contentType || mediaInfo.mimeType || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control': 'private, max-age=86400',
       },
     })
   } catch (error) {

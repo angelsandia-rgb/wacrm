@@ -13,6 +13,7 @@ import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
 import { addContactTagAndDispatch } from '@/lib/contacts/tag-events';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
+import { resolveWhatsAppConfig } from '@/lib/whatsapp/resolve-config';
 import type { LeadTemperature } from '@/types';
 
 /** Row select that embeds the contact's tags for serialization. */
@@ -77,11 +78,9 @@ export async function resolveAuditUserId(
   db: SupabaseClient,
   accountId: string
 ): Promise<string> {
-  const { data: config } = await db
-    .from('whatsapp_config')
-    .select('user_id')
-    .eq('account_id', accountId)
-    .maybeSingle();
+  // An account can have several WhatsApp numbers — attribute to the
+  // default connection's owner (a bare `maybeSingle()` errors on 2+ rows).
+  const config = await resolveWhatsAppConfig(db, accountId);
   const configOwner = config?.user_id as string | undefined;
   if (configOwner) return configOwner;
 

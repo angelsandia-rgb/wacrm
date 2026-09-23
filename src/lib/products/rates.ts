@@ -239,12 +239,6 @@ export const OCCUPANCY_LABEL_ES: Record<Occupancy, string> = {
   quad: '4 personas ',
 }
 
-/** Rank a rate for display: standard → couple → group, Mon→Sun within
- *  each tier. */
-export function rateSortKey(r: Pick<ProductRate, 'day_of_week' | 'occupancy'>): number {
-  return OCCUPANCY_ORDER.indexOf(r.occupancy) * 7 + DAY_ORDER.indexOf(r.day_of_week)
-}
-
 /** Collapse a run of consecutive same-priced days into "Lun–Jue Q800",
  *  a single day into "Vie Q1000". `days` must be in Mon→Sun order.
  *

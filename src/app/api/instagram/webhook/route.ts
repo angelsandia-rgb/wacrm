@@ -214,7 +214,7 @@ async function processWebhook(body: { entry?: InstagramWebhookEntry[] }) {
       const config = configRows[0]
 
       if (event.read) {
-        await markMessageRead(supabaseAdmin(), event.read.mid)
+        await markMessageRead(supabaseAdmin(), config.account_id, event.read.mid)
         continue
       }
 

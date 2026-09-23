@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
 
 // --- Scenario knobs the mock reads -----------------------------------------
 // `mockUser`         — what getUser() resolves to (a refreshed session ⇒ user,
@@ -114,6 +116,26 @@ describe('proxy — refreshed auth cookies survive redirects', () => {
     // No redirect — the normal NextResponse.next() already carries cookies.
     expect(res.headers.get('location')).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
+  });
+});
+
+describe('proxy — every dashboard page is auth-gated server-side', () => {
+  // Reads the real route group so a new page added under (dashboard)
+  // without a matching `protectedPaths` entry fails CI instead of
+  // rendering the shell to a signed-out visitor.
+  const dashboardDir = path.join(__dirname, 'app', '(dashboard)');
+  const pages = readdirSync(dashboardDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => `/${d.name}`);
+
+  it('finds the dashboard route group', () => {
+    expect(pages.length).toBeGreaterThan(5);
+  });
+
+  it.each(pages)('redirects a signed-out visitor on %s to /login', async (page) => {
+    mockUser = null;
+    const res = await proxy(new NextRequest(`https://app.test${page}`));
+    expect(res.headers.get('location')).toContain('/login');
   });
 });
 

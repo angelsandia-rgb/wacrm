@@ -39,7 +39,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval:ai": "tsx evals/ai/run.ts",
-    "eval:ai:view": "promptfoo view"
+    "eval:ai:view": "npm --prefix evals/ai exec -- promptfoo view"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

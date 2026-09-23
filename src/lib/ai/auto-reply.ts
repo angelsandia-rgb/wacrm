@@ -455,7 +455,7 @@ export async function dispatchInboundToAiReply(
     // account's own WhatsApp creds, using the same BYO AI key. Degrades
     // to text-only on any download/format problem.
     const imageResolver = providerSupportsVision(config.provider, config.model)
-      ? makeInboundImageResolver(db, accountId)
+      ? makeInboundImageResolver(db, accountId, conversationId)
       : null
     let messages: ChatMessage[]
     try {

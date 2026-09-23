@@ -168,7 +168,7 @@ async function processZernioEvent(
   config: any,
 ) {
   if (payload.event === 'message.read' && payload.message) {
-    await markMessageRead(supabaseAdmin(), payload.message.platformMessageId)
+    await markMessageRead(supabaseAdmin(), config.account_id, payload.message.platformMessageId)
     return
   }
 

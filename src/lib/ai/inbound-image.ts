@@ -15,6 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { downloadZernioWhatsAppMedia } from '@/lib/zernio/api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { resolveWhatsAppConfig } from '@/lib/whatsapp/resolve-config'
 import type { AiProvider, ChatImage } from './types'
 
 /** Formats every current Claude model and the GPT-4o family accept. */
@@ -74,17 +75,28 @@ function mediaIdFromProxyUrl(url: string): string | null {
 export function makeInboundImageResolver(
   db: SupabaseClient,
   accountId: string,
+  conversationId: string,
 ): (mediaUrl: string, mediaType: string | null) => Promise<ChatImage | null> {
   let configPromise: Promise<Record<string, unknown> | null> | null = null
   const loadConfig = () => {
     if (!configPromise) {
       configPromise = (async () => {
-        const { data } = await db
-          .from('whatsapp_config')
-          .select('provider, access_token, zernio_api_key, zernio_account_id')
+        // The media id belongs to the number the conversation is pinned
+        // to — an account can have several connections, so "the
+        // account's config" is ambiguous (and `maybeSingle()` on it
+        // errors once a second number is connected).
+        const { data: conv } = await db
+          .from('conversations')
+          .select('whatsapp_config_id')
+          .eq('id', conversationId)
           .eq('account_id', accountId)
           .maybeSingle()
-        return (data as Record<string, unknown> | null) ?? null
+        const config = await resolveWhatsAppConfig(
+          db,
+          accountId,
+          (conv as { whatsapp_config_id?: string | null } | null)?.whatsapp_config_id ?? null,
+        )
+        return (config as Record<string, unknown> | null) ?? null
       })()
     }
     return configPromise

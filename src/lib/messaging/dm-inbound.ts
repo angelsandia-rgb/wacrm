@@ -270,9 +270,33 @@ async function findOrCreateConversation(
   return { conversation: newConv, created: true }
 }
 
-/** Mirror a read receipt onto `messages.status`, shared by every DM webhook route. */
-export async function markMessageRead(db: SupabaseClient, platformMessageId: string): Promise<void> {
-  const { error } = await db.from('messages').update({ status: 'read' }).eq('message_id', platformMessageId)
+/**
+ * Mirror a read receipt onto `messages.status`, shared by every DM webhook
+ * route. Scoped to the account that owns the receiving config — a platform
+ * message id is not globally unique across tenants, so an unscoped update
+ * could flip another account's message (same guard as WhatsApp's
+ * `handleStatusUpdate`).
+ */
+export async function markMessageRead(
+  db: SupabaseClient,
+  accountId: string,
+  platformMessageId: string,
+): Promise<void> {
+  const { data: rows, error: lookupError } = await db
+    .from('messages')
+    .select('id, conversations!inner(account_id)')
+    .eq('message_id', platformMessageId)
+    .eq('conversations.account_id', accountId)
+  if (lookupError) {
+    console.error('[dm inbound] error resolving message for read receipt:', lookupError)
+    return
+  }
+  if (!rows || rows.length === 0) return
+
+  const { error } = await db
+    .from('messages')
+    .update({ status: 'read' })
+    .in('id', rows.map((row: { id: string }) => row.id))
   if (error) {
     console.error('[dm inbound] error updating message read status:', error)
   }
