@@ -88,7 +88,7 @@ export async function PATCH(
 
     let payload: TemplatePayload
     try {
-      payload = (await request.json()) as TemplatePayload
+      payload = ((await request.json().catch(() => null)) ?? {}) as TemplatePayload
     } catch {
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
     }

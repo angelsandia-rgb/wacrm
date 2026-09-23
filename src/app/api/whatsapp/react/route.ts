@@ -32,7 +32,7 @@ export async function POST(request: Request) {
       return rateLimitResponse(limit);
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) ?? {};
     const { message_id, emoji } = body as {
       message_id?: string;
       emoji?: string;

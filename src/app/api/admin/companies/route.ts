@@ -167,7 +167,7 @@ export async function POST(request: Request) {
   let invitationId: string | null = null;
   try {
     const ctx = await requirePlatformAdmin();
-    const body = (await request.json()) as {
+    const body = ((await request.json().catch(() => null)) ?? {}) as {
       companyName?: unknown;
       email?: unknown;
     };

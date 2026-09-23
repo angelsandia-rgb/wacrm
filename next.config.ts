@@ -41,8 +41,8 @@ const SECURITY_HEADERS = [
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      // Next.js needs 'unsafe-inline' for its inline hydration script
-      // and 'unsafe-eval' in dev + some production optimisations.
+      // Next.js needs 'unsafe-inline' for its inline hydration script;
+      // 'unsafe-eval' is added in development only (React debugging).
       // Nonce-based CSP is a later project.
       `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''}`,
       // Tailwind + inline style attributes on lots of components.

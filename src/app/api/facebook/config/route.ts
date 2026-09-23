@@ -176,7 +176,7 @@ export async function POST(request: Request) {
     }
     const accountId = account.accountId
 
-    const body = await request.json()
+    const body = (await request.json().catch(() => null)) ?? {}
     const { zernio_api_key, zernio_account_id } = body
 
     if (!zernio_api_key || !zernio_account_id) {

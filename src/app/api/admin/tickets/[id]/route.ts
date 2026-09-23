@@ -22,7 +22,7 @@ export async function PATCH(
   try {
     const ctx = await requirePlatformAdmin();
     const { id } = await params;
-    const body = (await request.json()) as { status?: unknown; admin_note?: unknown };
+    const body = ((await request.json().catch(() => null)) ?? {}) as { status?: unknown; admin_note?: unknown };
 
     const hasStatus = body.status !== undefined;
     const hasNote = body.admin_note !== undefined;

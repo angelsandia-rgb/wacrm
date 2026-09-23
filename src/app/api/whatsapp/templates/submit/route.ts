@@ -115,7 +115,7 @@ export async function POST(request: Request) {
     let payload: TemplatePayload
     let requestedConfigId: string | null = null
     try {
-      const body = (await request.json()) as TemplatePayload & {
+      const body = ((await request.json().catch(() => null)) ?? {}) as TemplatePayload & {
         whatsapp_config_id?: string
       }
       requestedConfigId = body.whatsapp_config_id ?? null

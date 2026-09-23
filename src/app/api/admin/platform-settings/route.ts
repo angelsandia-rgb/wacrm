@@ -15,7 +15,7 @@ import { platformAdminClient } from '@/lib/platform/admin-client'
 export async function PATCH(request: Request) {
   try {
     await requirePlatformAdmin()
-    const body = (await request.json()) as {
+    const body = ((await request.json().catch(() => null)) ?? {}) as {
       bank_name?: unknown
       account_number?: unknown
       account_type?: unknown
