@@ -1661,6 +1661,7 @@ export async function dispatchInboundToAiReply(
               handoffAgentId: config.handoffAgentId,
               alreadyAssigned: Boolean(conv.assigned_agent_id),
               confirmed: proposal.confirmed,
+              stillAsking: outboundText.trim().endsWith('?'),
               currency: hotelCurrency,
               sinceISO: conv.ai_context_reset_at,
             })
@@ -3309,6 +3310,19 @@ async function sendStayEstimateFollowUpIfDue(args: {
  * real fix: it can only fire in response to something the guest
  * actually said, never a guess about the bot's own phrasing.
  *
+ * `stillAsking` (the "does the bot's own reply end in '?'" check) is
+ * back, but as a SECOND, deterministic guard alongside the marker, not
+ * a replacement for it — real incident, 2026-09-23 (7-case live QA
+ * run, DEMO account): the model emitted CONFIRM_RESERVATION_SENTINEL
+ * in the very same reply where its own text still asked "¿Desea que
+ * deje esta solicitud lista...?", so the marker alone fired the
+ * hand-off before the guest had any chance to answer — same failure
+ * as 2026-09-18, different cause (the model contradicting itself
+ * instead of the code guessing). A model can get the marker wrong;
+ * whether its OWN reply this turn still ends in a question is cheap
+ * to check and costs at most one extra customer turn if wrong (the
+ * proposal keeps re-emitting), same trade-off as before.
+ *
  * Always sends an explicit closing line before pausing the bot —
  * `handOffToHuman` itself never sends anything customer-facing.
  *
@@ -3334,10 +3348,13 @@ async function handOffIfReservationComplete(args: {
   alreadyAssigned: boolean
   /** CONFIRM_RESERVATION_SENTINEL this turn — see the doc comment above. */
   confirmed: boolean
+  /** Does the model's own reply text THIS turn still end in "?" — see
+   *  the doc comment above. */
+  stillAsking: boolean
   currency: string
   sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed, currency, sinceISO } = args
+  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed, stillAsking, currency, sinceISO } = args
 
   if (!confirmed) return
 
@@ -3359,6 +3376,14 @@ async function handOffIfReservationComplete(args: {
     })
     return
   }
+
+  // Only gated here, AFTER the missing-fields nudge above — a
+  // still-asking bot reply about a genuinely missing field (e.g. "¿me
+  // falta el número de personas?") is exactly the nudge case above and
+  // must still fire; it's only the actual hand-off below (telling the
+  // guest their COMPLETE request is with the team) that must never
+  // happen on the same turn the bot is still asking something.
+  if (stillAsking) return
 
   // Marks this row as guest-confirmed (as opposed to a staff `status`
   // change, which only happens later via the inbox approve/deny

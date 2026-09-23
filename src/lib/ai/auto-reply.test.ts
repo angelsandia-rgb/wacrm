@@ -3416,6 +3416,42 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 
+  // Real incident, 2026-09-23 (7-case live QA run, DEMO account): the
+  // model emitted CONFIRM_RESERVATION_SENTINEL in the SAME reply where
+  // its own text still asked "¿Desea que deje esta solicitud
+  // lista...?" — the marker alone (2026-09-18's fix for the same
+  // failure) isn't enough on its own when the model contradicts itself
+  // this way. A second, deterministic guard: never hand off on a turn
+  // where the bot's own reply still ends in "?", even if `confirmed`
+  // is set.
+  it('does not hand off (or mark guest_confirmed_at) when confirmed is set but the bot\'s own reply this turn still ends in "?"', async () => {
+    h.state.reservationRow = {
+      id: 'rr-1',
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: '¿Desea que deje esta solicitud lista para que un compañero confirme disponibilidad y el total final?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      // The model got this wrong (see incident above) — confirmed:true
+      // alongside a reply that is still a question.
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '4' }, confirmed: true }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.state.reservationRequestUpdates).not.toContainEqual(
+      expect.objectContaining({ guest_confirmed_at: expect.anything() }),
+    )
+  })
+
   // Real incident, 2026-09-23 (7-case live QA run, DEMO account): a
   // guest confirming a reservation never changed `status` (only a
   // human approve/deny in the inbox does), so a later "reiniciar
