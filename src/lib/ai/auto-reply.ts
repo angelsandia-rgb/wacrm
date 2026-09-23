@@ -3522,10 +3522,13 @@ async function sendHotelBookingNudge(args: {
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, productId, sinceISO } = args
 
+  // Account-scoped even though `productId` comes from an already-scoped
+  // list: this runs on the service-role client.
   const { data: product } = await db
     .from('products')
     .select('category_id')
     .eq('id', productId)
+    .eq('account_id', accountId)
     .maybeSingle()
   const categoryId = (product as { category_id: string | null } | null)?.category_id ?? null
   if (!categoryId) return
@@ -3533,6 +3536,7 @@ async function sendHotelBookingNudge(args: {
     .from('product_categories')
     .select('name')
     .eq('id', categoryId)
+    .eq('account_id', accountId)
     .maybeSingle()
   const slug = categorySlugFromName((category as { name: string | null } | null)?.name ?? null)
   if (!slug) return
