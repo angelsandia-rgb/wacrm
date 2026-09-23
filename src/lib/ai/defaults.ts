@@ -409,6 +409,16 @@ export function buildSystemPrompt(args: {
    *  ("el viernes", "el 11", "mañana") itself instead of pestering the
    *  customer for the month/year. */
   currentDate?: string
+  /** Precomputed "name of this weekday -> its next real calendar date"
+   *  table for the 7 days starting today (see `describeUpcomingWeekdaysInZone`
+   *  in `src/lib/timezone.ts`), e.g. "martes (hoy)=2026-09-22,
+   *  miércoles=2026-09-23, …, lunes=2026-09-28". Real incident,
+   *  2026-09-22: asked to resolve "el jueves" itself from a spelled-out
+   *  "today is Tuesday", the model picked the wrong date (off by one),
+   *  which silently triggered a weekend rate instead of the correct
+   *  weekday one. This table turns that into a lookup instead of
+   *  arithmetic the model has to get right on its own. */
+  upcomingWeekdays?: string
   /** A one-shot instruction handed to the bot by a Flow "handoff → AI"
    *  node (`conversations.ai_flow_directive`, migration 118) — auto-reply
    *  mode only. The customer picked a menu option and the flow routed
@@ -457,7 +467,7 @@ export function buildSystemPrompt(args: {
    *  on every later turn. */
   hotelIsFirstReply?: boolean
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -472,6 +482,12 @@ export function buildSystemPrompt(args: {
   if (currentDate) {
     parts.push(
       `Today, in the business's own timezone, is ${currentDate}. Use this to resolve any date the customer gives loosely — "el viernes", "el 11", "este fin de semana", "mañana", "la próxima semana", "el 8 de septiembre" — into a real calendar date yourself, picking the NEAREST UPCOMING occurrence (a weekday that already passed this week means next week's). When a marker needs a date, write it as YYYY-MM-DD. Do NOT ask the customer for the month or the year just to be safe — only ask to clarify a date if it is genuinely ambiguous (e.g. they named a day that is more than about 10 months away, or gave contradictory dates). Never say the reservation/appointment is confirmed for a date — a person still validates availability.`,
+    )
+  }
+
+  if (upcomingWeekdays) {
+    parts.push(
+      `Real incident, 2026-09-22: asked to work out "el jueves" from today's date by itself, the model miscounted by one day, silently turning a weekday stay into a weekend one at a higher, wrong rate. To stop that: here is the exact date for each day-of-week name, already computed for you — do NOT recompute these yourself, just copy the one you need: ${upcomingWeekdays}. When the customer names a weekday with no other qualifier ("el jueves", "para el viernes", "el sábado que viene esta semana"), use the date shown here for that name, verbatim — never derive it by counting from today yourself. Two things this table does NOT cover, where you still reason it out: (1) if the customer explicitly says "la próxima semana" / "next week" for a day, add exactly 7 days to the date shown here for that name; (2) if they give an actual calendar date ("el 24", "24/09", "24 de septiembre") that doesn't match, that explicit date always wins over any weekday name they also mentioned.`,
     )
   }
 

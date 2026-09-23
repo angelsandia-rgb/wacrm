@@ -5,6 +5,7 @@ import {
   timeInZone,
   dateKeyInZone,
   describeNowInZone,
+  describeUpcomingWeekdaysInZone,
 } from './timezone'
 
 describe('formatWithOffset', () => {
@@ -102,5 +103,30 @@ describe('describeNowInZone', () => {
 
   it('falls back to a zone-less description when no timezone is given', () => {
     expect(describeNowInZone(null, new Date('2026-09-11T02:30:00Z'))).toMatch(/de 2026/)
+  })
+})
+
+describe('describeUpcomingWeekdaysInZone', () => {
+  // Real incident, 2026-09-22 (a Tuesday in Guatemala): asked to resolve
+  // "el jueves" itself, the model miscounted by one day. This table
+  // hands it the lookup instead.
+  it('lists each of the next 7 calendar days, today first, marked "(hoy)"', () => {
+    // 15:00 UTC = 09:00 in Guatemala (UTC-6), still the 22nd.
+    const out = describeUpcomingWeekdaysInZone('America/Guatemala', new Date('2026-09-22T15:00:00Z'))
+    expect(out).toBe(
+      'martes (hoy)=2026-09-22, miércoles=2026-09-23, jueves=2026-09-24, viernes=2026-09-25, sábado=2026-09-26, domingo=2026-09-27, lunes=2026-09-28',
+    )
+  })
+
+  it('rolls the local calendar day forward across a UTC offset, same as dateKeyInZone', () => {
+    // 23:30 UTC on the 29th is already the 30th in Madrid (UTC+2).
+    const out = describeUpcomingWeekdaysInZone('Europe/Madrid', new Date('2026-08-29T23:30:00Z'))
+    expect(out.split(', ')[0]).toBe('domingo (hoy)=2026-08-30')
+  })
+
+  it('falls back to a valid table when no timezone is given', () => {
+    const out = describeUpcomingWeekdaysInZone(null, new Date('2026-09-22T15:00:00Z'))
+    expect(out.split(', ')).toHaveLength(7)
+    expect(out).toMatch(/^\S+ \(hoy\)=\d{4}-\d{2}-\d{2}/)
   })
 })

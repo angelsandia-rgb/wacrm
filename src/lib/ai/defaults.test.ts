@@ -43,6 +43,24 @@ describe('buildSystemPrompt — current-date grounding', () => {
   })
 })
 
+describe('buildSystemPrompt — precomputed weekday table', () => {
+  // Real incident, 2026-09-22: asked to resolve "el jueves" itself from
+  // a spelled-out "today is Tuesday", the model miscounted by one day
+  // and silently applied a weekend rate. `upcomingWeekdays` hands the
+  // model a lookup table instead of arithmetic it has to get right.
+  it('embeds the table and tells the model to copy it instead of recomputing', () => {
+    const table = 'martes (hoy)=2026-09-22, miércoles=2026-09-23, jueves=2026-09-24'
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', upcomingWeekdays: table })
+    expect(p).toContain(table)
+    expect(p.toLowerCase()).toContain('do not recompute these yourself')
+  })
+
+  it('says nothing when upcomingWeekdays is omitted', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(p.toLowerCase()).not.toContain('do not recompute these yourself')
+  })
+})
+
 describe('buildSystemPrompt — set-contact-name marker gate', () => {
   it('teaches SET_CONTACT_NAME in auto_reply mode', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
