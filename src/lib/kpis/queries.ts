@@ -18,23 +18,28 @@ import type {
   WonDealRow,
 } from './types'
 import type { BucketGranularity } from '@/lib/dashboard/date-utils'
+import { fetchAllRows, fetchAllRowsIn } from '@/lib/supabase/fetch-all'
 
 type DB = SupabaseClient
 
 // Same "client-side aggregation, RLS scopes it automatically" contract
 // as src/lib/dashboard/queries.ts — no account_id filters needed here.
+// Every row-set read goes through `fetchAllRows` so an aggregate is never
+// computed from a set PostgREST silently capped at `max_rows`.
 
 /** Every contact created within `window` — the shared row set behind
  *  "leads generados", "leads calificados" and their time series (see
  *  src/lib/kpis/compute.ts). One query, several derived metrics. */
 export async function loadLeadsInWindow(db: DB, window: DateWindow): Promise<LeadRow[]> {
-  const { data, error } = await db
-    .from('contacts')
-    .select('id, created_at, lead_temperature')
-    .gte('created_at', window.start.toISOString())
-    .lt('created_at', endExclusive(window.end))
-  if (error) throw error
-  return (data ?? []) as LeadRow[]
+  return fetchAllRows<LeadRow>(
+    () =>
+      db
+        .from('contacts')
+        .select('id, created_at, lead_temperature')
+        .gte('created_at', window.start.toISOString())
+        .lt('created_at', endExclusive(window.end)),
+    { label: 'kpis leads' },
+  )
 }
 
 /** Just the count — used for the previous-period comparison, where we
@@ -55,16 +60,18 @@ export async function countLeadsInWindow(db: DB, window: DateWindow): Promise<nu
  *  legacy row that predates the backfill (shouldn't happen, but the
  *  OR keeps a stray null from silently vanishing from every chart). */
 export async function loadWonDealsInWindow(db: DB, window: DateWindow): Promise<WonDealRow[]> {
-  const { data, error } = await db
-    .from('deals')
-    .select('id, won_at, updated_at, value, currency')
-    .eq('status', 'won')
-    .or(
-      `and(won_at.gte.${window.start.toISOString()},won_at.lt.${endExclusive(window.end)}),` +
-        `and(won_at.is.null,updated_at.gte.${window.start.toISOString()},updated_at.lt.${endExclusive(window.end)})`,
-    )
-  if (error) throw error
-  return (data ?? []) as WonDealRow[]
+  return fetchAllRows<WonDealRow>(
+    () =>
+      db
+        .from('deals')
+        .select('id, won_at, updated_at, value, currency')
+        .eq('status', 'won')
+        .or(
+          `and(won_at.gte.${window.start.toISOString()},won_at.lt.${endExclusive(window.end)}),` +
+            `and(won_at.is.null,updated_at.gte.${window.start.toISOString()},updated_at.lt.${endExclusive(window.end)})`,
+        ),
+    { label: 'kpis won deals' },
+  )
 }
 
 export async function countWonDealsInWindow(db: DB, window: DateWindow): Promise<number> {
@@ -121,7 +128,7 @@ export async function saveSpendForWindow(
   if (error) throw error
 }
 
-/** Every contact who wrote in during `window`, with the fields the
+/** Every contact created during `window`, with the fields the
  *  "Contacts" export sheet needs — name, phone, derived channel, all
  *  their notes, and their most recent deal's stage. Three queries
  *  (contacts, then notes + deals in parallel, keyed by contact id)
@@ -131,33 +138,35 @@ export async function saveSpendForWindow(
  *  click, never for the on-screen KPIs, so the extra round-trips
  *  don't cost anything on page load. */
 export async function loadContactExportRows(db: DB, window: DateWindow): Promise<ContactExportRow[]> {
-  const { data: contacts, error } = await db
-    .from('contacts')
-    .select('id, name, phone, instagram_id, instagram_username, facebook_id, facebook_username, created_at')
-    .gte('created_at', window.start.toISOString())
-    .lt('created_at', endExclusive(window.end))
-    .order('created_at', { ascending: true })
-  if (error) throw error
-  if (!contacts || contacts.length === 0) return []
+  type Row = { id: string; created_at: string } & Record<string, unknown>
+  const byCreatedAt = (a: Row, b: Row) => a.created_at.localeCompare(b.created_at)
+  const contacts = (
+    await fetchAllRows<Row>(
+      () =>
+        db
+          .from('contacts')
+          .select('id, name, phone, instagram_id, instagram_username, facebook_id, facebook_username, created_at')
+          .gte('created_at', window.start.toISOString())
+          .lt('created_at', endExclusive(window.end)),
+      { label: 'kpis contact export' },
+    )
+  ).sort(byCreatedAt)
+  if (contacts.length === 0) return []
 
-  const ids = contacts.map((c) => c.id as string)
-  const [notesRes, dealsRes] = await Promise.all([
-    db
-      .from('contact_notes')
-      .select('contact_id, note_text, created_at')
-      .in('contact_id', ids)
-      .order('created_at', { ascending: true }),
-    db
-      .from('deals')
-      .select('contact_id, created_at, stage:pipeline_stages(name)')
-      .in('contact_id', ids)
-      .order('created_at', { ascending: false }),
+  const ids = contacts.map((c) => c.id)
+  const [notes, deals] = await Promise.all([
+    fetchAllRowsIn<Row>(ids, (chunk) =>
+      db.from('contact_notes').select('id, contact_id, note_text, created_at').in('contact_id', chunk),
+    ),
+    fetchAllRowsIn<Row>(ids, (chunk) =>
+      db.from('deals').select('id, contact_id, created_at, stage:pipeline_stages(name)').in('contact_id', chunk),
+    ),
   ])
-  if (notesRes.error) throw notesRes.error
-  if (dealsRes.error) throw dealsRes.error
+  notes.sort(byCreatedAt)
+  deals.sort((a, b) => byCreatedAt(b, a))
 
   const notesByContact = new Map<string, string[]>()
-  for (const n of notesRes.data ?? []) {
+  for (const n of notes) {
     const row = n as Record<string, unknown>
     const contactId = row.contact_id as string
     const arr = notesByContact.get(contactId) ?? []
@@ -168,7 +177,7 @@ export async function loadContactExportRows(db: DB, window: DateWindow): Promise
   // Deals came back newest-first, so the first hit per contact is
   // their most recent — later ones for the same contact are ignored.
   const stageByContact = new Map<string, string>()
-  for (const d of dealsRes.data ?? []) {
+  for (const d of deals) {
     const row = d as Record<string, unknown>
     const contactId = row.contact_id as string
     if (stageByContact.has(contactId)) continue
@@ -211,43 +220,50 @@ export async function loadTrialMetrics(
   const winStartIso = window.start.toISOString()
   const winEndExcl = endExclusive(window.end)
 
-  const [msgRes, followupRes, handoffRes] = await Promise.all([
+  type MsgRow = { id: string; conversation_id: string; sender_type: string; created_at: string }
+  type FollowupRow = { id: string; conversation_id: string; sent_at: string; error: string | null }
+  type HandoffRow = { id: string; contact_id: string | null; ai_handoff_at: string }
+  const [allMsgs, allFollowups, handoffs] = await Promise.all([
     // One contiguous fetch spanning both windows (previousWindow ends
     // right before window starts) — split in JS by `winStartIso`.
-    db
-      .from('messages')
-      .select('conversation_id, sender_type, created_at')
-      .gte('created_at', previousWindow.start.toISOString())
-      .lt('created_at', winEndExcl)
-      .limit(50000),
-    db
-      .from('ai_followup_log')
-      .select('conversation_id, sent_at, error')
-      .gte('sent_at', previousWindow.start.toISOString())
-      .lt('sent_at', winEndExcl)
-      .limit(20000),
-    db
-      .from('conversations')
-      .select('contact_id, ai_handoff_at')
-      .not('ai_handoff_at', 'is', null)
-      .gte('ai_handoff_at', winStartIso)
-      .lt('ai_handoff_at', winEndExcl)
-      .limit(20000),
+    // Sorted by time: first-response pairing walks each conversation
+    // chronologically, and pages arrive in `id` order.
+    fetchAllRows<MsgRow>(
+      () =>
+        db
+          .from('messages')
+          .select('id, conversation_id, sender_type, created_at')
+          .gte('created_at', previousWindow.start.toISOString())
+          .lt('created_at', winEndExcl),
+      { label: 'kpis trial messages', maxRows: 200_000 },
+    ).then((rows) => rows.sort((a, b) => a.created_at.localeCompare(b.created_at))),
+    fetchAllRows<FollowupRow>(
+      () =>
+        db
+          .from('ai_followup_log')
+          .select('id, conversation_id, sent_at, error')
+          .gte('sent_at', previousWindow.start.toISOString())
+          .lt('sent_at', winEndExcl),
+      { label: 'kpis trial follow-ups' },
+    ),
+    fetchAllRows<HandoffRow>(
+      () =>
+        db
+          .from('conversations')
+          .select('id, contact_id, ai_handoff_at')
+          .not('ai_handoff_at', 'is', null)
+          .gte('ai_handoff_at', winStartIso)
+          .lt('ai_handoff_at', winEndExcl),
+      { label: 'kpis trial handoffs' },
+    ),
   ])
-  if (msgRes.error) throw msgRes.error
-  if (followupRes.error) throw followupRes.error
-  if (handoffRes.error) throw handoffRes.error
 
-  type MsgRow = { conversation_id: string; sender_type: string; created_at: string }
-  const allMsgs = (msgRes.data ?? []) as MsgRow[]
   const curMsgs = allMsgs.filter((m) => m.created_at >= winStartIso)
   const prevMsgs = allMsgs.filter((m) => m.created_at < winStartIso)
 
   const curTimes = conversationFirstTimes(curMsgs)
   const prevTimes = conversationFirstTimes(prevMsgs)
 
-  type FollowupRow = { conversation_id: string; sent_at: string; error: string | null }
-  const allFollowups = (followupRes.data ?? []) as FollowupRow[]
   const curFollowups = allFollowups.filter((f) => f.sent_at >= winStartIso && !f.error)
   const prevFollowups = allFollowups.filter((f) => f.sent_at < winStartIso && !f.error)
 
@@ -255,36 +271,27 @@ export async function loadTrialMetrics(
     .filter((m) => m.sender_type === 'customer')
     .map((m) => ({ conversation_id: m.conversation_id, created_at: m.created_at }))
 
-  const handoffs = (handoffRes.data ?? []) as {
-    contact_id: string | null
-    ai_handoff_at: string
-  }[]
-
   let handoffsAdvanced = 0
   const handoffContactIds = [...new Set(handoffs.map((h) => h.contact_id).filter((x): x is string => !!x))]
   if (handoffContactIds.length > 0) {
-    const { data: deals } = await db
-      .from('deals')
-      .select('contact_id, status, won_at, updated_at')
-      .in('contact_id', handoffContactIds)
-    handoffsAdvanced = handoffsAdvancedCount(
-      handoffs,
-      (deals ?? []) as { contact_id: string; status: string; won_at: string | null; updated_at: string }[],
+    const deals = await fetchAllRowsIn<{
+      id: string
+      contact_id: string
+      status: string
+      won_at: string | null
+      updated_at: string
+    }>(handoffContactIds, (chunk) =>
+      db.from('deals').select('id, contact_id, status, won_at, updated_at').in('contact_id', chunk),
     )
+    handoffsAdvanced = handoffsAdvancedCount(handoffs, deals)
   }
 
-  // Brief completion — chunk the .in() so a big lead set stays under
-  // PostgREST's IN-clause cap (same pattern as fetchCustomValueIndex).
-  const withValues = new Set<string>()
-  const PAGE = 400
-  for (let i = 0; i < leadIds.length; i += PAGE) {
-    const slice = leadIds.slice(i, i + PAGE)
-    const { data } = await db
-      .from('contact_custom_values')
-      .select('contact_id')
-      .in('contact_id', slice)
-    for (const row of (data ?? []) as { contact_id: string }[]) withValues.add(row.contact_id)
-  }
+  // Brief completion — any custom value at all marks the lead's brief as
+  // started. Chunked + paged: a lead set can carry many values each.
+  const customValues = await fetchAllRowsIn<{ id: string; contact_id: string }>(leadIds, (chunk) =>
+    db.from('contact_custom_values').select('id, contact_id').in('contact_id', chunk),
+  )
+  const withValues = new Set(customValues.map((row) => row.contact_id))
 
   return {
     conversationsActive: curTimes.size,

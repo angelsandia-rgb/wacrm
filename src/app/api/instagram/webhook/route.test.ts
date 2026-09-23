@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     upsertCalls: [] as { row: Record<string, unknown>; options: unknown }[],
     rpcCalls: [] as { name: string; args: Record<string, unknown> }[],
     readReceiptUpdates: [] as string[],
+    readReceiptScopes: [] as string[],
     conversationUpdates: [] as Record<string, unknown>[],
     afterCallbacks: [] as (() => Promise<void> | void)[],
   },
@@ -85,10 +86,18 @@ vi.mock('@supabase/supabase-js', () => ({
                     }),
                   }
                 : {
-                    eq: () => ({
-                      eq: () => ({
+                    eq: (_col: string, value: string) => ({
+                      eq: (scopeCol: string, scopeValue: string) => ({
+                        // reply-context parent lookup
                         maybeSingle: () =>
                           Promise.resolve({ data: h.state.replyContextParent, error: null }),
+                        // read-receipt lookup: account-scoped via the conversation join
+                        then: (resolve: (v: unknown) => void) => {
+                          if (scopeCol === 'conversations.account_id') {
+                            h.state.readReceiptScopes.push(scopeValue)
+                          }
+                          resolve({ data: [{ id: `row:${value}` }], error: null })
+                        },
                       }),
                     }),
                   },
@@ -101,8 +110,8 @@ vi.mock('@supabase/supabase-js', () => ({
             update: (row: Record<string, unknown>) => {
               if (row.status === 'read') {
                 return {
-                  eq: (_col: string, mid: string) => {
-                    h.state.readReceiptUpdates.push(mid)
+                  in: (_col: string, ids: string[]) => {
+                    h.state.readReceiptUpdates.push(...ids.map((id) => id.replace(/^row:/, '')))
                     return Promise.resolve({ error: null })
                   },
                 }
@@ -186,6 +195,7 @@ beforeEach(() => {
   h.state.upsertCalls = []
   h.state.rpcCalls = []
   h.state.readReceiptUpdates = []
+  h.state.readReceiptScopes = []
   h.state.conversationUpdates = []
   h.state.afterCallbacks = []
   h.findExistingInstagramContact.mockResolvedValue({ id: 'contact-1', instagram_id: 'igsid-1' })
@@ -352,6 +362,8 @@ describe('Instagram inbound webhook: read receipts', () => {
     })
 
     expect(h.state.readReceiptUpdates).toEqual(['ig-mid.read-me'])
+    // Scoped to the receiving config's account, never a bare message_id match.
+    expect(h.state.readReceiptScopes).toEqual(['acc-1'])
     expect(h.state.upsertCalls).toHaveLength(0)
     expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
   })

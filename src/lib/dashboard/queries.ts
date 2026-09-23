@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CurrencyTotal } from '@/lib/currency'
+import { fetchAllRows, fetchAllRowsIn } from '@/lib/supabase/fetch-all'
 import {
   daysAgoStart,
   DOW_SHORT_MON_FIRST,
@@ -76,7 +77,10 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       .select('id', { count: 'exact', head: true })
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
-    db.from('deals').select('value, currency, status').eq('status', 'open'),
+    fetchAllRows<{ id: string; value: number | null; currency: string | null }>(
+      () => db.from('deals').select('id, value, currency').eq('status', 'open'),
+      { label: 'dashboard open deals' },
+    ),
     db
       .from('messages')
       .select('id', { count: 'exact', head: true })
@@ -90,7 +94,19 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       .lt('created_at', todayStart),
   ])
 
-  const openDealsRows = (openDeals.data ?? []) as { value: number | null; currency: string | null }[]
+  for (const res of [
+    openConvCur,
+    newConvToday,
+    newConvYesterday,
+    newContactsToday,
+    newContactsYesterday,
+    messagesToday,
+    messagesYesterday,
+  ]) {
+    if (res.error) throw res.error
+  }
+
+  const openDealsRows = openDeals
   const openDealsTotals = new Map<string, number>()
   for (const d of openDealsRows) addToCurrencyTotals(openDealsTotals, d.currency, d.value ?? 0)
 
@@ -122,18 +138,18 @@ export async function loadConversationsSeries(
   rangeDays: number,
 ): Promise<ConversationsSeriesPoint[]> {
   const start = daysAgoStart(rangeDays - 1).toISOString()
-  const { data, error } = await db
-    .from('messages')
-    .select('created_at, sender_type')
-    .gte('created_at', start)
-    .order('created_at', { ascending: true })
-  if (error) throw error
+  // Paged: a single select stops at PostgREST's row cap, which blanked the
+  // most recent days of the chart for any account past ~1000 messages.
+  const data = await fetchAllRows<{ id: string; created_at: string; sender_type: string }>(
+    () => db.from('messages').select('id, created_at, sender_type').gte('created_at', start),
+    { label: 'dashboard conversations series', maxRows: 200_000 },
+  )
 
   const keys = lastNDayKeys(rangeDays)
   const buckets = new Map<string, { incoming: number; outgoing: number }>()
   for (const k of keys) buckets.set(k, { incoming: 0, outgoing: 0 })
 
-  for (const row of (data ?? []) as { created_at: string; sender_type: string }[]) {
+  for (const row of data) {
     const key = localDayKey(row.created_at)
     const bucket = buckets.get(key)
     if (!bucket) continue
@@ -153,23 +169,27 @@ export async function loadConversationsSeries(
 // `currency`, never blended across currencies.
 
 export async function loadPipelinesOverview(db: DB): Promise<PipelineSummary[]> {
-  const [pipelinesRes, stagesRes, dealsRes] = await Promise.all([
+  const [pipelinesRes, stagesRes, deals] = await Promise.all([
     db.from('pipelines').select('id, name').order('created_at'),
     db.from('pipeline_stages').select('id, name, color, pipeline_id, position').order('position'),
-    db.from('deals').select('pipeline_id, stage_id, contact_id, value, currency, status').eq('status', 'open'),
-  ])
-
-  const pipelines = (pipelinesRes.data ?? []) as { id: string; name: string }[]
-  const stages =
-    (stagesRes.data ?? []) as { id: string; name: string; color: string; pipeline_id: string }[]
-  const deals =
-    (dealsRes.data ?? []) as {
+    fetchAllRows<{
+      id: string
       pipeline_id: string
       stage_id: string
       contact_id: string | null
       value: number | null
       currency: string | null
-    }[]
+    }>(
+      () => db.from('deals').select('id, pipeline_id, stage_id, contact_id, value, currency').eq('status', 'open'),
+      { label: 'dashboard pipeline deals' },
+    ),
+  ])
+  if (pipelinesRes.error) throw pipelinesRes.error
+  if (stagesRes.error) throw stagesRes.error
+
+  const pipelines = (pipelinesRes.data ?? []) as { id: string; name: string }[]
+  const stages =
+    (stagesRes.data ?? []) as { id: string; name: string; color: string; pipeline_id: string }[]
 
   const dealsByStage = new Map<string, typeof deals>()
   for (const d of deals) {
@@ -230,19 +250,26 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
   // with enough overlap if the user opens the dashboard late on a
   // Monday.
   const fourteenDaysAgo = daysAgoStart(13).toISOString()
-  const { data, error } = await db
-    .from('messages')
-    .select('conversation_id, sender_type, created_at')
-    .gte('created_at', fourteenDaysAgo)
-    .order('conversation_id', { ascending: true })
-    .order('created_at', { ascending: true })
-  if (error) throw error
-
-  const rows = (data ?? []) as {
-    conversation_id: string
-    sender_type: string
-    created_at: string
-  }[]
+  // Paged, then sorted per conversation + time for the pairing walk below
+  // (pages arrive in `id` order).
+  const rows = (
+    await fetchAllRows<{
+      id: string
+      conversation_id: string
+      sender_type: string
+      created_at: string
+    }>(
+      () =>
+        db
+          .from('messages')
+          .select('id, conversation_id, sender_type, created_at')
+          .gte('created_at', fourteenDaysAgo),
+      { label: 'dashboard response time', maxRows: 200_000 },
+    )
+  ).sort(
+    (a, b) =>
+      a.conversation_id.localeCompare(b.conversation_id) || a.created_at.localeCompare(b.created_at),
+  )
 
   // Group per conversation, pair unreplied customer messages with the
   // next outbound message from the agent/bot. A single customer message
@@ -332,32 +359,38 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
 export async function loadHandoffWait(db: DB): Promise<HandoffWaitSummary> {
   const windowStart = daysAgoStart(29).toISOString() // last 30 days
 
-  const { data: handoffs, error: handoffErr } = await db
-    .from('conversations')
-    .select('id, ai_handoff_at')
-    .not('ai_handoff_at', 'is', null)
-    .gte('ai_handoff_at', windowStart)
-  if (handoffErr) throw handoffErr
-
-  const rows = (handoffs ?? []) as { id: string; ai_handoff_at: string }[]
+  const rows = await fetchAllRows<{ id: string; ai_handoff_at: string }>(
+    () =>
+      db
+        .from('conversations')
+        .select('id, ai_handoff_at')
+        .not('ai_handoff_at', 'is', null)
+        .gte('ai_handoff_at', windowStart),
+    { label: 'dashboard handoffs' },
+  )
   if (rows.length === 0) return { avgMinutes: null, samples: 0, pendingCount: 0 }
 
   const handoffAtByConv = new Map(rows.map((r) => [r.id, new Date(r.ai_handoff_at).getTime()]))
 
-  const { data: msgs, error: msgErr } = await db
-    .from('messages')
-    .select('conversation_id, created_at')
-    .in('conversation_id', rows.map((r) => r.id))
-    .eq('sender_type', 'agent')
-    .eq('ai_generated', false)
-    .order('created_at', { ascending: true })
-  if (msgErr) throw msgErr
+  const msgs = (
+    await fetchAllRowsIn<{ id: string; conversation_id: string; created_at: string }>(
+      rows.map((r) => r.id),
+      (chunk) =>
+        db
+          .from('messages')
+          .select('id, conversation_id, created_at')
+          .in('conversation_id', chunk)
+          .eq('sender_type', 'agent')
+          .eq('ai_generated', false),
+      { label: 'dashboard handoff replies' },
+    )
+  ).sort((a, b) => a.created_at.localeCompare(b.created_at))
 
   // First human reply strictly after that conversation's own handoff
-  // time. Rows arrive sorted ascending, so the first match per
-  // conversation is already the earliest one.
+  // time. Sorted ascending, so the first match per conversation is
+  // already the earliest one.
   const firstReplyAt = new Map<string, number>()
-  for (const m of (msgs ?? []) as { conversation_id: string; created_at: string }[]) {
+  for (const m of msgs) {
     if (firstReplyAt.has(m.conversation_id)) continue
     const handoffAt = handoffAtByConv.get(m.conversation_id)
     if (handoffAt === undefined) continue

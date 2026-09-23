@@ -19,7 +19,8 @@ export function verifyZernioWebhookSignature(
   signatureHeader: string | null,
   secret: string,
 ): boolean {
-  if (!signatureHeader) return false
+  // An empty secret would make the HMAC trivially forgeable — fail closed.
+  if (!signatureHeader || !secret) return false
 
   const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex')
 

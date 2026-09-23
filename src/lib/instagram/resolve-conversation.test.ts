@@ -53,6 +53,8 @@ function makeDb(script: Script): SupabaseClient {
     eq: () => builder,
     order: () => builder,
     limit: () => {
+      // resolveWhatsAppConfig's last-resort lookup chains `.maybeSingle()`.
+      if (table === 'whatsapp_config') return builder;
       if (table === 'conversations' && mode === 'select') {
         const row = script.existingConversationByCall
           ? (script.existingConversationByCall[convLookupCalls] ?? null)
