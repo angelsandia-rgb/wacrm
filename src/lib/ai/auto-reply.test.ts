@@ -1253,8 +1253,64 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
   // The conversation sat unanswered for 1h45min+ with nothing but a
   // background alert. This must now behave like the clinic
   // send-after-mutation case: alert critical, attempt a holding message,
-  // and hand off so a human actually sees it.
-  it('alerts critical, sends a holding message, and hands off when the reply send fails', async () => {
+  // and hand off so a human actually sees it — but only once the retry
+  // below (real incident, 2026-09-23) also comes up empty.
+  //
+  // Keep the retry instant so these cases don't each sleep the real
+  // backoff.
+  beforeEach(() => {
+    process.env.AI_SEND_RETRY_DELAY_MS = '0'
+  })
+  afterEach(() => {
+    delete process.env.AI_SEND_RETRY_DELAY_MS
+    delete process.env.AI_SEND_MAX_RETRIES
+  })
+
+  it('retries a transient channel-send timeout once, then delivers the SAME already-generated reply', async () => {
+    // Real incident, 2026-09-23 (Villa San Ricardo): the model had
+    // already read the guest's question and generated a real answer —
+    // only the Zernio SEND itself timed out. The old behavior handed
+    // off immediately, leaving the guest unanswered until a human
+    // noticed or the guest wrote in again on their own. A retry should
+    // recover this without ever reaching the hand-off/fallback path.
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto la Junior Suite Familiar para 4 personas: Q1,160.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+    h.engineSendText.mockRejectedValueOnce(new Error('Zernio API request timed out.'))
+
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.engineSendText).toHaveBeenCalledTimes(2)
+    expect(h.engineSendText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: 'Le comparto la Junior Suite Familiar para 4 personas: Q1,160.' }),
+    )
+    expect(h.dispatchSystemAlert).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull() // never handed off
+  })
+
+  it('does not retry a non-transient send error (e.g. WhatsApp not configured) — same one attempt as before', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+    h.engineSendText.mockRejectedValueOnce(new Error('WhatsApp not configured for this account'))
+
+    await dispatchInboundToAiReply(ARGS)
+
+    // One failed attempt at the real reply, then one holding-message
+    // attempt — never a second try at the same doomed config error.
+    expect(h.engineSendText).toHaveBeenCalledTimes(2)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('alerts critical, sends a holding message, and hands off once the retry also fails', async () => {
     h.generateReply.mockResolvedValue({
       text: 'La Junior Suite Familiar no trae desayuno incluido en esa tarifa.',
       handoff: false,
@@ -1262,7 +1318,7 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
       moveToStageName: null,
       sendCatalog: false,
     })
-    h.engineSendText.mockRejectedValueOnce(new Error('Zernio API request timed out.'))
+    h.engineSendText.mockRejectedValue(new Error('Zernio API request timed out.'))
 
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
 
@@ -1273,7 +1329,8 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
         dedupKey: 'ai_send_failed:acct-1',
       }),
     )
-    // The holding message goes out on the SAME channel via the
+    // The real reply was attempted twice (initial + 1 retry) before the
+    // holding message goes out on the SAME channel via the
     // self-contained continuity fallback (never the raw failed reply).
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
