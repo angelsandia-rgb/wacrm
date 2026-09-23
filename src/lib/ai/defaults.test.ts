@@ -189,6 +189,23 @@ describe('buildSystemPrompt — record_reservation: exact catalog name + no self
     expect(p.toLowerCase()).toContain('never include this key yourself')
     expect(p.toLowerCase()).toContain('only for spa, actividades, or eventos')
   })
+
+  // Real incident, 2026-09-22: the deterministic COST ESTIMATE correctly
+  // said GTQ 870 for 3 guests (Junior Suite Familiar's own "3 personas"
+  // bracket rate), the guest disputed it with their own math ("600 for
+  // the adults + 175 for the child" = 775), and the model apologized and
+  // handed them the guest's lower, wrong total instead of the real one.
+  // Same incident, different symptom: the model separately quoted a
+  // plain reference rate (Suite Premium "Q700 por noche") that was the
+  // 2-person rate for a guest who had already said they were travelling
+  // alone (the real 1-person rate was Q350 — both tiers were right there
+  // in the business's own rate table).
+  it('forbids recomputing a total from the guest\'s own breakdown and requires matching the rate tier to the real headcount', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain("never let the guest's own price arithmetic override a real number")
+    expect(p.toLowerCase()).toContain('do not recompute it from a breakdown the guest hands you')
+    expect(p.toLowerCase()).toContain('check the headcount before picking the number')
+  })
 })
 
 describe('buildSystemPrompt — flow handoff directive', () => {
