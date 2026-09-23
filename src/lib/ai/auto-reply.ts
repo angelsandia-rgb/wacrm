@@ -2261,14 +2261,33 @@ async function notifyHandoffUnassigned(
 
 /**
  * Loads the prompt-time stage options for `buildSystemPrompt`. Resolves
- * "which deal is this conversation about" the same way every autonomous
- * action here does: the contact's most recently updated open deal
- * (`deals` has no populated `conversation_id` today).
+ * "which deal is this conversation about" — for a hotel account with
+ * per-category pipelines (`resolveHotelCategoryPipeline`), that means
+ * the contact's open deal SCOPED TO THIS CONVERSATION'S OWN CATEGORY
+ * pipeline, never a deal sitting in some other category's pipeline.
  *
- * When one exists, returns its current stage + the pipeline's other
- * non-won stage names (`hasDeal: true`) — same as before this contact
- * could also have no deal at all. When there's no open deal, instead
- * offers the account's default pipeline's non-won stage names
+ * Real incident, 2026-09-23 (7-case live QA run, DEMO account): this
+ * used to look up "the contact's most recently updated open deal"
+ * account-wide, with no pipeline filter — Angel's own "un pipeline por
+ * categoría" pipelines (2026-09-17) notwithstanding. A contact who
+ * asked about Habitaciones, then Spa, then Paquetes in the same
+ * conversation kept getting the SAME single Habitaciones deal handed
+ * back for every category — the model then yanked that one deal's
+ * stage back to "Nueva solicitud" trying to represent each new
+ * category's fresh interest, instead of Paquetes/Spa ever getting
+ * their own card. Scoping the lookup to the resolved category pipeline
+ * means a contact can hold one open deal PER category, each moving
+ * independently in its own pipeline, and switching categories mid-chat
+ * no longer disturbs a different category's progress.
+ *
+ * Only falls back to the OLD account-wide "any open deal" lookup (and
+ * the default pipeline for a brand-new one) when no category resolves
+ * at all — a non-hotel account, or a hotel conversation with nothing
+ * recorded yet this turn.
+ *
+ * When a deal exists, returns its current stage + the pipeline's other
+ * non-won stage names (`hasDeal: true`). When there's no open deal,
+ * instead offers the resolved pipeline's non-won stage names
  * (`hasDeal: false`, `currentStageName: null`) so the model can still
  * signal real buying interest and `autoMoveDealStage` creates a deal
  * directly at that stage. Returns null only when there's truly nothing
@@ -2282,6 +2301,35 @@ async function loadDealStageOptions(args: {
 }): Promise<{ hasDeal: boolean; currentStageName: string | null; otherStageNames: string[] } | null> {
   const { db, accountId, contactId, conversationId } = args
 
+  const categoryPipeline = await resolveHotelCategoryPipeline(db, accountId, conversationId)
+
+  if (categoryPipeline) {
+    const { data: deal } = await db
+      .from('deals')
+      .select('id, stage_id')
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+      .eq('pipeline_id', categoryPipeline.id)
+      .eq('status', 'open')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const preSale = await loadPreSaleStages(db, categoryPipeline.id)
+    if (deal) {
+      const current = preSale.find((s) => s.id === deal.stage_id)
+      if (!current) return null
+      const otherStageNames = preSale.filter((s) => s.id !== deal.stage_id).map((s) => s.name)
+      if (otherStageNames.length === 0) return null
+      return { hasDeal: true, currentStageName: current.name, otherStageNames }
+    }
+    const otherStageNames = preSale.map((s) => s.name)
+    if (otherStageNames.length === 0) return null
+    return { hasDeal: false, currentStageName: null, otherStageNames }
+  }
+
+  // Fallback (old behavior): no category resolved — any open deal for
+  // the contact, regardless of pipeline.
   const { data: deal } = await db
     .from('deals')
     .select('id, pipeline_id, stage_id')
@@ -2303,9 +2351,7 @@ async function loadDealStageOptions(args: {
     return { hasDeal: true, currentStageName: current.name, otherStageNames }
   }
 
-  const pipeline =
-    (await resolveHotelCategoryPipeline(db, accountId, conversationId)) ??
-    (await loadDefaultPipeline(db, accountId))
+  const pipeline = await loadDefaultPipeline(db, accountId)
   if (!pipeline) return null
 
   const preSale = await loadPreSaleStages(db, pipeline.id)
@@ -2462,21 +2508,22 @@ async function flagDealClosing(args: {
 
 /**
  * Resolves "the deal this conversation is about" fresh (same rule as
- * `loadDealStageOptions`). If one exists, moves it to the stage the
- * model named — matched case-insensitively against that deal's own
- * pipeline's non-won stages only, so the model can never route a deal
- * to a stage it wasn't explicitly offered (or to "won" through this
- * path — that's `flagDealClosing`'s job).
+ * `loadDealStageOptions`, including the per-category pipeline scoping
+ * — see that function's doc comment for the 2026-09-23 incident this
+ * fixes). If one exists in the resolved pipeline, moves it to the
+ * stage the model named — matched case-insensitively against that
+ * deal's own pipeline's non-won stages only, so the model can never
+ * route a deal to a stage it wasn't explicitly offered (or to "won"
+ * through this path — that's `flagDealClosing`'s job).
  *
- * If the contact has no open deal, this CREATES one directly at the
- * named stage instead (Angel's explicit product decision, 2026-08-16 —
- * previously the bot could only ever advance a deal a human had already
- * created, which left most real conversations invisible to the
- * pipeline). Same default-pipeline resolution as `loadDealStageOptions`,
- * titled after the contact — matching the human "+ New" quick-create
- * convention in the inbox sidebar — with `value: 0` (the bot never
- * invents a price; a linked quote, if any, sets the real value
- * separately via `createQuote`).
+ * If the contact has no open deal in that pipeline, this CREATES one
+ * directly at the named stage instead (Angel's explicit product
+ * decision, 2026-08-16 — previously the bot could only ever advance a
+ * deal a human had already created, which left most real conversations
+ * invisible to the pipeline). Titled after the contact — matching the
+ * human "+ New" quick-create convention in the inbox sidebar — with
+ * `value: 0` (the bot never invents a price; a linked quote, if any,
+ * sets the real value separately via `createQuote`).
  *
  * No-ops quietly whenever the target stage or an actual change can't be
  * resolved; a failure here never affects the already-sent
@@ -2492,15 +2539,28 @@ async function autoMoveDealStage(args: {
 }): Promise<void> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, stageName } = args
 
-  const { data: deal, error: dealErr } = await db
-    .from('deals')
-    .select('id, pipeline_id, stage_id')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .eq('status', 'open')
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  const categoryPipeline = await resolveHotelCategoryPipeline(db, accountId, conversationId)
+
+  const { data: deal, error: dealErr } = categoryPipeline
+    ? await db
+        .from('deals')
+        .select('id, pipeline_id, stage_id')
+        .eq('account_id', accountId)
+        .eq('contact_id', contactId)
+        .eq('pipeline_id', categoryPipeline.id)
+        .eq('status', 'open')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : await db
+        .from('deals')
+        .select('id, pipeline_id, stage_id')
+        .eq('account_id', accountId)
+        .eq('contact_id', contactId)
+        .eq('status', 'open')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
   if (dealErr) return
 
   if (deal) {
@@ -2539,9 +2599,7 @@ async function autoMoveDealStage(args: {
     return
   }
 
-  const pipeline =
-    (await resolveHotelCategoryPipeline(db, accountId, conversationId)) ??
-    (await loadDefaultPipeline(db, accountId))
+  const pipeline = categoryPipeline ?? (await loadDefaultPipeline(db, accountId))
   if (!pipeline) return
 
   const stages = await loadPreSaleStages(db, pipeline.id)
