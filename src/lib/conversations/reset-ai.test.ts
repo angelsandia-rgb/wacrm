@@ -14,7 +14,7 @@ function fakeDb(opts: {
 } = {}) {
   const calls: {
     flowUpdate?: Record<string, unknown>
-    reservationDeleteFilters?: { column: string; value: unknown; op: 'eq' | 'neq' }[]
+    reservationDeleteFilters?: { column: string; value: unknown; op: 'eq' | 'neq' | 'is' }[]
     convUpdate?: Record<string, unknown>
     noteInsert?: Record<string, unknown>
   } = {}
@@ -40,7 +40,7 @@ function fakeDb(opts: {
         }
       }
       if (table === 'reservation_requests') {
-        const filters: { column: string; value: unknown; op: 'eq' | 'neq' }[] = []
+        const filters: { column: string; value: unknown; op: 'eq' | 'neq' | 'is' }[] = []
         calls.reservationDeleteFilters = filters
         const builder = {
           eq: (column: string, value: unknown) => {
@@ -49,6 +49,10 @@ function fakeDb(opts: {
           },
           neq: (column: string, value: unknown) => {
             filters.push({ column, value, op: 'neq' })
+            return builder
+          },
+          is: (column: string, value: unknown) => {
+            filters.push({ column, value, op: 'is' })
             return builder
           },
           select: () =>
@@ -100,7 +104,7 @@ describe('resetConversationAiState', () => {
     expect(calls.flowUpdate?.ended_at).toBeTypeOf('string')
   })
 
-  it('deletes non-approved reservation drafts for the conversation, never approved ones', async () => {
+  it('deletes non-approved, never-guest-confirmed reservation drafts for the conversation — never an approved or a guest-confirmed one', async () => {
     const { db, calls } = fakeDb()
     await resetConversationAiState(db, {
       conversationId: 'conv-1',
@@ -110,6 +114,7 @@ describe('resetConversationAiState', () => {
     expect(calls.reservationDeleteFilters).toEqual([
       { column: 'conversation_id', value: 'conv-1', op: 'eq' },
       { column: 'status', value: 'approved', op: 'neq' },
+      { column: 'guest_confirmed_at', value: null, op: 'is' },
     ])
   })
 

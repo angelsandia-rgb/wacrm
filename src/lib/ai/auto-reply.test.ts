@@ -3387,6 +3387,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
 
   it('sends an explicit closing message before pausing the bot, once the guest explicitly confirms', async () => {
     h.state.reservationRow = {
+      id: 'rr-1',
       category: 'habitaciones',
       guests: 4,
       check_in: '2026-09-18',
@@ -3413,6 +3414,37 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       }),
     )
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  // Real incident, 2026-09-23 (7-case live QA run, DEMO account): a
+  // guest confirming a reservation never changed `status` (only a
+  // human approve/deny in the inbox does), so a later "reiniciar
+  // memoria de la IA" on the same thread deleted the row as if it were
+  // an abandoned draft — 6 of 7 confirmed test bookings were silently
+  // lost this way. `guest_confirmed_at` is the fix's other half (see
+  // reset-ai.ts): this marks the row the instant the guest confirms.
+  it('marks the reservation_requests row guest_confirmed_at the moment the guest explicitly confirms', async () => {
+    h.state.reservationRow = {
+      id: 'rr-1',
+      category: 'habitaciones',
+      guests: 4,
+      check_in: '2026-09-18',
+      check_out: '2026-09-19',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: '¡Perfecto! Quedó registrada su solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '4' }, confirmed: true }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.reservationRequestUpdates).toContainEqual(
+      expect.objectContaining({ guest_confirmed_at: expect.any(String) }),
+    )
   })
 
   it('does not hand off (and sends no closing message) when every field is known but the guest has not explicitly confirmed', async () => {

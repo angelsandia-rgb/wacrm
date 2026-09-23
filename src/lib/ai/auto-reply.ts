@@ -3343,7 +3343,7 @@ async function handOffIfReservationComplete(args: {
 
   const { data: row } = await db
     .from('reservation_requests')
-    .select('category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
+    .select('id, category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', category)
@@ -3358,6 +3358,24 @@ async function handOffIfReservationComplete(args: {
       sinceISO,
     })
     return
+  }
+
+  // Marks this row as guest-confirmed (as opposed to a staff `status`
+  // change, which only happens later via the inbox approve/deny
+  // action) so a later "reiniciar memoria de la IA" on this same
+  // conversation (resetConversationAiState) knows this is a real,
+  // guest-approved request rather than an abandoned draft, and spares
+  // it — real incident, 2026-09-23: without this, 6 of 7 confirmed
+  // test reservations in the same thread were silently deleted by the
+  // reset done before the next test case, despite the reset's own
+  // dialog promising reservations are never affected. Best-effort:
+  // never let this block the handoff itself.
+  const { error: confirmMarkError } = await db
+    .from('reservation_requests')
+    .update({ guest_confirmed_at: new Date().toISOString() })
+    .eq('id', (row as { id: string }).id)
+  if (confirmMarkError) {
+    console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
   }
 
   try {
