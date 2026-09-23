@@ -177,26 +177,25 @@ Pasos:
 
 ### `ENCRYPTION_KEY` (AES-256-GCM, 64 hex) — CUIDADO
 
-Cifra los tokens de WhatsApp/Meta, claves de IA y OAuth de Google
-Calendar guardados en la base. **Cambiarla a secas deja todos esos
-secretos ilegibles** y rompe envío de WhatsApp, IA y Calendar a la vez.
+Cifra las claves de IA, las claves y secretos de Zernio, los tokens de
+Google Calendar y Sheets y los secretos de webhooks salientes, y firma los
+enlaces de catálogo. **Cambiarla a secas deja todo eso ilegible** y rompe
+IA, envíos, Calendar y Sheets a la vez: el código actual usa una sola
+clave y todavía **no** soporta una clave anterior.
 
-Rotación correcta:
-
-1. Mantener la clave vieja disponible como `ENCRYPTION_KEY_OLD`.
-2. Escribir una migración/script que, para cada fila con secreto cifrado
-   (`whatsapp_config`, `ai_configs`, `google_calendar_config`,
-   `instagram_config`, `facebook_config`, `api_keys` si aplica):
-   descifra con la vieja y vuelve a cifrar con la nueva.
-3. Desplegar con la clave nueva ya como `ENCRYPTION_KEY`.
-4. Verificar envío de WhatsApp + una respuesta de IA + refresco de token
-   de Calendar antes de retirar `ENCRYPTION_KEY_OLD`.
+Plan completo, inventario y pasos: [`ROTACION_ENCRYPTION_KEY.md`](./ROTACION_ENCRYPTION_KEY.md).
+Requiere primero un PR que agregue `ENCRYPTION_KEY_PREVIOUS` y el script de
+recifrado.
 
 ### `SUPABASE_SERVICE_ROLE_KEY`
 
-Supabase → Settings → API → **Reset service_role**. Actualizar en
-EasyPanel y redeploy. Rompe temporalmente todo el acceso admin/RLS-bypass
-hasta el redeploy — hacerlo en ventana de bajo tráfico.
+Con las claves JWT antiguas, la service role no se rota sola: se rota el
+**JWT secret** (Supabase → Settings → API), que cambia también la anon key.
+Actualizar ambas en EasyPanel (la anon key es build-arg
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, así que exige rebuild) y redesplegar.
+Rompe el acceso hasta el redeploy; hacerlo en ventana de bajo tráfico. La
+alternativa es migrar a las claves API nuevas (publishable y secret), que
+se rotan por separado.
 
 ### `META_APP_SECRET` / tokens de WhatsApp
 
