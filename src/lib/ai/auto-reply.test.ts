@@ -34,6 +34,12 @@ const h = vi.hoisted(() => ({
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
     openDeal: null as { id: string; pipeline_id: string; stage_id: string } | null,
+    /** Per-pipeline open-deal override, keyed by pipeline_id — set only
+     *  by tests exercising the 2026-09-23 per-category-pipeline scoping
+     *  fix; unset (default) means every `deals` read ignores any
+     *  `pipeline_id` filter and just returns `openDeal`, same as the
+     *  code's own non-hotel/no-category fallback path. */
+    openDealsByPipeline: null as Record<string, { id: string; pipeline_id: string; stage_id: string } | null> | null,
     stages: [] as { id: string; name: string; is_won?: boolean }[],
     aiActionLogInserts: [] as Record<string, unknown>[],
     /** Prior successful `schedule_appointment` rows the idempotency guard
@@ -242,13 +248,29 @@ vi.mock('./admin-client', () => ({
     from: (table: string) => {
       if (table === 'deals') {
         // .select().eq().eq().eq().order().limit().maybeSingle() → most
-        // recently updated open deal for the contact.
-        const readChain = {
+        // recently updated open deal for the contact — scoped to a
+        // specific pipeline_id when `loadDealStageOptions`/
+        // `autoMoveDealStage` resolved this conversation's category
+        // pipeline (`h.state.openDealsByPipeline`, keyed by pipeline_id,
+        // takes over from the unscoped `h.state.openDeal` once set —
+        // see the 2026-09-23 per-category-pipeline fix's own tests).
+        let pipelineIdFilter: string | undefined
+        const readChain: Record<string, unknown> = {
           select: () => readChain,
-          eq: () => readChain,
+          eq: (col: string, value: string) => {
+            if (col === 'pipeline_id') pipelineIdFilter = value
+            return readChain
+          },
           order: () => readChain,
           limit: () => readChain,
-          maybeSingle: () => Promise.resolve({ data: h.state.openDeal, error: null }),
+          maybeSingle: () =>
+            Promise.resolve({
+              data:
+                pipelineIdFilter && h.state.openDealsByPipeline
+                  ? (h.state.openDealsByPipeline[pipelineIdFilter] ?? null)
+                  : h.state.openDeal,
+              error: null,
+            }),
         }
         return {
           ...readChain,
@@ -576,6 +598,7 @@ beforeEach(() => {
   h.state.updatePayload = null
   h.state.rpcCalls = []
   h.state.openDeal = null
+  h.state.openDealsByPipeline = null
   h.state.stages = []
   h.state.aiActionLogInserts = []
   h.state.pipeline = null
@@ -1422,6 +1445,31 @@ describe('dispatchInboundToAiReply — deal-stage prompt context', () => {
     expect(systemPrompt).toContain('"Convencimiento"')
     expect(systemPrompt).not.toContain('Seguimiento entrega')
   })
+
+  // Real incident, 2026-09-23: the contact's only open deal sits in the
+  // Habitaciones pipeline, but THIS conversation is currently about
+  // Spa — the prompt must offer Spa's own "no deal yet" stage options,
+  // never leak the Habitaciones deal's current stage into a completely
+  // unrelated category's context.
+  it('offers the CURRENT category\'s own "no deal yet" stages, not a different category\'s open deal', async () => {
+    h.state.pipelines = [
+      { id: 'pipe-habitaciones', name: 'Habitaciones' },
+      { id: 'pipe-spa', name: 'Spa' },
+    ]
+    h.state.openDealsByPipeline = {
+      'pipe-habitaciones': { id: 'deal-hab-1', pipeline_id: 'pipe-habitaciones', stage_id: 'stage-a' },
+    }
+    h.state.reservationRow = { category: 'spa' }
+    h.state.stages = [
+      { id: 'stage-a', name: 'Cotización' },
+      { id: 'stage-b', name: 'Negociación' },
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    const systemPrompt = h.generateReply.mock.calls[0][0].systemPrompt as string
+    expect(systemPrompt).toContain('does not have a deal yet')
+    expect(systemPrompt).toContain('"Cotización"')
+    expect(systemPrompt).toContain('"Negociación"')
+  })
 })
 
 describe('dispatchInboundToAiReply — purchase confirmation hands off to close', () => {
@@ -1644,6 +1692,34 @@ describe('dispatchInboundToAiReply — autonomous move_deal', () => {
       expect.objectContaining({ action: 'flag_deal_closing' }),
     ])
   })
+
+  // Real incident, 2026-09-23 (7-case live QA run, DEMO account): moves
+  // a deal that already exists IN THIS CONVERSATION'S OWN CATEGORY
+  // pipeline — the fix's positive case, mirrored by the "different
+  // pipeline" negative case in the create_deal block below.
+  it('moves the deal already open in the CURRENT category\'s own pipeline, when one exists there', async () => {
+    h.state.pipelines = [
+      { id: 'pipe-default', name: 'Ventas' },
+      { id: 'pipe-spa', name: 'Spa' },
+    ]
+    h.state.reservationRow = { category: 'spa' }
+    h.state.openDealsByPipeline = {
+      'pipe-spa': { id: 'deal-spa-1', pipeline_id: 'pipe-spa', stage_id: 'stage-a' },
+    }
+    h.state.stages = [
+      { id: 'stage-a', name: 'Cotización' },
+      { id: 'stage-b', name: 'Negociación' },
+    ]
+    h.generateReply.mockResolvedValue({
+      text: 'ok',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: 'Negociación',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.moveDeal).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'deal-spa-1', 'stage-b')
+    expect(h.state.dealInserts).toHaveLength(0)
+  })
 })
 
 describe('dispatchInboundToAiReply — autonomous create_deal', () => {
@@ -1726,6 +1802,37 @@ describe('dispatchInboundToAiReply — autonomous create_deal', () => {
       moveToStageName: 'Cotización',
     })
     await dispatchInboundToAiReply(ARGS)
+    expect(h.state.dealInserts[0]).toMatchObject({ pipeline_id: 'pipe-spa' })
+  })
+
+  // Real incident, 2026-09-23 (7-case live QA run, DEMO account): a
+  // contact's open deal in ONE category's pipeline (Habitaciones) used
+  // to get reused — and its stage yanked around — for every OTHER
+  // category the same contact asked about in the same conversation,
+  // because the old lookup was "the contact's most recently updated
+  // open deal", full stop, with no pipeline filter. Angel's own "un
+  // pipeline por categoría" pipelines (2026-09-17) need a SEPARATE deal
+  // per category to actually mean anything.
+  it('creates a NEW deal in the category\'s own pipeline instead of reusing/moving an open deal that belongs to a DIFFERENT pipeline', async () => {
+    h.state.pipelines = [
+      { id: 'pipe-habitaciones', name: 'Habitaciones' },
+      { id: 'pipe-spa', name: 'Spa' },
+    ]
+    // The contact already has an open deal — but in Habitaciones, not Spa.
+    h.state.openDealsByPipeline = {
+      'pipe-habitaciones': { id: 'deal-hab-1', pipeline_id: 'pipe-habitaciones', stage_id: 'stage-a' },
+    }
+    h.state.reservationRow = { category: 'spa' }
+    h.state.stages = [{ id: 'stage-a', name: 'Cotización' }]
+    h.generateReply.mockResolvedValue({
+      text: 'ok',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: 'Cotización',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.moveDeal).not.toHaveBeenCalled()
+    expect(h.state.dealInserts).toHaveLength(1)
     expect(h.state.dealInserts[0]).toMatchObject({ pipeline_id: 'pipe-spa' })
   })
 
