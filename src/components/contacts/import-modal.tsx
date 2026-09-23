@@ -38,6 +38,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { fetchAllRows } from '@/lib/supabase/fetch-all';
 
 const DEFAULT_TAG_COLOR = '#3b82f6';
 const PREVIEW_LIMIT = 5;
@@ -226,17 +227,24 @@ export function ImportModal({
       const { unique, duplicates: inFileDupes } = dedupeByPhone(parsedRows);
       skipped += inFileDupes;
 
-      // 2) Skip numbers already in this account. One read of the
-      //    generated `phone_normalized` column (migration 022) → Set.
-      const { data: existingRows } = await supabase
-        .from('contacts')
-        .select('phone_normalized')
-        .eq('account_id', accountId);
+      // 2) Skip numbers already in this account. A paged read of the
+      //    generated `phone_normalized` column (migration 022) → Set —
+      //    a capped read missed existing numbers past the first 1000
+      //    and their inserts then hit the unique index.
+      const existingRows = await fetchAllRows<{
+        id: string;
+        phone_normalized: string | null;
+      }>(
+        () =>
+          supabase
+            .from('contacts')
+            .select('id, phone_normalized')
+            .eq('account_id', accountId),
+        { label: 'contact import dedupe', maxRows: 500_000 },
+      );
       const existing = new Set(
-        (existingRows ?? [])
-          .map(
-            (r) => (r as { phone_normalized: string | null }).phone_normalized
-          )
+        existingRows
+          .map((r) => r.phone_normalized)
           .filter((p): p is string => !!p)
       );
 

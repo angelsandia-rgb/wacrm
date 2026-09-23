@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { OFFLINE_AFTER_MS } from '@/lib/presence'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const DEFAULT_TIMEOUT_MINUTES = 10
 /** Bounds the initial candidate fetch to conversations idle at least
@@ -131,15 +132,19 @@ async function loadOpenAssignedCounts(
   advisorIds: string[],
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
-  const { data } = await db
-    .from('conversations')
-    .select('assigned_agent_id')
-    .eq('account_id', accountId)
-    .eq('status', 'open')
-    .in('assigned_agent_id', advisorIds)
-  for (const row of data ?? []) {
-    const id = row.assigned_agent_id as string
-    counts.set(id, (counts.get(id) ?? 0) + 1)
+  // Paged: a capped read under-counted busy advisors' load.
+  const rows = await fetchAllRows<{ id: string; assigned_agent_id: string }>(
+    () =>
+      db
+        .from('conversations')
+        .select('id, assigned_agent_id')
+        .eq('account_id', accountId)
+        .eq('status', 'open')
+        .in('assigned_agent_id', advisorIds),
+    { label: 'reassign open load' },
+  )
+  for (const row of rows) {
+    counts.set(row.assigned_agent_id, (counts.get(row.assigned_agent_id) ?? 0) + 1)
   }
   return counts
 }

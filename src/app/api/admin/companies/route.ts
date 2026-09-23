@@ -4,6 +4,7 @@ import { platformAdminClient } from '@/lib/platform/admin-client';
 import { platformInviteRedirectUrl } from '@/lib/http/base-url';
 import { computeCompanyHandoffMetrics } from '@/lib/admin/company-metrics';
 import { mapInviteError } from '@/lib/admin/invite-errors';
+import { fetchAllRows, fetchAllRowsIn } from '@/lib/supabase/fetch-all';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -72,43 +73,50 @@ export async function GET() {
             .select('id', { count: 'exact', head: true })
             .eq('account_id', account.id)
             .gte('created_at', usageSince),
-          admin
-            .from('ai_usage_log')
-            .select('total_tokens')
-            .eq('account_id', account.id)
-            .gte('created_at', usageSince),
-          admin
-            .from('conversations')
-            .select('id, ai_handoff_at')
-            .eq('account_id', account.id)
-            .not('ai_handoff_at', 'is', null)
-            .gte('ai_handoff_at', usageSince),
+          // Paged: a capped select under-reports token usage (billing).
+          fetchAllRows<{ id: string; total_tokens: number | null }>(
+            () =>
+              admin
+                .from('ai_usage_log')
+                .select('id, total_tokens')
+                .eq('account_id', account.id)
+                .gte('created_at', usageSince),
+            { label: 'admin ai usage', maxRows: 500_000 },
+          ),
+          fetchAllRows<{ id: string; ai_handoff_at: string }>(
+            () =>
+              admin
+                .from('conversations')
+                .select('id, ai_handoff_at')
+                .eq('account_id', account.id)
+                .not('ai_handoff_at', 'is', null)
+                .gte('ai_handoff_at', usageSince),
+            { label: 'admin handoffs' },
+          ),
         ]);
-        const usageError =
-          messages.error ??
-          conversations.error ??
-          aiUsage.error ??
-          handoffs.error;
+        const usageError = messages.error ?? conversations.error;
         if (usageError) throw usageError;
-        const handoffRows = (handoffs.data ?? []) as {
-          id: string;
-          ai_handoff_at: string;
-        }[];
+        const handoffRows = handoffs;
         let humanReplies: { conversation_id: string; created_at: string }[] =
           [];
         if (handoffRows.length > 0) {
-          const replies = await admin
-            .from('messages')
-            .select('conversation_id, created_at')
-            .in(
-              'conversation_id',
-              handoffRows.map((row) => row.id)
+          humanReplies = (
+            await fetchAllRowsIn<{
+              id: string;
+              conversation_id: string;
+              created_at: string;
+            }>(
+              handoffRows.map((row) => row.id),
+              (chunk) =>
+                admin
+                  .from('messages')
+                  .select('id, conversation_id, created_at')
+                  .in('conversation_id', chunk)
+                  .eq('sender_type', 'agent')
+                  .eq('ai_generated', false),
+              { label: 'admin human replies' },
             )
-            .eq('sender_type', 'agent')
-            .eq('ai_generated', false)
-            .order('created_at', { ascending: true });
-          if (replies.error) throw replies.error;
-          humanReplies = replies.data ?? [];
+          ).sort((a, b) => a.created_at.localeCompare(b.created_at));
         }
         return {
           id: account.id,
@@ -136,7 +144,7 @@ export async function GET() {
           usage30d: {
             messages: messages.count ?? 0,
             conversations: conversations.count ?? 0,
-            aiTokens: (aiUsage.data ?? []).reduce(
+            aiTokens: aiUsage.reduce(
               (sum, row) => sum + Number(row.total_tokens ?? 0),
               0
             ),

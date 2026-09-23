@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import type { Conversation } from "@/types";
 
 /**
@@ -29,16 +30,28 @@ export function useTotalUnread(): number {
     let cancelled = false;
 
     // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
+    // no explicit user_id filter needed here. Only unread rows matter for
+    // the total (realtime events add the rest), and the read is paged so
+    // an account past the server's 1000-row cap still counts them all.
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select("id, unread_count");
-      if (cancelled || error || !data) return;
+      let data: { id: string; unread_count: number }[];
+      try {
+        data = await fetchAllRows<{ id: string; unread_count: number }>(
+          () =>
+            supabase
+              .from("conversations")
+              .select("id, unread_count")
+              .gt("unread_count", 0),
+          { label: "total unread" },
+        );
+      } catch {
+        return;
+      }
+      if (cancelled) return;
 
       const map = new Map<string, number>();
       let sum = 0;
-      for (const row of data as { id: string; unread_count: number }[]) {
+      for (const row of data) {
         const n = row.unread_count ?? 0;
         map.set(row.id, n);
         if (n > 0) sum += 1;
