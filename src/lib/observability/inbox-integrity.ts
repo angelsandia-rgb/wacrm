@@ -17,6 +17,7 @@
 // ============================================================
 
 import { platformAdminClient } from '@/lib/platform/admin-client';
+import { fetchAllRows, fetchAllRowsIn } from '@/lib/supabase/fetch-all';
 
 export interface InboxIntegrityReport {
   /** IG/FB conversations that have messages but no `zernio_conversation_id`. */
@@ -42,23 +43,28 @@ export async function checkInboxIntegrity(): Promise<InboxIntegrityReport> {
     return EMPTY;
   }
 
-  const { data: convs, error } = await db
-    .from('conversations')
-    .select('id, account_id, contact_id, channel, zernio_conversation_id')
-    .in('channel', ['instagram', 'facebook']);
-
-  if (error) {
-    console.error('[inbox-integrity] conversation scan failed:', error.message);
-    return EMPTY;
-  }
-
-  const rows = (convs ?? []) as {
+  // Paged reads throughout — this scans every account, far past the
+  // server's row cap.
+  let rows: {
     id: string;
     account_id: string;
     contact_id: string;
     channel: string;
     zernio_conversation_id: string | null;
   }[];
+  try {
+    rows = await fetchAllRows(
+      () =>
+        db
+          .from('conversations')
+          .select('id, account_id, contact_id, channel, zernio_conversation_id')
+          .in('channel', ['instagram', 'facebook']),
+      { label: 'inbox-integrity conversations', maxRows: 500_000 },
+    );
+  } catch (err) {
+    console.error('[inbox-integrity] conversation scan failed:', err instanceof Error ? err.message : err);
+    return EMPTY;
+  }
 
   // (1) duplicate threads for the same contact on the same channel.
   const groupCounts = new Map<string, number>();
@@ -72,15 +78,18 @@ export async function checkInboxIntegrity(): Promise<InboxIntegrityReport> {
   const candidateIds = rows.filter((c) => !c.zernio_conversation_id).map((c) => c.id);
   let unrepliableConversationIds: string[] = [];
   if (candidateIds.length > 0) {
-    const { data: msgs, error: msgErr } = await db
-      .from('messages')
-      .select('conversation_id')
-      .in('conversation_id', candidateIds);
-    if (msgErr) {
-      console.error('[inbox-integrity] message scan failed:', msgErr.message);
+    let msgs: { id: string; conversation_id: string }[];
+    try {
+      msgs = await fetchAllRowsIn(
+        candidateIds,
+        (chunk) => db.from('messages').select('id, conversation_id').in('conversation_id', chunk),
+        { label: 'inbox-integrity messages', maxRows: 500_000 },
+      );
+    } catch (err) {
+      console.error('[inbox-integrity] message scan failed:', err instanceof Error ? err.message : err);
       return EMPTY;
     }
-    const withTraffic = new Set((msgs ?? []).map((m) => m.conversation_id as string));
+    const withTraffic = new Set(msgs.map((m) => m.conversation_id));
     unrepliableConversationIds = candidateIds.filter((id) => withTraffic.has(id));
   }
 

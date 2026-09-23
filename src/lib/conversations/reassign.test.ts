@@ -42,6 +42,7 @@ function makeDb(fx: Fixture) {
       updatePayload?: Record<string, unknown>
       eqCalls: [string, unknown][]
       inCol?: string
+      afterId?: string
     } = { mode: 'select', eqCalls: [] }
 
     const findEq = (col: string) => state.eqCalls.find(([c]) => c === col)?.[1]
@@ -61,8 +62,13 @@ function makeDb(fx: Fixture) {
 
     async function resolveDefault() {
       if (table === 'conversations' && state.mode === 'select' && state.inCol === 'assigned_agent_id') {
+        // Keyset-paged read (fetchAllRows): synthesize stable ids.
         const accountId = findEq('account_id') as string
-        return { data: fx.openCounts?.[accountId] ?? [], error: null }
+        const rows = (fx.openCounts?.[accountId] ?? []).map((r, i) => ({
+          id: `open-${String(i).padStart(4, '0')}`,
+          ...r,
+        }))
+        return { data: rows.filter((r) => !state.afterId || r.id > state.afterId), error: null }
       }
       if (table === 'conversations' && state.mode === 'select') {
         return { data: fx.candidates, error: null }
@@ -93,6 +99,10 @@ function makeDb(fx: Fixture) {
         return b
       },
       lte: () => b,
+      gt: (_col: string, val: string) => {
+        state.afterId = val
+        return b
+      },
       order: () => b,
       limit: () => b,
       in: (col: string) => {

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Quote, QuoteItem } from '@/types'
+import { dateKeyInZone } from '@/lib/timezone'
 
 export class CreateQuoteError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -97,6 +98,18 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
     throw new CreateQuoteError(`A quote can have at most ${MAX_QUOTE_ITEMS} items`)
   }
 
+  // `db` is the service-role client: without this, a caller could attach
+  // another account's contact, and the quote's PDF / Sheets row would then
+  // carry that tenant's name and phone.
+  const { data: ownContact, error: contactError } = await db
+    .from('contacts')
+    .select('id')
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (contactError) throw contactError
+  if (!ownContact) throw new CreateQuoteError('Contact not found')
+
   const productIds = [...new Set(items.filter((i) => i.product_id).map((i) => i.product_id as string))]
   const productsById = new Map<string, { id: string; name: string; price: number; installation_cost: number | null; is_active: boolean }>()
   if (productIds.length > 0) {
@@ -190,7 +203,7 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
 
   const { data: account } = await db
     .from('accounts')
-    .select('default_currency')
+    .select('default_currency, timezone')
     .eq('id', accountId)
     .maybeSingle()
   const currency = account?.default_currency ?? 'USD'
@@ -262,7 +275,9 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
             pipeline_id: pipeline.id,
             stage_id: stage.id,
             contact_id: contactId,
-            title: `Cotización — ${new Date().toISOString().slice(0, 10)}`,
+            // The account's calendar date — a UTC slice reads as
+            // tomorrow for a Guatemala evening quote.
+            title: `Cotización — ${dateKeyInZone(new Date(), account?.timezone || 'UTC')}`,
             value: total,
             currency,
             status: 'open',

@@ -5,6 +5,7 @@ import { readResponseJson } from '@/lib/http/response-json';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/supabase/fetch-all';
 import type {
   Pipeline,
   PipelineStage,
@@ -136,14 +137,22 @@ export default function PipelinesPage() {
 
   const loadDeals = useCallback(
     async (pipelineId: string) => {
-      const { data } = await supabase
-        .from('deals')
-        .select(
-          '*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*)'
-        )
-        .eq('pipeline_id', pipelineId)
-        .order('created_at', { ascending: false });
-      return (data ?? []) as Deal[];
+      // Paged past the server's row cap so a big pipeline's columns and
+      // totals aren't silently missing deals; newest first for the board.
+      const deals = await fetchAllRows<Deal>(
+        () =>
+          supabase
+            .from('deals')
+            .select(
+              '*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*)'
+            )
+            .eq('pipeline_id', pipelineId),
+        { label: 'pipeline deals' },
+      ).catch((err) => {
+        console.error('Failed to load deals:', err);
+        return [] as Deal[];
+      });
+      return deals.sort((a, b) => b.created_at.localeCompare(a.created_at));
     },
     [supabase]
   );

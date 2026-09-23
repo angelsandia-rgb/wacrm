@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { pruneEmptyStaleConversations } from './prune-empty'
 
@@ -11,6 +11,9 @@ interface Fixture {
   candidates: { id: string }[]
   /** conversation_ids that DO have a message row. */
   withMessages?: string[]
+  /** Messages per conversation that has any (exercises paging). */
+  messagesPerConversation?: number
+  messageCheckError?: boolean
   deleteError?: boolean
 }
 
@@ -31,10 +34,33 @@ function makeDb(fx: Fixture) {
       in: (_col: string, ids: string[]) => {
         state.inIds = ids
         if (table === 'messages') {
+          // Keyset-paged read, capped at 1000 rows per response like PostgREST.
+          const per = fx.messagesPerConversation ?? 1
           const rows = (fx.withMessages ?? [])
             .filter((id) => ids.includes(id))
-            .map((id) => ({ conversation_id: id }))
-          return Promise.resolve({ data: rows, error: null })
+            .flatMap((id) =>
+              Array.from({ length: per }, (_, n) => ({
+                id: `${id}-${String(n).padStart(6, '0')}`,
+                conversation_id: id,
+              })),
+            )
+            .sort((a, b) => a.id.localeCompare(b.id))
+          let cursor = ''
+          const page: Record<string, unknown> = {
+            order: () => page,
+            limit: () => page,
+            gt: (_c: string, v: string) => {
+              cursor = v
+              return page
+            },
+            then: (resolve: (v: unknown) => void) =>
+              resolve(
+                fx.messageCheckError
+                  ? { data: null, error: { message: 'URI too long' } }
+                  : { data: rows.filter((r) => r.id > cursor).slice(0, 1000), error: null },
+              ),
+          }
+          return page
         }
         // conversations delete
         if (fx.deleteError) return Promise.resolve({ data: null, error: { message: 'boom' }, count: null })
@@ -96,5 +122,27 @@ describe('pruneEmptyStaleConversations', () => {
   // the cutoff is a week back so a regression to e.g. 1 day is caught.
   it('uses a 7-day staleness cutoff', () => {
     expect(daysAgo(7)).toBe('2026-08-20T12:00:00.000Z')
+  })
+
+  it('deletes nothing when the message check fails (fail closed)', async () => {
+    const { db, deleted } = makeDb({
+      candidates: [{ id: 'a' }, { id: 'b' }],
+      messageCheckError: true,
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await pruneEmptyStaleConversations(db, NOW)).toEqual({ pruned: 0 })
+    expect(deleted).toEqual([])
+  })
+
+  it('sees a conversation\'s messages past the 1000-row response cap', async () => {
+    // 'z' sorts last; with 1500 messages on 'a' ahead of it, an unpaged
+    // read would never reach 'z' and would wrongly treat it as empty.
+    const { db, deleted } = makeDb({
+      candidates: [{ id: 'a' }, { id: 'z' }, { id: 'empty' }],
+      withMessages: ['a', 'z'],
+      messagesPerConversation: 1500,
+    })
+    expect((await pruneEmptyStaleConversations(db, NOW)).pruned).toBe(1)
+    expect(deleted).toEqual([['empty']])
   })
 })

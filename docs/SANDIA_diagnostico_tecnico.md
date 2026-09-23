@@ -497,6 +497,57 @@ queda documentado como pendiente explícito, no oculto.
 
 ---
 
+### 2026-09-23 — Auditoría general de código
+
+**Estado:** rama `chore/code-audit-2026-09-23`. Migración nueva
+`148_fk_covering_indexes_clinic_reservations.sql` (solo índices, aditiva)
+**sin aplicar** a producción.
+
+**Estado de la sección K.** K.1 (rate limit) resuelto — `checkSharedRateLimit`
+sobre Postgres, memoria solo como fallback. K.2 (CSP) en modo *enforcing*;
+queda `unsafe-inline` hasta un rollout con nonces. K.3 (REVOKE de funciones)
+verificado en producción. K.4 y K.5 corregidos antes de esta auditoría. Deuda
+M: contraseña mínima ya es 8; unicidad de plantillas ya es por número. Sigue
+pendiente borrar la columna heredada `profiles.role` (nadie la lee).
+
+**Qué se corrigió.**
+
+- **Tope de 1000 filas de PostgREST.** Un `select` normal (incluso con
+  `.limit(50000)`) se corta en silencio en `max_rows`. La cuenta principal ya
+  tiene más de 3 500 mensajes en 14 días, así que las métricas de `/kpis`, la
+  gráfica y los tiempos del dashboard, la clínica, el hotel, `/admin` y,
+  sobre todo, las **audiencias de difusión** (incluida la lista de exclusión)
+  se calculaban con datos truncados. Nuevo `src/lib/supabase/fetch-all.ts`
+  (paginación por `id` + variante en lotes para `.in()`). Regla: **todo
+  agregado o audiencia debe leer con `fetchAllRows`**.
+- **Caminos destructivos que fallaban abiertos.** `prune-empty` borraba
+  todas las conversaciones candidatas si fallaba la verificación de
+  mensajes. La retención de `chat-media` borraba la imagen de encabezado de
+  las plantillas (los envíos la usan como respaldo). El borrado de empresas
+  se saltaba archivos con más de 1000, no borraba `clinic-files` ni avatares
+  y vaciaba el storage *antes* de borrar la cuenta.
+- **Aislamiento entre cuentas.** Recibos de lectura de IG/FB por
+  `message_id` sin filtrar por cuenta. Tareas y cotizaciones aceptaban un
+  usuario, contacto o deal de otra cuenta (vía el cliente service-role).
+- **Varios números de WhatsApp por cuenta.** El proxy de medios, la visión de
+  la IA y la API v1 hacían `.single()` sobre `whatsapp_config` por cuenta,
+  lo que se rompe con el segundo número; ahora usan el número de la
+  conversación.
+- **Zona horaria.** La condición `time_of_day` de las automatizaciones usaba
+  la hora UTC del servidor (la plantilla "Out of Office" habría respondido
+  "fuera de horario" de 12:00 a 18:00 en Guatemala).
+- Otros: `/products`, `/calendar`, `/agents` y `/notifications` faltaban en
+  la redirección de auth del proxy (con test que recorre `(dashboard)`); un
+  JSON malformado ahora responde 400 en vez de 500; código muerto eliminado.
+
+**Pendientes conocidos (no bugs activos).** Las listas de UI (inbox, tablero
+de pipelines, selector de contactos) cargan la tabla completa: correcto hoy,
+pero a gran escala necesitan paginación en el servidor o scroll infinito. Las
+políticas RLS permisivas duplicadas (advisor `multiple_permissive_policies`)
+siguen sin consolidar, igual que en la migración 102.
+
+---
+
 ## Nota final
 
 Este documento es el diagnóstico de referencia para el proyecto SANDÍA: confirma que **no hay que reconstruir el CRM**, identifica con precisión (archivo por archivo, migración por migración) qué ya sirve, qué hay que ajustar y qué falta, y ordena el trabajo en fases con la seguridad y la multi-tenancy primero. Claude Code debe consultar este documento antes de proponer cambios estructurales al proyecto.

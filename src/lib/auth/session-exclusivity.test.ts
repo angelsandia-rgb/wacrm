@@ -56,10 +56,9 @@ describe('claimSingleSession', () => {
 
   it('broadcasts a kicked event then revokes other sessions when enforced', async () => {
     const signOut = vi.fn().mockResolvedValue({ error: null })
-    const send = vi.fn().mockResolvedValue({})
-    const subscribe = vi.fn().mockResolvedValue(undefined)
+    const httpSend = vi.fn().mockResolvedValue({ success: true })
     const removeChannel = vi.fn()
-    const channel = vi.fn(() => ({ subscribe, send }))
+    const channel = vi.fn(() => ({ httpSend }))
     const db = {
       from: vi.fn((table: string) =>
         table === 'profiles'
@@ -74,7 +73,29 @@ describe('claimSingleSession', () => {
     await claimSingleSession(db, 'user-1')
 
     expect(channel).toHaveBeenCalledWith(sessionChannelName('user-1'))
-    expect(send).toHaveBeenCalledWith({ type: 'broadcast', event: KICKED_EVENT, payload: {} })
+    expect(httpSend).toHaveBeenCalledWith(KICKED_EVENT, {})
+    expect(removeChannel).toHaveBeenCalled()
+    expect(signOut).toHaveBeenCalledWith({ scope: 'others' })
+  })
+
+  it('still revokes other sessions when the kicked broadcast fails', async () => {
+    const signOut = vi.fn().mockResolvedValue({ error: null })
+    const httpSend = vi.fn().mockRejectedValue(new Error('realtime down'))
+    const removeChannel = vi.fn()
+    const db = {
+      from: vi.fn((table: string) =>
+        table === 'profiles'
+          ? fakeQuery({ data: { account_id: 'acct-1' } })
+          : fakeQuery({ data: { enforce_single_session: true } }),
+      ),
+      channel: vi.fn(() => ({ httpSend })),
+      removeChannel,
+      auth: { signOut },
+    } as unknown as SupabaseClient
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await claimSingleSession(db, 'user-1')
+
     expect(removeChannel).toHaveBeenCalled()
     expect(signOut).toHaveBeenCalledWith({ scope: 'others' })
   })

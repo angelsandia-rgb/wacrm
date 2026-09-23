@@ -19,14 +19,28 @@ export function isExpiredStorageObject(
   return Number.isFinite(time) && time < cutoff.getTime();
 }
 
-async function isReferenced(admin: SupabaseClient, path: string) {
-  const { data, error } = await admin
-    .from('messages')
-    .select('id')
-    .like('media_url', `%/chat-media/${path}`)
-    .limit(1);
-  if (error) throw error;
-  return (data?.length ?? 0) > 0;
+/**
+ * Every column that can hold a chat-media URL. Templates store their
+ * header image here too (template-manager uploads to chat-media) and send
+ * paths fall back to it (`template-send-builder`), so pruning it would
+ * break every later send of that template.
+ */
+const CHAT_MEDIA_REFERENCES = [
+  { table: 'messages', column: 'media_url' },
+  { table: 'message_templates', column: 'header_media_url' },
+] as const;
+
+export async function isReferenced(admin: SupabaseClient, path: string) {
+  for (const { table, column } of CHAT_MEDIA_REFERENCES) {
+    const { data, error } = await admin
+      .from(table)
+      .select('id')
+      .like(column, `%/chat-media/${path}`)
+      .limit(1);
+    if (error) throw error;
+    if ((data?.length ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 /**

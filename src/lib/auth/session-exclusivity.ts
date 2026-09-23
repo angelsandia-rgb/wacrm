@@ -67,10 +67,18 @@ export async function claimSingleSession(
     // immediately, then revoke — reversing this risks the broadcast
     // itself failing to send once this client's own state is mid-
     // transition from the signOut call.
+    // `httpSend` posts the broadcast over REST — no socket join needed.
+    // (`subscribe()` is not awaitable, so the previous subscribe-then-send
+    // always hit `send()`'s deprecated REST fallback anyway.)
+    // Best-effort: a failed broadcast must not skip the revocation below.
     const channel = supabase.channel(sessionChannelName(userId));
-    await channel.subscribe();
-    await channel.send({ type: 'broadcast', event: KICKED_EVENT, payload: {} });
-    await supabase.removeChannel(channel);
+    try {
+      await channel.httpSend(KICKED_EVENT, {});
+    } catch (err) {
+      console.error('[session-exclusivity] kicked broadcast failed:', err);
+    } finally {
+      await supabase.removeChannel(channel);
+    }
 
     await supabase.auth.signOut({ scope: 'others' });
   } catch (err) {

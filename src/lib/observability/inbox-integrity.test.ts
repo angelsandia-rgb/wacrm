@@ -7,13 +7,34 @@ vi.mock('@/lib/platform/admin-client', () => ({
 
 import { checkInboxIntegrity } from './inbox-integrity';
 
-/** `db.from(table).select(...).in(...)` → resolves to `{ data, error }`.
- *  `results` maps a table name to what its `.in()` resolves to; each
- *  table is consumed once per call in `from` order. */
+/** `db.from(table).select(...).in(...)`, keyset-paged like the real
+ *  reads (`fetchAllRows`): honours `.gt('id', cursor)` so paging ends.
+ *  `results` maps a table name to its rows (ids synthesized if absent). */
 function mockTables(results: Record<string, { data: unknown[]; error: unknown }>) {
-  h.from.mockImplementation((table: string) => ({
-    select: () => ({ in: () => Promise.resolve(results[table] ?? { data: [], error: null }) }),
-  }));
+  h.from.mockImplementation((table: string) => {
+    const res = results[table] ?? { data: [], error: null };
+    const rows = (res.data as Record<string, unknown>[]).map((r, i) => ({
+      id: `${table}-${String(i).padStart(4, '0')}`,
+      ...r,
+    })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    let cursor = '';
+    const chain: Record<string, unknown> = {
+      in: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      gt: (_c: string, v: string) => {
+        cursor = v;
+        return chain;
+      },
+      then: (resolve: (v: unknown) => void) =>
+        resolve(
+          res.error
+            ? { data: null, error: res.error }
+            : { data: rows.filter((r) => String(r.id) > cursor), error: null },
+        ),
+    };
+    return { select: () => chain };
+  });
 }
 
 beforeEach(() => h.from.mockReset());

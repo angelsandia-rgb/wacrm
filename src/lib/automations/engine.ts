@@ -22,6 +22,7 @@ import type {
   AssignConversationStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
+import { isWithinTimeWindow } from './time-window'
 import { describeError } from '@/lib/observability/describe-error'
 import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import { addContactTagIfAbsent } from '@/lib/contacts/tag-write'
@@ -740,7 +741,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           ? new Date(Date.now() + hours * 3_600_000).toISOString()
           : null
 
-      await db.from('tasks').insert({
+      const { error: taskError } = await db.from('tasks').insert({
         // Tenancy + audit, same split as automation_logs / create_deal.
         account_id: args.automation.account_id,
         created_by: args.automation.user_id,
@@ -751,6 +752,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         due_at: dueAt,
         status: 'open',
       })
+      // Surface a failed insert in the automation log instead of
+      // reporting a task that was never created.
+      if (taskError) throw new Error(`create_task failed: ${taskError.message}`)
       return `task created${assignedTo ? ' (assigned)' : ''}${dueAt ? ' with due date' : ''}`
     }
 
@@ -978,19 +982,19 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
       return text.toLowerCase().includes((cfg.value ?? '').toLowerCase())
     }
     case 'time_of_day': {
-      // operand form "HH:mm-HH:mm" — true if now is within that window
-      // (supports over-midnight ranges like "18:00-09:00").
-      const [from, to] = (cfg.operand ?? '').split('-')
-      if (!from || !to) return false
-      const now = new Date()
-      const mins = now.getHours() * 60 + now.getMinutes()
-      const parse = (s: string) => {
-        const [h, m] = s.split(':').map(Number)
-        return (h || 0) * 60 + (m || 0)
-      }
-      const f = parse(from)
-      const t = parse(to)
-      return f <= t ? mins >= f && mins < t : mins >= f || mins < t
+      // operand form "HH:mm-HH:mm" in the ACCOUNT's local time (the
+      // builder and the assistant both describe it that way) — the
+      // server clock is UTC, so resolve the account's zone first.
+      const { data: account } = await db
+        .from('accounts')
+        .select('timezone')
+        .eq('id', args.automation.account_id)
+        .maybeSingle()
+      return isWithinTimeWindow(
+        cfg.operand,
+        new Date(),
+        (account as { timezone?: string | null } | null)?.timezone,
+      )
     }
     case 'message_count': {
       const threshold = Number(cfg.value)

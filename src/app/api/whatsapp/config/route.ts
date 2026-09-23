@@ -73,7 +73,7 @@ export async function POST(request: Request) {
   try {
     const { supabase, accountId, userId } = await requireRole('admin')
 
-    const body = await request.json()
+    const body = (await request.json().catch(() => null)) ?? {}
 
     const [{ count: existingCount }, { data: accountRow }] = await Promise.all([
       supabase

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dateKeyInZone } from '@/lib/timezone'
 import {
   appointmentsByDay,
@@ -41,29 +42,33 @@ export async function loadClinicDashboard(
   const apptFrom = prevWindow.from
   const apptTo = new Date(Date.parse(to) + 60 * DAY_MS).toISOString()
 
-  const [
-    visitsResult,
-    appointmentsResult,
-    convCountRes,
-    waitingResult,
-    messagesResult,
-  ] = await Promise.all([
+  // Row sets are paged past PostgREST's `max_rows` cap — a capped select
+  // silently under-counted revenue / patients / response time.
+  const [allVisits, appts, convCountRes, waitingRes, messages] = await Promise.all([
     // every visit for the account — needed for first-visit-per-patient
-    supabase
-      .from('visits')
-      .select('patient_id, visit_date, amount, follow_up_date')
-      .eq('account_id', accountId),
-    supabase
-      .from('appointments')
-      .select(
-        `id, scheduled_at, status, confirmation_status, patient_id,
-         patient_profiles!inner(contacts!inner(name)),
-         doctor_profiles(display_name),
-         products(name)`,
-      )
-      .eq('account_id', accountId)
-      .gte('scheduled_at', apptFrom)
-      .lt('scheduled_at', apptTo),
+    fetchAllRows<{ id: string }>(
+      () =>
+        supabase
+          .from('visits')
+          .select('id, patient_id, visit_date, amount, follow_up_date')
+          .eq('account_id', accountId),
+      { label: 'clinic visits', maxRows: 200_000 },
+    ),
+    fetchAllRows<{ id: string }>(
+      () =>
+        supabase
+          .from('appointments')
+          .select(
+            `id, scheduled_at, status, confirmation_status, patient_id,
+             patient_profiles!inner(contacts!inner(name)),
+             doctor_profiles(display_name),
+             products(name)`,
+          )
+          .eq('account_id', accountId)
+          .gte('scheduled_at', apptFrom)
+          .lt('scheduled_at', apptTo),
+      { label: 'clinic appointments' },
+    ),
     supabase
       .from('conversations')
       .select('id', { count: 'exact', head: true })
@@ -73,34 +78,27 @@ export async function loadClinicDashboard(
     // "waiting for a human": open, handed off, not yet auto-recovered.
     supabase
       .from('conversations')
-      .select('id')
+      .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
       .eq('status', 'open')
       .not('ai_handoff_at', 'is', null)
-      .is('ai_handoff_transient', null)
-      .limit(500),
-    supabase
-      .from('messages')
-      .select('conversation_id, sender_type, ai_generated, created_at, conversations!inner(account_id)')
-      .eq('conversations.account_id', accountId)
-      .gte('created_at', from)
-      .lt('created_at', to)
-      .limit(5000),
+      .is('ai_handoff_transient', null),
+    fetchAllRows<{ id: string }>(
+      () =>
+        supabase
+          .from('messages')
+          .select('id, conversation_id, sender_type, ai_generated, created_at, conversations!inner(account_id)')
+          .eq('conversations.account_id', accountId)
+          .gte('created_at', from)
+          .lt('created_at', to),
+      { label: 'clinic messages', maxRows: 200_000 },
+    ),
   ])
-  const queryError =
-    visitsResult.error ??
-    appointmentsResult.error ??
-    convCountRes.error ??
-    waitingResult.error ??
-    messagesResult.error
+  const queryError = convCountRes.error ?? waitingRes.error
   if (queryError) throw queryError
-  const allVisits = visitsResult.data
-  const appts = appointmentsResult.data
-  const waitingConvs = waitingResult.data
-  const messages = messagesResult.data
   const conversationsInWindow = convCountRes.count ?? 0
 
-  const visitRows = (allVisits ?? []) as VisitRow[]
+  const visitRows = allVisits as unknown as VisitRow[]
   const apptRows: AppointmentRow[] = ((appts ?? []) as unknown as Record<string, unknown>[]).map((a) => {
     const pp = a.patient_profiles as { contacts?: { name?: string | null } } | null
     const doc = a.doctor_profiles as { display_name?: string } | null
@@ -133,7 +131,7 @@ export async function loadClinicDashboard(
   const attentionRequired = computeAttention({
     appts: apptRows,
     visits: visitRows,
-    conversationsWaiting: (waitingConvs ?? []).length,
+    conversationsWaiting: waitingRes.count ?? 0,
     nowISO,
     todayISODate,
   })

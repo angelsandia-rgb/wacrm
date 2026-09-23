@@ -11,7 +11,7 @@ export async function PATCH(
   try {
     const ctx = await requirePlatformAdmin();
     const { id } = await params;
-    const body = (await request.json()) as {
+    const body = ((await request.json().catch(() => null)) ?? {}) as {
       suspended?: unknown;
       reason?: unknown;
       mark_paid?: unknown;

@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { fetchAllRows } from '@/lib/supabase/fetch-all';
 
 type AudienceType = 'all' | 'tags' | 'custom_field' | 'csv';
 type CustomFieldOperator = 'is' | 'is_not' | 'contains';
@@ -215,26 +216,36 @@ export function Step2SelectAudience({
         audience.tagIds &&
         audience.tagIds.length > 0
       ) {
-        const { data } = await supabase
-          .from('contact_tags')
-          .select('contact_id')
-          .in('tag_id', audience.tagIds);
-        baseIds = new Set((data ?? []).map((r) => r.contact_id));
+        const tagIds = audience.tagIds;
+        const rows = await fetchAllRows<{ id: string; contact_id: string }>(
+          () =>
+            supabase
+              .from('contact_tags')
+              .select('id, contact_id')
+              .in('tag_id', tagIds),
+          { maxRows: 500_000 },
+        );
+        baseIds = new Set(rows.map((r) => r.contact_id));
       } else if (
         audience.type === 'custom_field' &&
         audience.customField?.fieldId &&
         audience.customField.value
       ) {
         const { fieldId, operator, value } = audience.customField;
-        let q = supabase
-          .from('contact_custom_values')
-          .select('contact_id')
-          .eq('custom_field_id', fieldId);
-        if (operator === 'is') q = q.eq('value', value);
-        else if (operator === 'is_not') q = q.neq('value', value);
-        else q = q.ilike('value', `%${value}%`);
-        const { data } = await q;
-        baseIds = new Set((data ?? []).map((r) => r.contact_id));
+        const rows = await fetchAllRows<{ id: string; contact_id: string }>(
+          () => {
+            let q = supabase
+              .from('contact_custom_values')
+              .select('id, contact_id')
+              .eq('custom_field_id', fieldId);
+            if (operator === 'is') q = q.eq('value', value);
+            else if (operator === 'is_not') q = q.neq('value', value);
+            else q = q.ilike('value', `%${value}%`);
+            return q;
+          },
+          { maxRows: 500_000 },
+        );
+        baseIds = new Set(rows.map((r) => r.contact_id));
       } else if (
         audience.type === 'csv' &&
         audience.csvContacts &&
@@ -251,11 +262,16 @@ export function Step2SelectAudience({
       // Apply exclude tags
       let excludeSet: Set<string> | null = null;
       if (audience.excludeTagIds && audience.excludeTagIds.length > 0) {
-        const { data: excludeRows } = await supabase
-          .from('contact_tags')
-          .select('contact_id')
-          .in('tag_id', audience.excludeTagIds);
-        excludeSet = new Set((excludeRows ?? []).map((r) => r.contact_id));
+        const excludeTagIds = audience.excludeTagIds;
+        const excludeRows = await fetchAllRows<{ id: string; contact_id: string }>(
+          () =>
+            supabase
+              .from('contact_tags')
+              .select('id, contact_id')
+              .in('tag_id', excludeTagIds),
+          { maxRows: 500_000 },
+        );
+        excludeSet = new Set(excludeRows.map((r) => r.contact_id));
       }
 
       if (baseIds) {
@@ -271,6 +287,10 @@ export function Step2SelectAudience({
         const total = count ?? 0;
         setEstimatedCount(excludeSet ? Math.max(0, total - excludeSet.size) : total);
       }
+    } catch (err) {
+      // Unknown beats a wrong number shown as the send size.
+      console.error('[broadcast audience] count failed:', err);
+      setEstimatedCount(null);
     } finally {
       setLoadingCount(false);
     }

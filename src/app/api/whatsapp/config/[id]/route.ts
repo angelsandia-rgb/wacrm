@@ -139,7 +139,7 @@ export async function PATCH(
   try {
     const { supabase, accountId } = await requireRole('admin')
     const { id } = await context.params
-    const body = await request.json()
+    const body = (await request.json().catch(() => null)) ?? {}
 
     const { data: existing, error: fetchError } = await supabase
       .from('whatsapp_config')

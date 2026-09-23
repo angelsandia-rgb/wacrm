@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { HotelReservation } from './compute'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /** Client-safe mirror of `categorySlugFromName` in
  *  `@/lib/reservations/upsert` (that module pulls server-only deps).
@@ -15,25 +16,16 @@ function isRoomCategoryName(name: string | undefined): boolean {
 
 type DB = SupabaseClient
 
-// Keyset pagination works even when PostgREST caps responses below our
-// requested page size. Never turn a failed or truncated query into zero KPIs.
-async function loadRows(db: DB, table: string, columns: string, filter?: string) {
-  const rows: Record<string, unknown>[] = []
-  let cursor: string | null = null
-  for (;;) {
-    let query = db.from(table).select(`id, ${columns}`).order('id').limit(500)
-    if (filter) query = query.or(filter)
-    if (cursor) query = query.gt('id', cursor)
-    const { data, error } = await query
-    if (error) throw error
-    if (!data?.length) return rows
-    const page = data as unknown as Record<string, unknown>[]
-    rows.push(...page)
-    if (rows.length > 50_000) throw new Error('Hotel metrics require server aggregation above 50000 rows')
-    const next = page[page.length - 1].id as string
-    if (!next || next === cursor) throw new Error('Hotel metrics pagination did not advance')
-    cursor = next
-  }
+// Keyset-paged (see fetchAllRows): never turn a failed or truncated query
+// into zero KPIs.
+function loadRows(db: DB, table: string, columns: string, filter?: string) {
+  return fetchAllRows<{ id: string } & Record<string, unknown>>(
+    () => {
+      const query = db.from(table).select(`id, ${columns}`)
+      return filter ? query.or(filter) : query
+    },
+    { label: `hotel metrics ${table}` },
+  )
 }
 
 export interface HotelMetricsData {

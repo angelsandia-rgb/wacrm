@@ -142,7 +142,7 @@ export async function POST(request: Request) {
     // unchanged.
     let requestedConfigId: string | null = null
     try {
-      const body = (await request.json()) as { whatsapp_config_id?: string }
+      const body = ((await request.json().catch(() => null)) ?? {}) as { whatsapp_config_id?: string }
       requestedConfigId = body?.whatsapp_config_id ?? null
     } catch {
       // No body / not JSON — fine, fall through to the default connection.
