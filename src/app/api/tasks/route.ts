@@ -3,6 +3,7 @@ import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/acco
 import { supabaseAdmin } from '@/lib/automations/admin-client';
 import { MAX_TASK_NOTES, MAX_TASK_TITLE, isTaskStatus } from '@/lib/tasks/types';
 import { syncNewTaskToGoogle } from '@/lib/tasks/google-sync';
+import { findForeignTaskRef } from '@/lib/tasks/refs';
 
 // Follow-up tasks (migration 097). GET lists the account's tasks
 // (filterable by contact / assignee / status); POST creates one.
@@ -75,6 +76,14 @@ export async function POST(request: Request) {
   const dealId = typeof body.deal_id === 'string' && body.deal_id ? body.deal_id : null;
 
   const db = supabaseAdmin();
+  const foreign = await findForeignTaskRef(db, ctx.accountId, {
+    assigned_to: assignedTo,
+    contact_id: contactId,
+    deal_id: dealId,
+  });
+  if (foreign) {
+    return NextResponse.json({ error: `${foreign} does not belong to this account` }, { status: 400 });
+  }
   const { data, error } = await db
     .from('tasks')
     .insert({

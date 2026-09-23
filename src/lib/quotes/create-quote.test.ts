@@ -28,6 +28,8 @@ interface Fixture {
    *  none, so `createQuote` falls through to creating a new one.
    *  `value` defaults to undefined (treated as "never priced"). */
   existingOpenDeal?: { id: string; value?: number | null } | null
+  /** The contact belongs to another account (ownership check fails). */
+  foreignContact?: boolean
 }
 
 const CUSTOMER = {
@@ -72,6 +74,9 @@ function makeDb(fx: Fixture) {
           return { data: rows.map((r, i) => ({ id: `item-${i + 1}`, ...r })), error: null }
         }
         return { data: null, error: null }
+      }
+      if (table === 'contacts') {
+        return { data: fx.foreignContact ? null : { id: 'contact-1' }, error: null }
       }
       if (table === 'products') {
         return { data: fx.products ?? [], error: null }
@@ -189,6 +194,18 @@ describe('createQuote — catalog vs free items', () => {
     expect(quote.subtotal).toBe(300)
     expect(quote.total).toBe(300)
     expect(inserted.quote_items[0]).toMatchObject({ product_id: null, description: 'Servicio a medida', unit_price: 150, quantity: 2, line_total: 300 })
+  })
+
+  it('rejects a contact from another account before touching anything', async () => {
+    const { db, inserted } = makeDb({ foreignContact: true, products: [] })
+    await expect(
+      createQuote({
+        db, accountId: 'acct-1', userId: 'user-1', contactId: 'someone-elses', ...CUSTOMER,
+        items: [{ description: 'Servicio', unit_price: 100, quantity: 1 }],
+        allowFreeItems: true,
+      }),
+    ).rejects.toThrow('Contact not found')
+    expect(inserted).toEqual({})
   })
 
   it('rejects a product_id that does not exist in this account\'s catalog', async () => {

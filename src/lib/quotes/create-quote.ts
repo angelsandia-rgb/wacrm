@@ -98,6 +98,18 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
     throw new CreateQuoteError(`A quote can have at most ${MAX_QUOTE_ITEMS} items`)
   }
 
+  // `db` is the service-role client: without this, a caller could attach
+  // another account's contact, and the quote's PDF / Sheets row would then
+  // carry that tenant's name and phone.
+  const { data: ownContact, error: contactError } = await db
+    .from('contacts')
+    .select('id')
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (contactError) throw contactError
+  if (!ownContact) throw new CreateQuoteError('Contact not found')
+
   const productIds = [...new Set(items.filter((i) => i.product_id).map((i) => i.product_id as string))]
   const productsById = new Map<string, { id: string; name: string; price: number; installation_cost: number | null; is_active: boolean }>()
   if (productIds.length > 0) {

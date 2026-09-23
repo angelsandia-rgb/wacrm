@@ -3,6 +3,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import { supabaseAdmin } from '@/lib/automations/admin-client';
 import { MAX_TASK_NOTES, MAX_TASK_TITLE, isTaskStatus } from '@/lib/tasks/types';
 import { syncDeletedTaskToGoogle, syncUpdatedTaskToGoogle } from '@/lib/tasks/google-sync';
+import { findForeignTaskRef } from '@/lib/tasks/refs';
 
 interface Ctx {
   params: Promise<{ id: string }>;
@@ -63,6 +64,14 @@ export async function PATCH(request: Request, { params }: Ctx) {
   }
 
   const db = supabaseAdmin();
+  if (patch.assigned_to) {
+    const foreign = await findForeignTaskRef(db, ctx.accountId, {
+      assigned_to: patch.assigned_to as string,
+    });
+    if (foreign) {
+      return NextResponse.json({ error: `${foreign} does not belong to this account` }, { status: 400 });
+    }
+  }
   const { data, error } = await db
     .from('tasks')
     .update(patch)

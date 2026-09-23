@@ -741,7 +741,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           ? new Date(Date.now() + hours * 3_600_000).toISOString()
           : null
 
-      await db.from('tasks').insert({
+      const { error: taskError } = await db.from('tasks').insert({
         // Tenancy + audit, same split as automation_logs / create_deal.
         account_id: args.automation.account_id,
         created_by: args.automation.user_id,
@@ -752,6 +752,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         due_at: dueAt,
         status: 'open',
       })
+      // Surface a failed insert in the automation log instead of
+      // reporting a task that was never created.
+      if (taskError) throw new Error(`create_task failed: ${taskError.message}`)
       return `task created${assignedTo ? ' (assigned)' : ''}${dueAt ? ' with due date' : ''}`
     }
 
