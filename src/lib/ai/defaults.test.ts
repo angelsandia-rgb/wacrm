@@ -224,6 +224,19 @@ describe('buildSystemPrompt — record_reservation: exact catalog name + no self
     expect(p.toLowerCase()).toContain('do not recompute it from a breakdown the guest hands you')
     expect(p.toLowerCase()).toContain('check the headcount before picking the number')
   })
+
+  // Real incident, 2026-09-23: the model recapped and asked "¿Desea que
+  // deje esta solicitud lista...?", the guest replied exactly "Si", and
+  // the model treated that single word as too vague to count — so it
+  // recapped a SECOND time and asked the identical question again
+  // instead of firing CONFIRM_RESERVATION_SENTINEL. The reservation
+  // stayed "pending" forever and nobody on the team was ever notified
+  // it was ready.
+  it('clarifies that a plain "sí" directly answering the model\'s own just-asked confirm question DOES count as explicit confirmation', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+    expect(p.toLowerCase()).toContain('does not mean a short, plain "sí"/"ok"/"dale"/"va" that is the guest\'s very next message directly answering')
+    expect(p.toLowerCase()).toContain('do not make a guest answer your own yes/no question twice')
+  })
 })
 
 describe('buildSystemPrompt — flow handoff directive', () => {
