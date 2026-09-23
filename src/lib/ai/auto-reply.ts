@@ -25,7 +25,7 @@ import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation 
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
-import { formatWithOffset, describeNowInZone, dateKeyInZone } from '@/lib/timezone'
+import { formatWithOffset, describeNowInZone, describeUpcomingWeekdaysInZone, dateKeyInZone } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import {
@@ -752,6 +752,7 @@ export async function dispatchInboundToAiReply(
           }
         : null,
       currentDate: describeNowInZone(businessTimeZone),
+      upcomingWeekdays: describeUpcomingWeekdaysInZone(businessTimeZone),
       flowDirective,
       knownContactFacts,
       activeReservations,

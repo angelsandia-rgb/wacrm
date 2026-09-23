@@ -128,6 +128,31 @@ export function describeNowInZone(timeZone: string | null | undefined, at: Date 
   }
 }
 
+/** Precomputed "weekday name -> its next real date" table for the 7
+ *  days starting today in `timeZone`, e.g. for a Tuesday:
+ *  `"martes (hoy)=2026-09-22, miércoles=2026-09-23, jueves=2026-09-24,
+ *  viernes=2026-09-25, sábado=2026-09-26, domingo=2026-09-27,
+ *  lunes=2026-09-28"`. Used to ground the AI prompt (`defaults.ts`'s
+ *  `upcomingWeekdays`) so the model looks a weekday's date up instead
+ *  of computing it — real incident, 2026-09-22: asked to work out "el
+ *  jueves" from a spelled-out "today is Tuesday" on its own, the model
+ *  miscounted by one day. Walks calendar days (not 24h increments) off
+ *  `dateKeyInZone`, so it is DST-safe, then reads each one's weekday
+ *  name back in UTC — a YYYY-MM-DD calendar date's day-of-week never
+ *  depends on a timezone, only re-parsing it in the wrong one would. */
+export function describeUpcomingWeekdaysInZone(timeZone: string | null | undefined, at: Date = new Date()): string {
+  const tz = timeZone && isValidTimeZone(timeZone) ? timeZone : undefined
+  const [y, m, d] = dateKeyInZone(at, tz).split('-').map(Number)
+  const entries: string[] = []
+  for (let offset = 0; offset < 7; offset++) {
+    const dayDate = new Date(Date.UTC(y, m - 1, d + offset))
+    const dateKey = `${dayDate.getUTCFullYear()}-${String(dayDate.getUTCMonth() + 1).padStart(2, '0')}-${String(dayDate.getUTCDate()).padStart(2, '0')}`
+    const name = new Intl.DateTimeFormat('es', { timeZone: 'UTC', weekday: 'long' }).format(dayDate)
+    entries.push(`${name}${offset === 0 ? ' (hoy)' : ''}=${dateKey}`)
+  }
+  return entries.join(', ')
+}
+
 /** Validates an IANA timezone identifier the cheap way — asks
  *  `Intl.DateTimeFormat` to use it and see if it throws. Used wherever
  *  a caller-supplied timezone string is persisted (Settings). */

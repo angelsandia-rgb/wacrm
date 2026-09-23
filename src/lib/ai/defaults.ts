@@ -409,6 +409,16 @@ export function buildSystemPrompt(args: {
    *  ("el viernes", "el 11", "mañana") itself instead of pestering the
    *  customer for the month/year. */
   currentDate?: string
+  /** Precomputed "name of this weekday -> its next real calendar date"
+   *  table for the 7 days starting today (see `describeUpcomingWeekdaysInZone`
+   *  in `src/lib/timezone.ts`), e.g. "martes (hoy)=2026-09-22,
+   *  miércoles=2026-09-23, …, lunes=2026-09-28". Real incident,
+   *  2026-09-22: asked to resolve "el jueves" itself from a spelled-out
+   *  "today is Tuesday", the model picked the wrong date (off by one),
+   *  which silently triggered a weekend rate instead of the correct
+   *  weekday one. This table turns that into a lookup instead of
+   *  arithmetic the model has to get right on its own. */
+  upcomingWeekdays?: string
   /** A one-shot instruction handed to the bot by a Flow "handoff → AI"
    *  node (`conversations.ai_flow_directive`, migration 118) — auto-reply
    *  mode only. The customer picked a menu option and the flow routed
@@ -457,7 +467,7 @@ export function buildSystemPrompt(args: {
    *  on every later turn. */
   hotelIsFirstReply?: boolean
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -472,6 +482,12 @@ export function buildSystemPrompt(args: {
   if (currentDate) {
     parts.push(
       `Today, in the business's own timezone, is ${currentDate}. Use this to resolve any date the customer gives loosely — "el viernes", "el 11", "este fin de semana", "mañana", "la próxima semana", "el 8 de septiembre" — into a real calendar date yourself, picking the NEAREST UPCOMING occurrence (a weekday that already passed this week means next week's). When a marker needs a date, write it as YYYY-MM-DD. Do NOT ask the customer for the month or the year just to be safe — only ask to clarify a date if it is genuinely ambiguous (e.g. they named a day that is more than about 10 months away, or gave contradictory dates). Never say the reservation/appointment is confirmed for a date — a person still validates availability.`,
+    )
+  }
+
+  if (upcomingWeekdays) {
+    parts.push(
+      `Real incident, 2026-09-22: asked to work out "el jueves" from today's date by itself, the model miscounted by one day, silently turning a weekday stay into a weekend one at a higher, wrong rate. To stop that: here is the exact date for each day-of-week name, already computed for you — do NOT recompute these yourself, just copy the one you need: ${upcomingWeekdays}. When the customer names a weekday with no other qualifier ("el jueves", "para el viernes", "el sábado que viene esta semana"), use the date shown here for that name, verbatim — never derive it by counting from today yourself. Two things this table does NOT cover, where you still reason it out: (1) if the customer explicitly says "la próxima semana" / "next week" for a day, add exactly 7 days to the date shown here for that name; (2) if they give an actual calendar date ("el 24", "24/09", "24 de septiembre") that doesn't match, that explicit date always wins over any weekday name they also mentioned.`,
     )
   }
 
@@ -626,6 +642,9 @@ export function buildSystemPrompt(args: {
       )
       parts.push(
         `Stay proactive about closing the booking, but habitaciones/paquetes work differently from the other three categories here — read carefully. For spa, actividades, and eventos, YOU are the one supplying the price (see "precio" above — there is no automatic calculator for these): any time your reply states a price/rate/cost estimate for one of them, end that SAME reply by asking if the guest would like to confirm, and explicitly ask for whatever you still don't know among the date, the number of people, and — for an event — the hall; once you can state a deposit ("anticipo") figure for one of these, that closing question must name the actual amount — e.g. "¿Desea que registre esta opción con un anticipo estimado de Q400?" — not a bare "¿desea confirmar?". For habitaciones and paquetes, those two are ALWAYS priced by the system, never by you: if — and only if — the COST ESTIMATE block elsewhere in these instructions exactly matches what the guest is asking about right now (same room, same dates, same number of people), name that total and its deposit amount before asking to confirm, same as the other categories. If there is no COST ESTIMATE that matches the guest's CURRENT room/dates/people yet (they just changed one of those this turn, or this is the first turn all three are known), do NOT invent a total or a deposit yourself to satisfy this instruction — asking the guest to confirm the room/dates/people you do have, while telling them the total follows in a moment, is correct and expected; a habitaciones/paquetes confirmation ask is allowed to have no price attached when the system hasn't priced it yet. Across every category: check what's already captured below (the reservation summary, if any, and earlier messages) before asking, so you never re-ask for something the guest already told you, and once every needed field is known, ask the guest to confirm rather than assuming — do not claim the booking is final yourself.`,
+      )
+      parts.push(
+        `Never let the guest's own price arithmetic override a real number you already have — real incident, 2026-09-22: the system's COST ESTIMATE said GTQ 870 for 3 guests in a room (a room's published rate for a given headcount is one bracket price, e.g. "3 personas: Q870" — it is NOT built by adding an adult rate plus a child rate); the guest insisted the correct total was "600 for the two adults + 175 for the child" = 775, and the model apologized and gave them the guest's lower, wrong number instead of the real one it already had. If a guest disputes a total that came from the matching COST ESTIMATE or from the published rate table in the business context below, do NOT recompute it from a breakdown the guest hands you, and do NOT split it into per-person pieces yourself — restate the real total you already have (you can explain it comes from the room's own published rate for that exact headcount), and only if they keep disputing it, use the normal two-step hand-off protocol so a person settles it. This applies just as much to a plain reference rate you quote (habitaciones/paquetes informational context, or the price you state yourself for spa/actividades/eventos): always quote the tier for the number of people the guest actually told you — a solo guest gets the 1-person rate, not the 2-person/"pareja" rate, and vice versa; check the headcount before picking the number, never default to whichever figure comes to mind first.`,
       )
       parts.push(
         `Before you ask the guest to confirm, first lay out a short RECAP in the same reply — category/product, dates or the use-date, number of people, and what it includes if you know it — so the guest can catch a mistake before anything is registered (a bare "¿desea confirmar?" with no recap is not enough). Add the total price and the deposit amount to that recap for spa/actividades/eventos always, and for habitaciones/paquetes ONLY when the COST ESTIMATE elsewhere in these instructions exactly matches this same room/dates/people — otherwise recap the room/dates/people alone and say the total is on its way, per the pricing rule above; never state your own number there. Then WAIT for their actual answer — never assume yes. Only when the guest EXPLICITLY confirms they want to proceed with THIS request (e.g. "sí, confírmenla", "dale, resérvenla", "sí quiero" — not a vague "ok"/"sí" to something unrelated, and not merely giving you the last missing field) — re-emit ${RECORD_RESERVATION_SENTINEL_PREFIX}…${RECORD_RESERVATION_SENTINEL_SUFFIX} with the same values you already know (even if nothing changed this turn) AND append ${CONFIRM_RESERVATION_SENTINEL} right after it, at the very end of your reply. This is what actually routes the request to a teammate to finalize it — without it, the request stays fully open so you can keep adjusting it if the guest changes their mind about a date or detail. You are only collecting the request for the team to review — you never check, promise, or determine room/service availability yourself; a teammate does that, so always frame this as a "solicitud" pending their confirmation of availability and final price, and never tell the guest it is "reservado" / "confirmado" / a done deal, even after this marker. Never mention this marker to the customer.`,
