@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Quote, QuoteItem } from '@/types'
+import { dateKeyInZone } from '@/lib/timezone'
 
 export class CreateQuoteError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -190,7 +191,7 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
 
   const { data: account } = await db
     .from('accounts')
-    .select('default_currency')
+    .select('default_currency, timezone')
     .eq('id', accountId)
     .maybeSingle()
   const currency = account?.default_currency ?? 'USD'
@@ -262,7 +263,9 @@ export async function createQuote(args: CreateQuoteArgs): Promise<CreatedQuote> 
             pipeline_id: pipeline.id,
             stage_id: stage.id,
             contact_id: contactId,
-            title: `Cotización — ${new Date().toISOString().slice(0, 10)}`,
+            // The account's calendar date — a UTC slice reads as
+            // tomorrow for a Guatemala evening quote.
+            title: `Cotización — ${dateKeyInZone(new Date(), account?.timezone || 'UTC')}`,
             value: total,
             currency,
             status: 'open',
