@@ -71,6 +71,19 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'draft' })
     expect(p).not.toContain(SET_CONTACT_NAME_SENTINEL_PREFIX)
   })
+
+  // Real incident, 2026-09-23: a live 7-case test found the bot
+  // greeting every guest by their stated name in its own reply text,
+  // but the marker itself fired ZERO times all night (verified against
+  // ai_action_log) — every contact stayed saved under a stale default
+  // name. Strengthened from a one-off conditional to the same
+  // every-single-reply framing already proven reliable for the
+  // temperature marker.
+  it('frames it as an every-single-reply check, same as the temperature marker, and says to record it alongside another marker in the same reply', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(p.toLowerCase()).toContain('on every single reply, separately check')
+    expect(p.toLowerCase()).toContain('with no exceptions for how many other markers this same reply already carries')
+  })
 })
 
 describe('buildSystemPrompt — send_catalog', () => {
