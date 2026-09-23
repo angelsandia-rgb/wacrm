@@ -1,0 +1,32 @@
+-- ============================================================
+-- 147_reservation_guest_confirmed_at.sql — track when a GUEST (not
+-- staff) explicitly confirmed a reservation request, so a later
+-- "reiniciar memoria de la IA" reset on the same conversation can tell
+-- a real confirmed request apart from an abandoned draft.
+--
+-- Real incident found live-testing, 2026-09-23 (7-case QA run, DEMO
+-- Villa San Ricardo): `resetConversationAiState` deletes every
+-- `reservation_requests` row for a conversation whose `status` isn't
+-- 'approved' (see src/lib/conversations/reset-ai.ts) — but `status`
+-- only ever changes via a HUMAN clicking approve/deny in the inbox
+-- (src/app/api/reservations/[id]/route.ts); a guest confirming via
+-- CONFIRM_RESERVATION_SENTINEL never touched it. Result: 6 of 7
+-- guest-confirmed test reservations in the same thread were silently
+-- destroyed by the reset done before starting the next test case, even
+-- though the reset dialog's own text promises "cualquier reservación o
+-- negocio no se ven afectados". In production this means any guest
+-- who confirms a real booking, that staff hasn't reviewed yet, loses
+-- it the moment anyone resets that thread's AI memory for an unrelated
+-- reason.
+--
+-- `guest_confirmed_at`: set by `handOffIfReservationComplete`
+-- (src/lib/ai/auto-reply.ts) the moment CONFIRM_RESERVATION_SENTINEL
+-- fires with every required field present — the same moment the guest
+-- is told "ya tengo lista su solicitud". The reset now also spares any
+-- row with this set, regardless of `status`.
+--
+-- Idempotent.
+-- ============================================================
+
+ALTER TABLE public.reservation_requests
+  ADD COLUMN IF NOT EXISTS guest_confirmed_at TIMESTAMPTZ;

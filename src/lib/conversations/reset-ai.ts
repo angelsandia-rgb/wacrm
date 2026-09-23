@@ -20,8 +20,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * hand-off on the very next question about that category, even though
  * the just-reset conversation never supplied any of that data. A
  * `denied` row carries the same risk (that check has no status
- * filter). Only `approved` rows — a human already confirmed the
- * booking — must survive a reset.
+ * filter). A row survives the reset when EITHER a human already
+ * decided it (`status = 'approved'`) OR the GUEST already explicitly
+ * confirmed it (`guest_confirmed_at` set — see
+ * `handOffIfReservationComplete`) and staff simply hasn't reviewed it
+ * yet. `status` alone used to be the only check here, which was wrong:
+ * a guest confirming a booking never changes `status` (only a human
+ * clicking approve/deny in the inbox does), so it stays `pending`
+ * indefinitely — real incident, 2026-09-23 (7-case live QA run, DEMO
+ * account): 6 of 7 guest-confirmed test reservations in the same
+ * thread were silently deleted by the reset done before starting the
+ * next case, even though this function's own reset dialog promises
+ * "cualquier reservación o negocio no se ven afectados". Only a row
+ * NOBODY ever confirmed — neither the guest nor staff — is truly an
+ * abandoned draft safe to clear.
  *
  * Lives here rather than inline in the route so it can be tested
  * without standing up `requireRole`.
@@ -45,13 +57,15 @@ export async function resetConversationAiState(
     console.error('[reset-ai] failed to end active flow run(s):', flowErr)
   }
 
-  // Best-effort, same reasoning as flow_runs above. Never an approved
-  // (human-confirmed) reservation — see the doc comment.
+  // Best-effort, same reasoning as flow_runs above. Never a row a
+  // human already approved, or one the GUEST already explicitly
+  // confirmed — see the doc comment.
   const { data: clearedDrafts, error: reqErr } = await db
     .from('reservation_requests')
     .delete()
     .eq('conversation_id', args.conversationId)
     .neq('status', 'approved')
+    .is('guest_confirmed_at', null)
     .select('id')
   if (reqErr) {
     console.error('[reset-ai] failed to clear reservation drafts:', reqErr)
