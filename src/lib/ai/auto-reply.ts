@@ -836,7 +836,7 @@ export async function dispatchInboundToAiReply(
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendCategoryBannerVariant, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1249,7 +1249,6 @@ export async function dispatchInboundToAiReply(
             configOwnerUserId,
             conversationId,
             categoryName: bannerCategory.name,
-            variant: resolveBannerVariantFromReservationFields(proposal?.fields ?? {}, bannerCategory.hasWeekendVariant),
             sinceISO: conv.ai_context_reset_at,
           })
         } catch (err) {
@@ -1529,7 +1528,6 @@ export async function dispatchInboundToAiReply(
           configOwnerUserId,
           conversationId,
           categoryName: sendCategoryBannerName,
-          variant: sendCategoryBannerVariant,
           sinceISO: conv.ai_context_reset_at,
         })
       } catch (err) {
@@ -2628,12 +2626,9 @@ const RESERVATION_DMY_DATE = /^(\d{2})\/(\d{2})\/(\d{4})$/
 
 /**
  * Normalizes a `record_reservation` marker date field to YYYY-MM-DD,
- * tolerating the DD/MM/AAAA leak described above. Shared by
- * `autoRecordReservation` (persists the field) and
- * `resolveBannerVariantFromReservationFields` (picks the weekday/
- * weekend category banner from the same raw field) — both read the
- * marker's `entrada`/`fecha` value directly, so both need the same
- * fallback or only one of them silently mis-parses a leaked date.
+ * tolerating the DD/MM/AAAA leak described above. Used by
+ * `autoRecordReservation` to persist entrada/salida/fecha without
+ * silently mis-parsing a leaked date.
  */
 function normalizeReservationDate(v?: string): string | undefined {
   if (!v) return undefined
@@ -3095,56 +3090,40 @@ async function loadHotelCategoryProductNames(
 }
 
 /**
- * Sends a CATEGORY's own banner image (photos + general prices,
+ * Sends a CATEGORY's own banner image(s) (photos + general prices,
  * designed outside the CRM) — for when the guest asks about a whole
  * category rather than one specific room/service. Same matching
  * strategy as `autoSendProductPhoto` (exact, then case-insensitive,
  * then a last-resort containment match only when it resolves to
  * exactly one candidate) against the account's `product_categories`.
  *
- * Two guards beyond the basic lookup:
- *  - `variant` picks `banner_url_weekend` over the default `banner_url`
- *    only when the model asked for 'weekend' AND that field is set;
- *    every other case (no variant, 'weekday', or a category with no
- *    weekend banner) uses the default.
- *  - Never sends the same category's banner twice in one conversation
- *    (Angel, 2026-09-18: guests kept getting it re-sent every time
- *    they mentioned the category again) — checked against
- *    `ai_action_log`, scoped to rows AFTER `sinceISO` so an AI-memory
- *    reset (`ai_context_reset_at`) correctly allows it to send again.
+ * Sends EVERY distinct banner the category has on file — `banner_url`
+ * and, when set, `banner_url_weekend` — never just one. Used to pick
+ * only one of the two by guessing which date (weekday vs weekend) the
+ * guest's stay fell on; Angel, 2026-09-23: guests asking about
+ * habitaciones in general (no date given yet) need to see BOTH price
+ * photos to compare, not have the bot silently guess which one they
+ * meant — and several incidents already showed that guess going wrong
+ * (a leaked DD/MM/AAAA date, an off-by-one weekday). Sending both
+ * removes the guess entirely instead of hardening it further.
+ *
+ * Never sends the same category's banner(s) twice in one conversation
+ * (Angel, 2026-09-18: guests kept getting it re-sent every time they
+ * mentioned the category again) — checked against `ai_action_log`,
+ * scoped to rows AFTER `sinceISO` so an AI-memory reset
+ * (`ai_context_reset_at`) correctly allows it to send again. One log
+ * row covers the whole category regardless of how many images went
+ * out.
  */
-
-/**
- * Weekday/weekend banner variant, resolved from a `record_reservation`
- * proposal's own fields instead of trusting the model to reason about
- * the calendar itself — same rate split the business uses everywhere
- * else (`entrada`/`fecha` falling on Friday or Saturday = the weekend
- * banner). Returns null (→ the default `banner_url`) when the category
- * has no weekend variant at all, or the check-in/use date isn't known
- * yet — never blocks the send just because the date is still missing.
- */
-function resolveBannerVariantFromReservationFields(
-  fields: Record<string, string>,
-  hasWeekendVariant: boolean,
-): 'weekday' | 'weekend' | null {
-  if (!hasWeekendVariant) return null
-  const dateStr = normalizeReservationDate(fields.entrada || fields.fecha)
-  if (!dateStr) return null
-  const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay() // 0=Sun .. 6=Sat
-  if (Number.isNaN(day)) return null
-  return day === 5 || day === 6 ? 'weekend' : 'weekday'
-}
-
 async function autoSendCategoryBanner(args: {
   db: SupabaseClient
   accountId: string
   configOwnerUserId: string
   conversationId: string
   categoryName: string
-  variant: 'weekday' | 'weekend' | null
   sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, categoryName, variant, sinceISO } = args
+  const { db, accountId, configOwnerUserId, conversationId, categoryName, sinceISO } = args
 
   const { data: categories } = await db
     .from('product_categories')
@@ -3172,8 +3151,12 @@ async function autoSendCategoryBanner(args: {
     console.warn(`[ai auto-reply] send_category_banner: no category matches "${categoryName}"`)
     return
   }
-  const bannerUrl = (variant === 'weekend' && category.banner_url_weekend) || category.banner_url
-  if (!bannerUrl) {
+  // Every distinct banner on file, not just one — a category with a
+  // weekend variant identical to its default counts as one image.
+  const bannerUrls = Array.from(
+    new Set([category.banner_url, category.banner_url_weekend].filter((u): u is string => Boolean(u))),
+  )
+  if (bannerUrls.length === 0) {
     console.warn(`[ai auto-reply] send_category_banner: category "${category.name}" has no banner on file`)
     return
   }
@@ -3191,13 +3174,18 @@ async function autoSendCategoryBanner(args: {
   )
   if (alreadySentThisConversation) return
 
-  await sendMessageToConversation(db, accountId, {
-    conversationId,
-    messageType: 'image',
-    mediaUrl: bannerUrl,
-    contentText: category.name,
-    senderType: 'bot',
-  })
+  // Only the first image carries the category name as a caption — same
+  // reasoning as autoSendProductPhoto's gallery below: repeating it on
+  // every photo reads like a glitch, not two deliberate price sheets.
+  for (const [index, bannerUrl] of bannerUrls.entries()) {
+    await sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'image',
+      mediaUrl: bannerUrl,
+      contentText: index === 0 ? category.name : undefined,
+      senderType: 'bot',
+    })
+  }
 
   await db.from('ai_action_log').insert({
     account_id: accountId,
@@ -3205,7 +3193,7 @@ async function autoSendCategoryBanner(args: {
     action: 'send_category_banner',
     target_id: category.id,
     input: { category_name: category.name, conversation_id: conversationId, source: 'auto_reply_autonomous' },
-    result: { category_id: category.id },
+    result: { category_id: category.id, images_sent: bannerUrls.length },
   })
 }
 
