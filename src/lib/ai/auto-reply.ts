@@ -1272,13 +1272,12 @@ export async function dispatchInboundToAiReply(
     }
 
     try {
-      await engineSendText({
+      await sendReplyWithRetry({
         accountId,
         userId: configOwnerUserId,
         conversationId,
         contactId,
         text: outboundText,
-        aiGenerated: true,
       })
     } catch (err) {
       // The clinic appointment mutation above already committed — the
@@ -1847,6 +1846,72 @@ function alertClaimSlotFailed(accountId: string, conversationId: string, err: un
     accountId,
     throttleMinutes: 60,
   })
+}
+
+/** Is `err` from `engineSendText` a transient channel/provider hiccup
+ *  worth retrying (timeout, network blip) as opposed to a permanent
+ *  config/data problem (bad phone, WhatsApp not configured, no Zernio
+ *  conversation yet, recipient not on the allow list) that retrying
+ *  can never fix? Matches the literal timeout messages both channel
+ *  clients throw (`zernio/api.ts`'s `ZERNIO_TIMEOUT_ERROR`, Meta's
+ *  `meta-api.ts`) plus generic network failures. */
+function isRetryableSendError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /timed out|fetch failed|could not reach|network|ECONNRESET|ETIMEDOUT/i.test(message)
+}
+
+/** How many times to retry a channel send that failed transiently,
+ *  before falling through to the caller's alert + hand-off. Override
+ *  with `AI_SEND_MAX_RETRIES`. */
+function aiSendMaxRetries(): number {
+  const raw = Number(process.env.AI_SEND_MAX_RETRIES)
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 1
+}
+
+/** Delay before retrying a failed channel send. Override with
+ *  `AI_SEND_RETRY_DELAY_MS`; 0 keeps the retry but drops the wait
+ *  (used by tests). */
+function aiSendRetryDelayMs(): number {
+  const raw = Number(process.env.AI_SEND_RETRY_DELAY_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 2_000
+}
+
+/**
+ * Sends the AI's already-generated reply, retrying once on a
+ * transient channel failure before giving up — real incident,
+ * 2026-09-23: a Zernio send timeout (the reply itself was already
+ * generated, reading the guest's actual question) immediately paused
+ * the bot and handed off, leaving the guest's message unanswered
+ * until a human noticed the internal note or the guest wrote in again
+ * on their own. The model already did the work; a brief provider
+ * hiccup on the SEND itself shouldn't be the reason nobody sees the
+ * answer. Falls through to the caller's own catch (alert + hand-off)
+ * once retries are exhausted or the failure isn't transient (retrying
+ * "WhatsApp not configured" or a bad phone number would just waste
+ * time before the same, unavoidable hand-off).
+ */
+async function sendReplyWithRetry(args: {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  text: string
+}): Promise<void> {
+  const maxRetries = aiSendMaxRetries()
+  const delayMs = aiSendRetryDelayMs()
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      await engineSendText({ ...args, aiGenerated: true })
+      return
+    } catch (err) {
+      if (!isRetryableSendError(err) || attempt === maxRetries) throw err
+      console.warn(
+        `[ai auto-reply] channel send failed transiently, retry ${attempt + 1}/${maxRetries}:`,
+        err instanceof Error ? err.message : err,
+      )
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
 }
 
 /**
