@@ -9,9 +9,8 @@ const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Baseline security headers applied to every response.
  *
- * CSP is enforced. Development retains `unsafe-eval` for React debugging;
- * production omits it while keeping the inline allowance Next currently
- * needs for hydration. A nonce rollout can remove that final allowance.
+ * Content-Security-Policy is NOT here: it carries a per-request script
+ * nonce, so the proxy sets it (src/proxy.ts + src/lib/security/csp.ts).
  *
  * The rest of the headers are straight blocks, safe to enforce today:
  *   - HSTS: only meaningful on HTTPS (no-op on http://localhost).
@@ -36,34 +35,6 @@ const SECURITY_HEADERS = [
     // the camera / geolocation / etc.
     key: 'Permissions-Policy',
     value: 'camera=(), microphone=(self), geolocation=(), payment=(), usb=()',
-  },
-  {
-    key: 'Content-Security-Policy',
-    value: [
-      "default-src 'self'",
-      // Next.js needs 'unsafe-inline' for its inline hydration script;
-      // 'unsafe-eval' is added in development only (React debugging).
-      // Nonce-based CSP is a later project.
-      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''}`,
-      // Tailwind + inline style attributes on lots of components.
-      "style-src 'self' 'unsafe-inline'",
-      // Supabase public-bucket avatars, contact avatars (arbitrary
-      // https URLs paste-able from the UI), OG images, data URLs for
-      // tiny inline assets.
-      "img-src 'self' data: blob: https:",
-      // Outbound media previews (blob: from MediaRecorder + file picker)
-      // and Supabase public-bucket audio/video the inbox renders.
-      "media-src 'self' blob: https://*.supabase.co",
-      "font-src 'self' data:",
-      "object-src 'none'",
-      "worker-src 'self' blob:",
-      // Supabase REST + realtime (WSS). All Meta API calls happen
-      // server-side, so graph.facebook.com does not belong here.
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join('; '),
   },
 ] as const;
 
@@ -173,14 +144,11 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // Pages are rendered per request with a one-time CSP nonce, so
+        // they must never be served from a shared cache (a cached page
+        // would hand every visitor the same nonce).
         source: '/:path((?!_next/static|_next/image|api).*)',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value:
-              'public, max-age=0, s-maxage=300, stale-while-revalidate=86400',
-          },
-        ],
+        headers: [{ key: 'Cache-Control', value: 'private, no-cache' }],
       },
       {
         // Security headers on every response, including /_next/static

@@ -119,6 +119,35 @@ describe('proxy — refreshed auth cookies survive redirects', () => {
   });
 });
 
+describe('proxy — per-request CSP nonce', () => {
+  const nonceOf = (csp: string | null) => csp?.match(/'nonce-([^']+)'/)?.[1];
+
+  it('sends a fresh script nonce to the browser and the same one to Next', async () => {
+    mockUser = { id: 'user-1' };
+    const a = await proxy(new NextRequest('https://app.test/dashboard'));
+    const b = await proxy(new NextRequest('https://app.test/dashboard'));
+    const nonceA = nonceOf(a.headers.get('content-security-policy'));
+    expect(nonceA).toBeTruthy();
+    expect(nonceOf(b.headers.get('content-security-policy'))).not.toBe(nonceA);
+    // Overridden request headers reach the render as x-middleware-request-*.
+    expect(a.headers.get('x-middleware-request-x-nonce')).toBe(nonceA);
+    expect(a.headers.get('content-security-policy')).not.toMatch(/script-src[^;]*unsafe-inline/);
+  });
+
+  it('keeps the CSP on redirects', async () => {
+    mockUser = null;
+    const res = await proxy(new NextRequest('https://app.test/inbox'));
+    expect(res.headers.get('location')).toContain('/login');
+    expect(nonceOf(res.headers.get('content-security-policy'))).toBeTruthy();
+  });
+
+  it('gives API responses a locked-down policy without a nonce', async () => {
+    mockUser = { id: 'user-1' };
+    const res = await proxy(new NextRequest('https://app.test/api/contacts'));
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'");
+  });
+});
+
 describe('proxy — every dashboard page is auth-gated server-side', () => {
   // Reads the real route group so a new page added under (dashboard)
   // without a matching `protectedPaths` entry fails CI instead of

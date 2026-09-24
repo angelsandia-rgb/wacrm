@@ -17,14 +17,6 @@ export interface Profile {
   email: string;
   avatar_url?: string;
   /**
-   * Legacy free-form role column from migration 001. Never read
-   * by the app since 017_account_sharing.sql introduced the typed
-   * `account_role` enum. Flagged for removal in a later cleanup
-   * migration — kept on the type so existing destructures don't
-   * break.
-   */
-  role: string;
-  /**
    * Opted-in beta feature keys for this account. The column survives
    * for future beta gates; no current feature reads it (Flows was
    * the last user and went to soft-GA in PR #134). Defaults to `[]`

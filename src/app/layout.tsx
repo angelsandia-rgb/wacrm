@@ -3,6 +3,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 import { Inter } from 'next/font/google';
 import Script from 'next/script';
+import { headers } from 'next/headers';
 import './globals.css';
 import { ThemeProvider } from '@/hooks/use-theme';
 import { ThemedToaster } from '@/components/themed-toaster';
@@ -113,6 +114,10 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const locale = await getLocale();
+  // Per-request CSP nonce from the proxy (src/lib/security/csp.ts). Reading
+  // headers() also makes every page dynamically rendered, which a nonce
+  // requires — a statically built page can't carry a fresh one.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   const messages = await getMessages();
 
   return (
@@ -134,6 +139,7 @@ export default async function RootLayout({
       <head>
         <Script
           id="theme-boot"
+          nonce={nonce}
           strategy="beforeInteractive"
           dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
         />

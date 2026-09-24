@@ -119,8 +119,10 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
             <Bot className="text-muted-foreground/60 mb-2 h-8 w-8" />
             <p>Send a message to see how your agent would reply.</p>
             <p className="mt-1 text-xs">
-              It uses your knowledge base and behaves exactly like the
-              auto-reply bot — including handoff.
+              It uses the same prompt, knowledge base, catalog and industry
+              rules as the auto-reply bot — including handoff. It can&apos;t
+              simulate a specific customer&apos;s state (a reservation in
+              progress, an appointment, their saved data).
             </p>
             {onGoToSetup && (
               <Button
