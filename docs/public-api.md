@@ -315,6 +315,7 @@ things happen in your account. **Migration required:** apply
 | `message.status_updated` | A message you sent changed delivery status        |
 | `conversation.created`   | A new conversation is opened for a contact        |
 | `contact.brief_ready`    | A deal is registered for a contact — carries the contact's custom-field values as a spec brief |
+| `csat.received`          | A customer answered a post-sale CSAT survey       |
 
 (Other events — `contact.created`, `contact.lead_temperature_changed`,
 `deal.stage_changed`, `deal.won`, `quote.created`,
@@ -360,14 +361,16 @@ is WhatsApp-only today (Instagram delivery receipts aren't mirrored
 onto outbound webhooks yet):
 
 ```jsonc
-// message.received
-{ "conversation_id": "…", "contact_id": "…", "whatsapp_message_id": "wamid.…", "content_type": "text", "text": "Hi 👋", "channel": "whatsapp" }
+// message.received  (interactive_reply_id is the tapped button/list id, else null)
+{ "conversation_id": "…", "contact_id": "…", "whatsapp_message_id": "wamid.…", "content_type": "text", "text": "Hi 👋", "interactive_reply_id": null, "channel": "whatsapp" }
 // conversation.created
 { "conversation_id": "…", "contact_id": "…", "channel": "instagram" }
 // message.status_updated (WhatsApp only)
 { "whatsapp_message_id": "wamid.…", "conversation_id": "…", "status": "delivered" }
 // contact.brief_ready  (the brief itself is enriched into the connected Google Sheet, not the webhook payload)
 { "contact_id": "…", "deal_id": "…", "source": "automation" }
+// csat.received
+{ "survey_id": "…", "contact_id": "…", "deal_id": "…", "score": 5, "scale": 5, "comment": null }
 ```
 
 Headers: `X-Wacrm-Event`, `X-Wacrm-Webhook-Id`, and `X-Wacrm-Signature`.

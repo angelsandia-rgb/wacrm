@@ -16,6 +16,7 @@ const SHEETABLE_EVENTS = [
   'broadcast.completed',
   'contact.brief_ready',
   'reservation.updated',
+  'csat.received',
 ] as const
 
 /** GET — connection + target-sheet status for the caller's account. */

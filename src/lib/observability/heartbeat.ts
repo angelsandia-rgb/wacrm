@@ -30,6 +30,11 @@ export const HEARTBEATS = {
   // Not an app route: the VPS's nightly pg_dump
   // (scripts/backup/sandia-db-backup.sh) reports through the same RPC.
   db_backup: { expectedIntervalSeconds: 86_400 },
+  // Post-sale CSAT survey sends (migration 153: every 15 min). Watchdog
+  // reads "never" until the pg_cron job is registered — expected.
+  csat_cron: { expectedIntervalSeconds: 900 },
+  // Lead-temperature auto-cool sweep (migration 153: hourly).
+  temperature_sweep_cron: { expectedIntervalSeconds: 3_600 },
 } as const;
 
 export type HeartbeatName = keyof typeof HEARTBEATS;

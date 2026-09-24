@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   answeredConversationCount,
+  csatSummary,
   briefCompletionPercent,
   conversationFirstTimes,
   handoffsAdvancedCount,
@@ -10,6 +11,7 @@ import {
 } from './compute'
 import type {
   ContactExportRow,
+  CsatRow,
   DateWindow,
   KpiDataset,
   LeadRow,
@@ -77,6 +79,20 @@ export async function loadWonDealsInWindow(db: DB, window: DateWindow): Promise<
 export async function countWonDealsInWindow(db: DB, window: DateWindow): Promise<number> {
   const rows = await loadWonDealsInWindow(db, window)
   return rows.length
+}
+
+/** Every post-sale CSAT survey created within `window` — the row set
+ *  behind the satisfaction KPI card. RLS scopes it to the account. */
+export async function loadCsatInWindow(db: DB, window: DateWindow): Promise<CsatRow[]> {
+  return fetchAllRows<CsatRow & { id: string }>(
+    () =>
+      db
+        .from('csat_surveys')
+        .select('id, created_at, status, score, scale')
+        .gte('created_at', window.start.toISOString())
+        .lt('created_at', endExclusive(window.end)),
+    { label: 'kpis csat' },
+  )
 }
 
 /** Every saved spend entry, oldest first — feeds the CAC-history
@@ -322,15 +338,23 @@ export async function loadKpiDataset(
   previousWindow: DateWindow,
   granularity: BucketGranularity,
 ): Promise<KpiDataset> {
-  const [leads, previousLeadsCount, wonDeals, previousWonCount, spendHistory, currentPeriodSpend] =
-    await Promise.all([
-      loadLeadsInWindow(db, window),
-      countLeadsInWindow(db, previousWindow),
-      loadWonDealsInWindow(db, window),
-      countWonDealsInWindow(db, previousWindow),
-      loadSpendHistory(db),
-      loadSpendForWindow(db, window),
-    ])
+  const [
+    leads,
+    previousLeadsCount,
+    wonDeals,
+    previousWonCount,
+    spendHistory,
+    currentPeriodSpend,
+    csatRows,
+  ] = await Promise.all([
+    loadLeadsInWindow(db, window),
+    countLeadsInWindow(db, previousWindow),
+    loadWonDealsInWindow(db, window),
+    countWonDealsInWindow(db, previousWindow),
+    loadSpendHistory(db),
+    loadSpendForWindow(db, window),
+    loadCsatInWindow(db, window),
+  ])
 
   // Needs the lead ids from the batch above, so it runs after.
   const trial = await loadTrialMetrics(
@@ -352,6 +376,7 @@ export async function loadKpiDataset(
     spendHistory,
     currentPeriodSpend,
     trial,
+    csat: csatSummary(csatRows),
   }
 }
 
