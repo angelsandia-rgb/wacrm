@@ -14,14 +14,35 @@ export interface StayForPricing {
   product_id?: string | null
   service_name?: string | null
   guests?: number | null
+  /** Identical rooms (migration 159). null/1 = one room. */
+  rooms?: number | null
   check_in?: string | null
   check_out?: string | null
 }
 
+/** How many rooms a request covers — null/0/garbage count as one. */
+export function roomCount(rooms: number | null | undefined): number {
+  return rooms && Number.isInteger(rooms) && rooms > 1 ? rooms : 1
+}
+
 /**
- * The stay total, or `null` — meaning "a human prices this" — when the
- * product can't be resolved, the guest count is unusable, there are no
- * rates, or any night lacks a published rate.
+ * Guests per room when `guests` (the TOTAL) splits evenly across the
+ * rooms — "2 Premium para 4 personas" → 2 each. `null` when it doesn't
+ * (5 people in 2 rooms): how they split is the guest's call, so a person
+ * prices it instead of us guessing.
+ */
+export function guestsPerRoom(guests: number | null | undefined, rooms: number | null | undefined): number | null {
+  if (!guests || !Number.isInteger(guests) || guests < 1) return null
+  const n = roomCount(rooms)
+  if (guests < n || guests % n !== 0) return null
+  return guests / n
+}
+
+/**
+ * The stay total (all rooms), or `null` — meaning "a human prices this"
+ * — when the product can't be resolved, the guest count is unusable or
+ * doesn't split evenly across the rooms, there are no rates, or any
+ * night lacks a published rate.
  */
 export async function estimateStayPrice(
   db: SupabaseClient,
@@ -29,7 +50,8 @@ export async function estimateStayPrice(
   stay: StayForPricing,
 ): Promise<number | null> {
   if (!stay.check_in || !stay.check_out) return null
-  if (!stay.guests || !Number.isInteger(stay.guests) || stay.guests < 1) return null
+  const perRoom = guestsPerRoom(stay.guests, stay.rooms)
+  if (perRoom === null) return null
 
   const productId = await resolveStayProductId(db, accountId, stay)
   if (!productId) return null
@@ -42,9 +64,9 @@ export async function estimateStayPrice(
   const rates = (rateRows ?? []) as ProductRate[]
   if (rates.length === 0) return null
 
-  const quote = quoteStay(rates, stay.check_in, stay.check_out, occupancyForGuests(stay.guests))
+  const quote = quoteStay(rates, stay.check_in, stay.check_out, occupancyForGuests(perRoom))
   if (quote.nights.length === 0 || quote.missing.length > 0 || quote.total <= 0) return null
-  return quote.total
+  return quote.total * roomCount(stay.rooms)
 }
 
 /** The deposit ("anticipo") owed on a fully-priced stay total, rounded to

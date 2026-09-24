@@ -331,3 +331,29 @@ describe('computeStayEstimateStatus', () => {
     expect(updates).toEqual([{ id: 'rr-1', patch: { estimated_price: 1000 } }])
   })
 })
+
+describe('several rooms (B43)', () => {
+  const PRODUCTS = [{ id: 'p1', name: 'Master Suite Deluxe' }]
+  it('prices every room at its per-room occupancy', async () => {
+    const res = await computeStayEstimateStatus(
+      makeDb({ reservation: { ...RESV, guests: 4, rooms: 2 }, rates: RATES, products: PRODUCTS }),
+      'acct-1', 'cv-1', 'GTQ',
+    )
+    expect(res.status).toBe('priced')
+    if (res.status !== 'priced') return
+    expect(res.total).toBe(1000) // 2 rooms × couple Wed 500
+    expect(res.text).toContain('2 habitaciones × 2 personas')
+    const summary = await loadHotelStayEstimate(
+      makeDb({ reservation: { ...RESV, guests: 4, rooms: 2 }, rates: RATES, products: PRODUCTS }),
+      'acct-1', 'cv-1', 'GTQ',
+    )
+    expect(summary).toMatch(/Total estimado \(2 habitaciones\): .*1.?000/)
+  })
+  it('leaves an uneven split to a person', async () => {
+    const res = await computeStayEstimateStatus(
+      makeDb({ reservation: { ...RESV, guests: 5, rooms: 2 }, rates: RATES, products: PRODUCTS }),
+      'acct-1', 'cv-1', 'GTQ',
+    )
+    expect(res.status).toBe('uneven_rooms')
+  })
+})

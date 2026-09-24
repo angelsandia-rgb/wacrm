@@ -2849,6 +2849,7 @@
     "title": "Requests",
     "approve": "Approve",
     "deny": "Deny",
+    "rooms": "{count} rooms",
     "guests": "{count} {count, plural, =1 {guest} other {guests}}"
   },
   "Clinic": {

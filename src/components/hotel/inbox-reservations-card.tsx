@@ -16,6 +16,7 @@ interface ReservationRow {
   category: ReservationCategory
   service_name: string | null
   guests: number | null
+  rooms?: number | null
   check_in: string | null
   check_out: string | null
   use_date: string | null
@@ -117,6 +118,7 @@ export function InboxReservationsCard({ conversationId }: { conversationId: stri
             </div>
             <div className="text-muted-foreground flex flex-wrap gap-x-2 gap-y-0.5">
               {dateText && <span>{dateText}</span>}
+              {r.rooms != null && r.rooms > 1 && <span>{t('rooms', { count: r.rooms })}</span>}
               {r.guests != null && <span>{t('guests', { count: r.guests })}</span>}
               {r.hall && <span>{r.hall}</span>}
               {r.estimated_price != null && (

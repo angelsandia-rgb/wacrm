@@ -169,7 +169,7 @@ export interface GenerateResult {
    *  masaje" used to lose one of the two — `parseGeneration` now collects
    *  every well-formed marker, capped at 2, latest-wins per category).
    *  `fields` is a partial, Spanish-keyed bag (`servicio`, `personas`,
-   *  `entrada`, `salida`, `fecha`, `minutos`, `salon`, `decoracion`,
+   *  `entrada`, `salida`, `fecha`, `minutos`, `salon`, `decoracion`, `habitaciones`,
    *  `precio`, and `nueva=1` to start a separate booking rather than
    *  extend the current one); `auto-reply.ts` maps and upserts each into
    *  `reservation_requests`. `confirmed` is true when the guest just

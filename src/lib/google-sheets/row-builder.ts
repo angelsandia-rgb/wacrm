@@ -441,6 +441,7 @@ interface ReservationRow {
   category: string
   service_name: string | null
   guests: number | null
+  rooms?: number | null
   check_in: string | null
   check_out: string | null
   use_date: string | null
@@ -450,6 +451,11 @@ interface ReservationRow {
   estimated_price: number | null
   status: string
   contact_id: string | null
+}
+
+/** "Suite Premium (2 habitaciones)" — the room cell for a multi-room request. */
+function withRooms(service: string, rooms: number | null | undefined): string {
+  return rooms && rooms > 1 ? `${service} (${rooms} habitaciones)`.trim() : service
 }
 
 async function buildReservationRow(
@@ -464,7 +470,7 @@ async function buildReservationRow(
   const { data: r } = await db
     .from('reservation_requests')
     .select(
-      'id, category, service_name, guests, check_in, check_out, use_date, duration_minutes, hall, decoration, estimated_price, status, contact_id',
+      'id, category, service_name, guests, rooms, check_in, check_out, use_date, duration_minutes, hall, decoration, estimated_price, status, contact_id',
     )
     .eq('account_id', accountId)
     .eq('id', id)
@@ -489,7 +495,7 @@ async function buildReservationRow(
       break
     case 'paquetes':
       header = ['Registrado', 'Paquete', 'Cliente', 'Contacto', 'Personas', 'Fecha de uso', 'Check-in', 'Check-out', 'Precio estimado', 'Aprobación']
-      values = [nowIso, r.service_name ?? '', contact.name, contact.phone, r.guests ?? '', r.use_date ?? '', r.check_in ?? '', r.check_out ?? '', price, approval]
+      values = [nowIso, withRooms(r.service_name ?? '', r.rooms), contact.name, contact.phone, r.guests ?? '', r.use_date ?? '', r.check_in ?? '', r.check_out ?? '', price, approval]
       break
     case 'eventos':
       header = ['Registrado', 'Tipo de evento', 'Cliente', 'Contacto', 'Fecha del evento', 'Personas', 'Salón', 'Decoración', 'Precio estimado', 'Aprobación']
@@ -498,7 +504,9 @@ async function buildReservationRow(
     case 'habitaciones':
     default:
       header = ['Registrado', 'Habitación', 'Cliente', 'Contacto', 'Huéspedes', 'Check-in', 'Check-out', 'Precio estimado', 'Aprobación']
-      values = [nowIso, r.service_name ?? '', contact.name, contact.phone, r.guests ?? '', r.check_in ?? '', r.check_out ?? '', price, approval]
+      // Several rooms ride on the room cell — no new column, so existing
+      // sheets keep their header (B43).
+      values = [nowIso, withRooms(r.service_name ?? '', r.rooms), contact.name, contact.phone, r.guests ?? '', r.check_in ?? '', r.check_out ?? '', price, approval]
       break
   }
 
