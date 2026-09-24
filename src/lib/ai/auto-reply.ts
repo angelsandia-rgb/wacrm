@@ -49,6 +49,7 @@ import { hasFeature } from '@/lib/features/flags'
 import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
 import { closeLine, hasConflictingAmount, isPastDate, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
+import { formatDateEs } from '@/lib/products/rates'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -177,6 +178,10 @@ const AI_PROVIDER_FALLBACK_TEXT =
  *  human happened to open the thread. Used only as a fallback: if the
  *  model left some text alongside the sentinel anyway, that text is sent
  *  instead (see the call site). */
+/** Words that make an inbound a complaint rather than a question. */
+const COMPLAINT_RE =
+  /\b(sucia|sucio|queja|quejar|reclamo|reclamar|mal servicio|p[eé]simo|horrible|ladrones|estafa|no sirven|decepcion|molest[oa]|asco)\b/i
+
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
 
@@ -1271,7 +1276,11 @@ export async function dispatchInboundToAiReply(
       // 2026-09-24: the model answered that with the catalog link, named
       // no room, and the banner only went out a turn later. Two or more
       // categories in one message is a general question → no banner.
-      const askedCategories = categorySlugsMentioned(latestInbound)
+      // A complaint that merely names a category ("la habitación estaba
+      // sucia") is not a question about it — no promotional banner (test
+      // run 2026-09-24, prueba #22).
+      const isComplaint = COMPLAINT_RE.test(latestInbound ?? '')
+      const askedCategories = isComplaint ? [] : categorySlugsMentioned(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
@@ -3586,6 +3595,51 @@ async function sendStayEstimateFollowUpIfDue(args: {
  * trying to confirm, never a silent no-op behind an already-closing
  * model reply.
  */
+/**
+ * One deterministic clarification when a request's date has already
+ * passed (see `handOffIfReservationComplete`). Deduped per date through
+ * the `reservation_nudge` log (same action the missing-fields nudge uses,
+ * so no CHECK-constraint change is needed).
+ */
+async function sendPastDateClarification(args: {
+  db: SupabaseClient
+  accountId: string
+  configOwnerUserId: string
+  conversationId: string
+  category: ReservationCategory
+  dateISO: string
+  serviceName: string | null
+  sinceISO: string | null
+}): Promise<void> {
+  const { db, accountId, configOwnerUserId, conversationId, category, dateISO, serviceName, sinceISO } = args
+  const signature = `past_date:${category}:${dateISO}`
+  const { data: prior } = await db
+    .from('ai_action_log')
+    .select('input, created_at')
+    .eq('account_id', accountId)
+    .eq('action', 'reservation_nudge')
+    .eq('target_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(5)
+  const already = ((prior ?? []) as { input: { signature?: string } | null; created_at: string }[]).some(
+    (r) => r.input?.signature === signature && (!sinceISO || r.created_at > sinceISO),
+  )
+  if (already) return
+  const what = serviceName?.trim() ? ` para ${serviceName.trim()}` : ''
+  const text =
+    `Una aclaración importante: la fecha que tengo anotada${what} (${formatDateEs(dateISO)}) ya pasó, ` +
+    `así que todavía no la he registrado. ¿Me confirma para qué fecha la desea? Con mucho gusto se la dejo lista. 😊`
+  await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText: text })
+  await db.from('ai_action_log').insert({
+    account_id: accountId,
+    actor_user_id: configOwnerUserId,
+    action: 'reservation_nudge',
+    target_id: conversationId,
+    input: { category, text, signature, source: 'auto_reply_autonomous' },
+    result: { conversation_id: conversationId },
+  })
+}
+
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
   accountId: string
@@ -3632,8 +3686,20 @@ async function handOffIfReservationComplete(args: {
     return
   }
 
-  const dated = row as { check_in?: string | null; use_date?: string | null }
-  if (isPastDate(dated.check_in ?? dated.use_date ?? null, todayISO)) return
+  const dated = row as { check_in?: string | null; use_date?: string | null; service_name?: string | null }
+  const pastDate = dated.check_in ?? dated.use_date ?? null
+  if (isPastDate(pastDate, todayISO)) {
+    // Never close it — and never leave the guest believing it was
+    // registered: the model tends to write "le registro su solicitud"
+    // anyway (re-test 2026-09-24, prueba #24). Ask once per date.
+    await sendPastDateClarification({
+      db, accountId, configOwnerUserId, conversationId, category,
+      dateISO: pastDate as string,
+      serviceName: dated.service_name ?? null,
+      sinceISO,
+    })
+    return
+  }
 
   // Implicit close: every field is known and the bot's own reply this turn
   // doesn't ask anything, so per the CLOSING protocol that reply WAS the

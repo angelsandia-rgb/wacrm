@@ -3634,6 +3634,12 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
+    // …and the guest is told, instead of believing it was registered.
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: expect.stringContaining('ya pasó') }),
+    )
   })
 
   it('does not notify the team twice when a follow-up turn re-emits the confirm marker for an already-sent request', async () => {

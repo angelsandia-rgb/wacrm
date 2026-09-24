@@ -18,6 +18,7 @@ describe('stripTrailingPermissionQuestion', () => {
       'Total GTQ 1,160.',
     )
     expect(stripTrailingPermissionQuestion('Así queda. ¿Desea que deje esta solicitud lista?')).toBe('Así queda.')
+    expect(stripTrailingPermissionQuestion('Se lo dejo anotado. ¿Desea que también le conecte con alguien del equipo?')).toBe('Se lo dejo anotado.')
     expect(stripTrailingPermissionQuestion('¿Le gustaría que le deje anotada la solicitud para el 11/10/2026 por la mañana?')).toBe('')
   })
 
