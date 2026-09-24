@@ -1,7 +1,38 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { API_CSP, NONCE_HEADER, buildCsp, generateNonce } from '@/lib/security/csp';
 
+/**
+ * Per-request Content-Security-Policy. Pages get a fresh nonce, handed to
+ * Next.js through the request's CSP header (it stamps the nonce on its own
+ * scripts) and to our root layout through `x-nonce`; API responses get a
+ * locked-down policy. Set on every response this proxy returns, redirects
+ * included. See src/lib/security/csp.ts.
+ */
 export async function proxy(request: NextRequest) {
+  const isApi = request.nextUrl.pathname.startsWith('/api/');
+  const nonce = isApi ? null : generateNonce();
+  const csp = nonce ? buildCsp(nonce) : API_CSP;
+
+  // Built lazily so it picks up any cookie the Supabase refresh wrote
+  // onto `request` before the response is created.
+  const next = () => {
+    if (!nonce) return NextResponse.next({ request });
+    const headers = new Headers(request.headers);
+    headers.set(NONCE_HEADER, nonce);
+    headers.set('content-security-policy', csp);
+    return NextResponse.next({ request: { headers } });
+  };
+
+  const response = await route(request, next);
+  response.headers.set('Content-Security-Policy', csp);
+  return response;
+}
+
+async function route(
+  request: NextRequest,
+  next: () => NextResponse,
+): Promise<NextResponse> {
   // /api/health is the container's own liveness/readiness probe (see the
   // Dockerfile HEALTHCHECK and the external uptime monitor). It must
   // never depend on anything below this line: the canonical-host
@@ -14,7 +45,7 @@ export async function proxy(request: NextRequest) {
   // that took the whole site down before (see git blame on this file:
   // #134, #135). Bypass everything else and let the route handler run.
   if (request.nextUrl.pathname === '/api/health') {
-    return NextResponse.next({ request });
+    return next();
   }
 
   // Canonical host. EasyPanel serves the app on every attached domain
@@ -56,7 +87,7 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  let supabaseResponse = NextResponse.next({ request });
+  let supabaseResponse = next();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,7 +101,7 @@ export async function proxy(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
-          supabaseResponse = NextResponse.next({ request });
+          supabaseResponse = next();
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           );

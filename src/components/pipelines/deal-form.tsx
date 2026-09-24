@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import { useAuth } from "@/hooks/use-auth";
 import { CURRENCIES } from "@/lib/currency";
 import type {
@@ -118,12 +119,16 @@ export function DealForm({
     if (!open || !accountId) return;
     let cancelled = false;
     (async () => {
+      // Contacts paged past the 1000-row cap so every contact is pickable.
       const [c, p] = await Promise.all([
-        supabase.from("contacts").select("*").order("name"),
+        fetchAllRows<Contact>(() => supabase.from("contacts").select("*"), {
+          label: "deal form contacts",
+          maxRows: 200_000,
+        }).catch(() => [] as Contact[]),
         supabase.from("profiles").select("*").eq("account_id", accountId).order("full_name"),
       ]);
       if (cancelled) return;
-      setContacts((c.data ?? []) as Contact[]);
+      setContacts(c.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")));
       setProfiles((p.data ?? []) as Profile[]);
     })();
     return () => {

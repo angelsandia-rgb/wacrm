@@ -112,15 +112,21 @@ export default function PipelinesPage() {
   }, [supabase]);
 
   const loadContacts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('id, name, phone, instagram_username, lead_temperature')
-      .order('updated_at', { ascending: false });
-    if (error) {
-      console.error('Failed to load contacts:', error.message);
+    // Paged: the deal cards resolve their contact from this list, so a
+    // capped read left deals of older contacts without a name.
+    try {
+      const rows = await fetchAllRows<Contact & { updated_at: string }>(
+        () =>
+          supabase
+            .from('contacts')
+            .select('id, name, phone, instagram_username, lead_temperature, updated_at'),
+        { label: 'pipeline contacts', maxRows: 200_000 },
+      );
+      return rows.sort((a, b) => b.updated_at.localeCompare(a.updated_at)) as Contact[];
+    } catch (err) {
+      console.error('Failed to load contacts:', err instanceof Error ? err.message : err);
       return [];
     }
-    return (data ?? []) as Contact[];
   }, [supabase]);
 
   const loadStages = useCallback(

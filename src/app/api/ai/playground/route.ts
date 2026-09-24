@@ -6,7 +6,9 @@ import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { loadCatalogContext } from '@/lib/ai/catalog-context'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
-import { describeNowInZone } from '@/lib/timezone'
+import { describeNowInZone, describeUpcomingWeekdaysInZone } from '@/lib/timezone'
+import { loadQuickReplyContext } from '@/lib/ai/quick-reply-context'
+import { loadHotelCategoryBanners } from '@/lib/ai/auto-reply'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 import { loadBusinessMetrics, metricsGrounding } from '@/lib/ai/business-metrics'
@@ -17,12 +19,18 @@ const MAX_TURNS = 20
 /**
  * POST /api/ai/playground  (agent+)
  *
- * Test-chat with the account's agent WITHOUT touching WhatsApp. Runs the
- * exact same path the auto-reply bot uses — knowledge-base retrieval +
- * `auto_reply` system prompt + the configured provider — so what you see
- * here is what a real customer would get. Reads the config even when the
- * master switch is off (requireActive:false) so you can try it before
- * going live. Stateless: the client sends the running transcript each turn.
+ * Test-chat with the account's agent WITHOUT touching WhatsApp. Builds the
+ * `auto_reply` system prompt with the same ACCOUNT-level context the live
+ * bot uses — knowledge base, catalog + delivery mode, quick replies, the
+ * industry vertical (hotel reservation markers, category banners and the
+ * first-reply welcome; clinic guardrails), restaurant menu, timezone — so a
+ * prompt change can be tested before it reaches customers. What it can't
+ * simulate is CONVERSATION-level state (a reservation in progress, a stay
+ * estimate, the patient's appointment, facts known about a real contact,
+ * the flow directive), since there is no real conversation. Markers the
+ * model emits are returned as-is so they can be inspected. Reads the
+ * config even when the master switch is off (requireActive:false).
+ * Stateless: the client sends the running transcript each turn.
  */
 export async function POST(request: Request) {
   try {
@@ -83,17 +91,36 @@ export async function POST(request: Request) {
     )
     const metrics = await loadBusinessMetrics(supabase, accountId)
     const catalog = await loadCatalogContext(supabase, accountId)
-    const { data: acctTz } = await supabase
+    const { data: account } = await supabase
       .from('accounts')
-      .select('timezone')
+      .select('timezone, industry_vertical, catalog_delivery_mode, restaurant_menu_url')
       .eq('id', accountId)
       .maybeSingle()
+    const timeZone = (account?.timezone as string | null | undefined)?.trim() || 'UTC'
+    const isHotel = account?.industry_vertical === 'hotel'
+    const isClinic = account?.industry_vertical === 'clinica'
+    const [quickReplies, hotelCategoryBanners] = await Promise.all([
+      loadQuickReplyContext(supabase, accountId).catch(() => null),
+      isHotel ? loadHotelCategoryBanners(supabase, accountId).catch(() => []) : Promise.resolve([]),
+    ])
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
       catalog,
-      currentDate: describeNowInZone((acctTz?.timezone as string | null | undefined) || 'UTC'),
+      catalogDeliveryMode:
+        (account?.catalog_delivery_mode as 'digital' | 'pdf' | 'photos' | undefined) ?? 'digital',
+      quickReplies,
+      askCustomerTaxInfo: config.askCustomerTaxInfo,
+      hotelReservations: isHotel,
+      restaurantMenu: Boolean((account?.restaurant_menu_url as string | null | undefined)?.trim()),
+      hotelCategoryBanners,
+      // Same rule as the live bot: no assistant turn yet = first reply.
+      hotelIsFirstReply: isHotel && !messages.some((m) => m.role === 'assistant'),
+      clinicGuardrails: isClinic,
+      currentDate: describeNowInZone(timeZone),
+      upcomingWeekdays: describeUpcomingWeekdaysInZone(timeZone),
     }) + metricsGrounding(metrics)
 
     const { text, handoff } = await generateReply({ config, systemPrompt, messages })

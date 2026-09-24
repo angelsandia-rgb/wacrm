@@ -3076,7 +3076,7 @@ async function autoSendProductPhoto(args: {
  *  weekday/weekend variant before sending. Empty for a non-hotel
  *  account (never called) or a hotel account that hasn't uploaded any
  *  category banners yet. */
-async function loadHotelCategoryBanners(
+export async function loadHotelCategoryBanners(
   db: SupabaseClient,
   accountId: string,
 ): Promise<{ name: string; hasWeekendVariant: boolean }[]> {

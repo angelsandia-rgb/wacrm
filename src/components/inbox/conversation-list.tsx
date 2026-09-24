@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllRows } from "@/lib/supabase/fetch-all";
 import {
   CONVERSATION_SELECT,
   matchesContactFilters,
@@ -110,24 +111,37 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
-
-      if (cancelled) return;
-
-      if (error) {
+      // Paged past PostgREST's 1000-row cap: every inbox filter and the
+      // search run client-side over this list, so a capped read silently
+      // dropped the oldest conversations from the inbox AND from search.
+      // (Server-side pagination would mean moving all of those filters
+      // server-side — worth it only at several thousand conversations.)
+      let data: Parameters<typeof normalizeConversations>[0];
+      try {
+        data = await fetchAllRows(
+          () => supabase.from("conversations").select(CONVERSATION_SELECT),
+          { label: "inbox conversations", maxRows: 100_000 },
+        );
+      } catch (error) {
+        if (cancelled) return;
         // Supabase errors have non-enumerable properties — log fields explicitly
+        const e = error as { message?: string; details?: string; hint?: string; code?: string };
         console.error("Failed to fetch conversations:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
+          message: e.message,
+          details: e.details,
+          hint: e.hint,
+          code: e.code,
         });
         setLoading(false);
         return;
       }
+
+      if (cancelled) return;
+      // Newest activity first (pages arrive in id order); never-messaged
+      // rows sort last and are filtered out just below anyway.
+      data.sort((a, b) =>
+        (b.last_message_at ?? "").localeCompare(a.last_message_at ?? ""),
+      );
 
       // Hide conversations that have never carried a message. The
       // WhatsApp-via-Zernio webhook creates a bare conversation on the
