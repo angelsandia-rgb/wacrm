@@ -4,6 +4,9 @@ import type { ChatMessage } from './types'
  *  keeps the internal note to a glanceable one-liner. */
 const MAX_QUOTE_LEN = 160
 
+/** Shorter than this, a message is a bare acknowledgement ("sí", "ok"). */
+const MIN_SUBSTANTIVE_LEN = 12
+
 /**
  * Build the short internal note the auto-reply bot leaves on a
  * conversation when it hands off to a human. Deterministic — composed
@@ -40,7 +43,16 @@ export function buildHandoffSummary(args: {
   if (!lastCustomer) return base
 
   const quote = truncate(lastCustomer.content.trim(), MAX_QUOTE_LEN)
-  return `${base} Último mensaje del cliente: “${quote}”`
+  const last = `${base} Último mensaje del cliente: “${quote}”`
+  // A bare "sí" / "ok" says nothing about WHY — add the customer's last
+  // substantive message (test run 2026-09-24: a payment request handed
+  // off with only “si” in the note).
+  if (lastCustomer.content.trim().length > MIN_SUBSTANTIVE_LEN) return last
+  const reason = [...messages]
+    .reverse()
+    .find((m) => m !== lastCustomer && m.role === 'user' && m.content.trim().length > MIN_SUBSTANTIVE_LEN)
+  if (!reason) return last
+  return `${last} Motivo: “${truncate(reason.content.trim(), MAX_QUOTE_LEN)}”`
 }
 
 function truncate(text: string, max: number): string {

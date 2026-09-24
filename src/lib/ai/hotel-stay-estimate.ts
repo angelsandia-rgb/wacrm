@@ -175,6 +175,9 @@ export async function computeStayEstimateStatus(
   conversationId: string,
   currency: string,
   depositPercent = 50,
+  /** Business-local YYYY-MM-DD: a stay starting before it is never priced
+   *  (test run 2026-09-24 — past dates were quoted and sent). */
+  todayISO?: string,
 ): Promise<StayEstimateStatus> {
   const { data: rr } = await db
     .from('reservation_requests')
@@ -190,6 +193,7 @@ export async function computeStayEstimateStatus(
     .maybeSingle<ReservationRow>()
   if (!rr || !rr.check_in || !rr.check_out) return { status: 'incomplete' }
   if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return { status: 'incomplete' }
+  if (todayISO && rr.check_in < todayISO) return { status: 'incomplete' }
 
   const occupancy = occupancyForGuests(rr.guests)
   if (occupancy === null) return { status: 'too_large_group' }
