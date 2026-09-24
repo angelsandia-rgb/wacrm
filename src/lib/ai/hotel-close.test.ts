@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   closeLine,
+  isStillAsking,
+  stripTrailingAttachmentOffer,
   hasConflictingAmount,
   isPastDate,
   mentionedAmounts,
@@ -58,5 +60,30 @@ describe('closeLine', () => {
     const lines = [0, 1, 2, 3].map(closeLine)
     expect(new Set(lines).size).toBe(3)
     for (const l of lines) expect(l).not.toContain('?')
+  })
+})
+
+describe('statement-form offers, imperative asks and attachment offers (re-tests 2026-09-24)', () => {
+  it('strips a trailing "Si desea, le dejo la solicitud lista…" offer', () => {
+    expect(
+      stripTrailingPermissionQuestion(
+        'El sábado aplica la tarifa recreativa. Si desea, le dejo la solicitud lista para que el equipo le confirme disponibilidad y el total.',
+      ),
+    ).toBe('El sábado aplica la tarifa recreativa.')
+    expect(stripTrailingPermissionQuestion('Queda anotado para el 20/10. Nuestro equipo le escribirá.')).toBeNull()
+  })
+
+  it('treats an imperative request as still asking (prueba #36)', () => {
+    expect(isStillAsking('Para dejarla bien registrada, por favor compárteme el nombre de la empresa y el NIT.')).toBe(true)
+    expect(isStillAsking('Indíqueme la fecha, por favor.')).toBe(true)
+    expect(isStillAsking('¿Para cuántas personas?')).toBe(true)
+    expect(isStillAsking('Queda registrada su solicitud; en breve le escribimos.')).toBe(false)
+  })
+
+  it('drops "si gusta, le comparto el menú" when the menu is being sent (pruebas #3/#44)', () => {
+    expect(
+      stripTrailingAttachmentOffer('El almuerzo es de 12:00 a 17:00. Si gusta, también le comparto el menú completo.'),
+    ).toBe('El almuerzo es de 12:00 a 17:00.')
+    expect(stripTrailingAttachmentOffer('El almuerzo es de 12:00 a 17:00.')).toBeNull()
   })
 })

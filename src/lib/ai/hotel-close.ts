@@ -15,17 +15,55 @@
 const PERMISSION_QUESTION_RE =
   /¿\s*(?:le\s+gustar[ií]a|desea|quiere|gusta|le\s+parece|me\s+permite|puedo|lo|la)\b[^?¿]*\b(?:dej(?:e|o|emos|arla|arlo|ársela|ársel[oa])|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*|agend\w*|proceder|avanz\w*|lista|listo|conect\w*|comuni\w*)\b[^?¿]*\?\s*$/i
 
+/** The same permission offer written as a statement: "Si desea, le dejo
+ *  la solicitud lista para que el equipo…" (re-tests 2026-09-24, pruebas
+ *  #29/#45/#46 — no "?", so the question form above never caught it). */
+const PERMISSION_OFFER_RE =
+  /(?:^|[.!\n]\s*)(si\s+(?:lo\s+)?(?:desea|gusta|le\s+parece|quiere|prefiere)\b[^.!?\n]*\b(?:dej\w*|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*)\b[^.!?\n]*[.!]?)\s*$/i
+
 /**
- * When `text` ends in a permission-only question, returns the text
- * without it (trimmed). Returns null when the ending is anything else —
- * a real question for missing data, or no question at all.
+ * When `text` ends in a permission-only question or offer, returns the
+ * text without it (trimmed). Returns null when the ending is anything
+ * else — a real question for missing data, or no offer at all.
  */
 export function stripTrailingPermissionQuestion(text: string): string | null {
   const trimmed = text.trimEnd()
   const match = trimmed.match(PERMISSION_QUESTION_RE)
-  if (!match || match.index === undefined) return null
-  const before = trimmed.slice(0, match.index).trimEnd()
-  return before
+  if (match && match.index !== undefined) return trimmed.slice(0, match.index).trimEnd()
+  const offer = trimmed.match(PERMISSION_OFFER_RE)
+  if (offer && offer.index !== undefined) {
+    const cut = trimmed.length - offer[1].length
+    return trimmed.slice(0, cut).trimEnd()
+  }
+  return null
+}
+
+/** The last two sentences ask the guest for something ("por favor
+ *  compárteme el NIT", "indíqueme la fecha") without a "?" — still asking,
+ *  so never an implicit close (re-test 2026-09-24, prueba #36). */
+const IMPERATIVE_ASK_RE =
+  /\b(?:comp[aá]rt[ae]me|comp[aá]rtame|ind[ií]qu[ea]me|ind[ií]queme|d[ií]game|dime|env[ií][ea]me|conf[ií]rme(?:me)?|conf[ií]rmeme|p[aá]seme|me\s+(?:comparte|indica|confirma|dice|env[ií]a|ayuda\s+con)|por\s+favor\s+(?:me\s+)?(?:comp|ind|env|conf|dig))/i
+
+/** True when the reply still asks the guest something — a "?" at the end
+ *  or an imperative request in its last two sentences. */
+export function isStillAsking(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.endsWith('?')) return true
+  const sentences = trimmed.split(/(?<=[.!?\n])\s+/).filter(Boolean)
+  return IMPERATIVE_ASK_RE.test(sentences.slice(-2).join(' '))
+}
+
+/** A trailing "si gusta, (también) le comparto el menú/catálogo…" when the
+ *  system is sending that very attachment this turn — it reads as an offer
+ *  the attachment then contradicts (pruebas #3/#44). */
+const ATTACHMENT_OFFER_RE =
+  /(?:^|[.!\n]\s*)(si\s+(?:lo\s+)?(?:desea|gusta|quiere|le\s+parece)[^.!?\n]*\b(?:compart\w*|env[ií]\w*|mand\w*)\b[^.!?\n]*\b(?:men[uú]|carta|cat[aá]logo)[^.!?\n]*[.!?]?)\s*$/i
+
+export function stripTrailingAttachmentOffer(text: string): string | null {
+  const trimmed = text.trimEnd()
+  const m = trimmed.match(ATTACHMENT_OFFER_RE)
+  if (!m || m.index === undefined) return null
+  return trimmed.slice(0, trimmed.length - m[1].length).trimEnd()
 }
 
 const CLOSE_LINES = [
