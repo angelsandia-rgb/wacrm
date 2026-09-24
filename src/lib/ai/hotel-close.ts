@@ -13,7 +13,7 @@
 /** A trailing question that only asks permission to register / confirm /
  *  book what is already complete — never one that asks for information. */
 const PERMISSION_QUESTION_RE =
-  /¿\s*(?:le\s+gustar[ií]a|desea|quiere|gusta|le\s+parece|me\s+permite|puedo|lo|la)\b[^?¿]*\b(?:dej(?:e|o|emos|arla|arlo|ársela|ársel[oa])|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*|agend\w*|proceder|avanz\w*|lista|listo)\b[^?¿]*\?\s*$/i
+  /¿\s*(?:le\s+gustar[ií]a|desea|quiere|gusta|le\s+parece|me\s+permite|puedo|lo|la)\b[^?¿]*\b(?:dej(?:e|o|emos|arla|arlo|ársela|ársel[oa])|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*|agend\w*|proceder|avanz\w*|lista|listo|conect\w*|comuni\w*)\b[^?¿]*\?\s*$/i
 
 /**
  * When `text` ends in a permission-only question, returns the text

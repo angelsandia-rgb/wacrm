@@ -40,11 +40,10 @@ export function missingReservationFields(row: ReservationFieldSnapshot): string[
     if (!row.use_date) missing.push('la fecha')
   }
   if (!row.guests) missing.push('el número de personas')
-  // The hall only when nothing names the venue yet: a hotel with a single
-  // "Salón de Eventos" records it as the service (test run 2026-09-24:
-  // a complete wedding request never reached the team, and the guest got
-  // "¿me ayuda con el salón que le interesa?" right after the close).
-  if (row.category === 'eventos' && !row.hall && !row.service_name) missing.push('el salón que le interesa')
+  // No hall requirement: most hotels have one venue and the team picks it
+  // anyway. Requiring it silently kept complete event requests from ever
+  // reaching the team (test runs 2026-09-24, pruebas #9 and #25) — the
+  // model rarely names a hall, and the guest was told it was registered.
   return missing
 }
 

@@ -46,12 +46,12 @@ describe('missingReservationFields', () => {
     ).toEqual([])
   })
 
-  it('eventos additionally needs the hall', () => {
+  it('eventos needs date and people only — no hall (test run 2026-09-24: requiring it dropped complete requests)', () => {
     expect(missingReservationFields({ category: 'eventos' })).toEqual([
       'la fecha',
       'el número de personas',
-      'el salón que le interesa',
     ])
+    expect(missingReservationFields({ category: 'eventos', use_date: '2027-03-13', guests: 120 })).toEqual([])
     expect(
       missingReservationFields({
         category: 'eventos',
