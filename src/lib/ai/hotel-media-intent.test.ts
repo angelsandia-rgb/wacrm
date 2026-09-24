@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
+import { isLocationQuestion, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -86,5 +86,51 @@ describe('categorySlugsMentioned', () => {
     expect(categorySlugsMentioned('¿qué tienen de spa?')).toEqual(['spa'])
     expect(categorySlugsMentioned('quiero una habitación y un masaje')).toEqual(['habitaciones', 'spa'])
     expect(categorySlugsMentioned('hola')).toEqual([])
+  })
+})
+
+describe('isLocationQuestion', () => {
+  it('detects location asks, typos and English included', () => {
+    expect(isLocationQuestion('donde kedan, aseptan perritos')).toBe(true)
+    expect(isLocationQuestion('¿Cuál es la ubicación?')).toBe(true)
+    expect(isLocationQuestion('como llego desde la capital')).toBe(true)
+    expect(isLocationQuestion('Where are you located?')).toBe(true)
+  })
+  it('ignores unrelated questions', () => {
+    expect(isLocationQuestion('¿cuánto cuesta la suite premium?')).toBe(false)
+    expect(isLocationQuestion(null)).toBe(false)
+  })
+})
+
+describe('mapsLinkIn', () => {
+  it('returns the first maps link, without trailing punctuation', () => {
+    expect(mapsLinkIn('Mapa: https://maps.app.goo.gl/GWeJEpN8SaPGXqNU7.\nWeb: https://x.com')).toBe(
+      'https://maps.app.goo.gl/GWeJEpN8SaPGXqNU7',
+    )
+    expect(mapsLinkIn('sin enlace')).toBeNull()
+  })
+})
+
+describe('isMedicalCaution', () => {
+  it('flags health questions and medical-caution replies', () => {
+    expect(isMedicalCaution('¿La reflexología es segura con 6 meses de embarazo?')).toBe(true)
+    expect(isMedicalCaution('info del masaje', 'Le recomiendo consultarlo con su médico.')).toBe(true)
+    expect(isMedicalCaution('Soy alérgica a los aceites')).toBe(true)
+  })
+  it('leaves ordinary questions alone', () => {
+    expect(isMedicalCaution('¿cuánto cuesta el masaje relajante?', 'Cuesta Q300 por persona.')).toBe(false)
+  })
+})
+
+describe('isPaymentRequest', () => {
+  it('detects payment and deposit asks', () => {
+    expect(isPaymentRequest('Me pasa el número de cuenta para el anticipo?')).toBe(true)
+    expect(isPaymentRequest('¿cómo puedo pagar?')).toBe(true)
+    expect(isPaymentRequest('Aceptan transferencia?')).toBe(true)
+    expect(isPaymentRequest('How do I pay the deposit?')).toBe(true)
+  })
+  it('ignores price questions', () => {
+    expect(isPaymentRequest('¿cuánto cuesta la suite premium?')).toBe(false)
+    expect(isPaymentRequest('¿de cuánto es el anticipo?')).toBe(false)
   })
 })

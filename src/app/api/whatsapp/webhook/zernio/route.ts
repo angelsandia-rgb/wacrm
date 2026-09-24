@@ -13,6 +13,7 @@ import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { handleStatusUpdate } from '@/app/api/whatsapp/webhook/route'
 import { handleTemplateWebhookChange } from '@/lib/whatsapp/template-webhook'
 import { handleOutboundEchoMessageForZernioConversation } from '@/lib/messaging/dm-inbound'
+import { inboundCreatedAt } from '@/lib/messaging/inbound-timestamp'
 
 // Same reasoning as the other Zernio webhook routes: after() can fan
 // out to several DB round-trips per inbound message.
@@ -83,6 +84,9 @@ interface ZernioWebhookMessage {
    * actually distinguishes the two, not `direction`.
    */
   source?: string
+  /** Platform-side time of the message, when Zernio includes it. */
+  createdAt?: string
+  timestamp?: string | number
 }
 
 interface ZernioWebhookAccount {
@@ -127,6 +131,8 @@ interface ZernioWebhookPayload {
   error?: { code?: string; title?: string; message?: string } | null
   /** `message.sent` fallback — some Zernio events carry `source` on the envelope rather than nested under `message`. */
   source?: string
+  /** When Zernio built the event (kept across retries) — see `inboundCreatedAt`. */
+  timestamp?: string
 }
 
 export async function POST(request: Request) {
@@ -307,7 +313,7 @@ async function processZernioEvent(payload: ZernioWebhookPayload, config: any) {
   const message = payload.message
   if (message.direction !== 'incoming') return
 
-  await processInboundMessage(message, config)
+  await processInboundMessage(message, config, payload.timestamp)
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -507,7 +513,7 @@ function toContentType(attachmentType: string): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function processInboundMessage(message: ZernioWebhookMessage, config: any) {
+async function processInboundMessage(message: ZernioWebhookMessage, config: any, eventTimestamp?: string) {
   const accountId = config.account_id
   const configOwnerUserId = config.user_id
   const senderPhone = normalizePhone(message.sender.phoneNumber || message.sender.id)
@@ -608,6 +614,9 @@ async function processInboundMessage(message: ZernioWebhookMessage, config: any)
         media_url: mediaUrl,
         message_id: message.platformMessageId,
         status: 'delivered',
+        // Provider time, not webhook arrival: a burst can reach us out of
+        // order (test run 2026-09-24, B50). Omitted → DB default now().
+        created_at: inboundCreatedAt([message.timestamp, message.createdAt, eventTimestamp]),
       },
       { onConflict: 'conversation_id,message_id', ignoreDuplicates: true },
     )

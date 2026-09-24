@@ -21,21 +21,40 @@ const PERMISSION_QUESTION_RE =
 const PERMISSION_OFFER_RE =
   /(?:^|[.!\n]\s*)(si\s+(?:lo\s+)?(?:desea|gusta|le\s+parece|quiere|prefiere)\b[^.!?\n]*\b(?:dej\w*|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*)\b[^.!?\n]*[.!]?)\s*$/i
 
-/**
- * When `text` ends in a permission-only question or offer, returns the
- * text without it (trimmed). Returns null when the ending is anything
- * else — a real question for missing data, or no offer at all.
- */
-export function stripTrailingPermissionQuestion(text: string): string | null {
-  const trimmed = text.trimEnd()
+/** "Quedo atenta para registrar las fechas." with every field already
+ *  known — the bot waiting on a go-ahead nobody needs to give, so the
+ *  request never closed and the team was never told (test run
+ *  2026-09-24, prueba #40 / B51). */
+const WAITING_TO_REGISTER_RE =
+  /(?:^|[.!\n]\s*)((?:quedo|me\s+quedo|estoy|quedamos)\s+(?:muy\s+)?atent[ao]s?\b[^.!?\n]*\b(?:dej\w*|registr\w*|anot\w*|reserv\w*|confirm\w*|apart\w*|agend\w*)\b[^.!?\n]*[.!]?)\s*$/i
+
+function stripOnce(trimmed: string): string | null {
   const match = trimmed.match(PERMISSION_QUESTION_RE)
   if (match && match.index !== undefined) return trimmed.slice(0, match.index).trimEnd()
-  const offer = trimmed.match(PERMISSION_OFFER_RE)
-  if (offer && offer.index !== undefined) {
-    const cut = trimmed.length - offer[1].length
-    return trimmed.slice(0, cut).trimEnd()
+  for (const re of [PERMISSION_OFFER_RE, WAITING_TO_REGISTER_RE]) {
+    const offer = trimmed.match(re)
+    if (offer && offer.index !== undefined) return trimmed.slice(0, trimmed.length - offer[1].length).trimEnd()
   }
   return null
+}
+
+/**
+ * When `text` ends in a permission-only question or offer (or a "quedo
+ * atenta para registrarla" wait), returns the text without it (trimmed)
+ * — repeatedly, since the model sometimes stacks two ("Quedo atenta para
+ * registrarla. ¿Desea que se la deje lista?"). Returns null when the
+ * ending is anything else — a real question for missing data, or no
+ * offer at all.
+ */
+export function stripTrailingPermissionQuestion(text: string): string | null {
+  let current = text.trimEnd()
+  let stripped: string | null = null
+  for (let i = 0; i < 3; i += 1) {
+    const next = stripOnce(current)
+    if (next === null) break
+    stripped = current = next
+  }
+  return stripped
 }
 
 /** The last two sentences ask the guest for something ("por favor

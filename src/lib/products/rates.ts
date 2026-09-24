@@ -163,10 +163,18 @@ export function resolveNightlyRate(
 ): number | null {
   if (occupancy === null) return null
   const day = dayOfWeekOf(nightISO)
+  const valid = (r: ProductRate) => r.day_of_week === day && Number.isFinite(r.price) && r.price > 0
+  // A season that prices THIS night (any tier) owns it entirely: a tier
+  // it leaves out must never borrow the cheaper always-on rate. Real
+  // case, Villa San Ricardo high season (2026-09-24): the season lists
+  // 2–3 guests for the Junior Suite but not 4 — a 4-guest Semana Santa
+  // stay would otherwise have been quoted at the normal weekend rate.
+  const seasonalForDay = rates.filter((r) => valid(r) && seasonContains(r, nightISO))
+  const pool = seasonalForDay.length
+    ? seasonalForDay
+    : rates.filter((r) => valid(r) && !r.date_from && !r.date_to)
   const tryOccupancy = (occ: Occupancy): number | null | 'ambiguous' => {
-    const forDay = rates.filter((r) => r.day_of_week === day && r.occupancy === occ && Number.isFinite(r.price) && r.price > 0)
-    const seasonal = forDay.filter((r) => seasonContains(r, nightISO))
-    const candidates = seasonal.length ? seasonal : forDay.filter((r) => !r.date_from && !r.date_to)
+    const candidates = pool.filter((r) => r.occupancy === occ)
     const prices = new Set(candidates.map((r) => r.price))
     if (prices.size > 1) return 'ambiguous'
     return prices.size === 1 ? candidates[0].price : null
@@ -176,7 +184,8 @@ export function resolveNightlyRate(
   if (exact === 'ambiguous') return null
   if (exact !== null) return exact
   if (occupancy === 'couple' || occupancy === 'group' || occupancy === 'quad') {
-    if (OCCUPANCY_ORDER.indexOf(occupancy) > OCCUPANCY_ORDER.indexOf(maxDefinedOccupancy(rates))) {
+    const reference = seasonalForDay.length ? seasonalForDay : rates
+    if (OCCUPANCY_ORDER.indexOf(occupancy) > OCCUPANCY_ORDER.indexOf(maxDefinedOccupancy(reference))) {
       return null
     }
     const fallback = tryOccupancy('standard')

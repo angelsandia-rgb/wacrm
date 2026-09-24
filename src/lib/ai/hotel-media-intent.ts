@@ -113,3 +113,61 @@ export function isPhotoPromise(reply: string): boolean {
     return !CONDITIONAL_RE.test(sentence)
   })
 }
+
+/** "¿dónde quedan?", "donde kedan", "ubicación", "cómo llego", "mapa",
+ *  "where are you located"… — accents already stripped by `normalizeForMatch`. */
+const LOCATION_RE =
+  /\b(ubicacion|ubicados?|ubicadas?|donde (estan|esta|quedan|queda|kedan|keda|se ubican|se encuentran)|como (llego|llegar|llegamos)|direccion|mapa|maps|waze|location|located|address|where are you|directions)\b/
+
+/**
+ * True when the guest is asking where the business is. Real case, test
+ * run 2026-09-24 (B42): "donde kedan, aseptan perritos" got the Rooms
+ * banner because the reply named two suites while answering the pets
+ * part — the guest wanted the map, not a room gallery.
+ */
+export function isLocationQuestion(message: string | null | undefined): boolean {
+  return LOCATION_RE.test(normalizeForMatch(message ?? ''))
+}
+
+const MAPS_URL_RE = /https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|(?:www\.)?google\.[a-z.]+\/maps|waze\.com)\/?[^\s)"'<>]*/i
+
+/** The first Google Maps / Waze link in `text` (the account's own
+ *  prompt), or null. */
+export function mapsLinkIn(text: string | null | undefined): string | null {
+  const match = (text ?? '').match(MAPS_URL_RE)
+  return match ? match[0].replace(/[.,;:!?]+$/, '') : null
+}
+
+/** Health / safety wording (accents already stripped). */
+const MEDICAL_RE =
+  /\b(embarazad[ao]s?|embarazo|pregnan\w*|alergi\w*|alergic\w*|medic[oa]s?|doctor|doctora|presion|diabet\w*|cirugia|operad[ao]|lesion|lesionad[ao]|hernia|varices|trombosis|epilepsia|marcapasos|condicion medica|contraindicad\w*|es seguro|seguro para mi)\b/
+
+/**
+ * True when this turn is about a health condition or safety concern
+ * ("¿es segura la reflexología a los 6 meses de embarazo?") — on either
+ * side: the guest's question or the bot's "consúltelo con su médico"
+ * answer. A canned "¿Le gustaría reservarla?" right after a medical
+ * caution reads as pushing the sale over the guest's health (test run
+ * 2026-09-24, B44), so the post-photo booking nudge is skipped then.
+ */
+export function isMedicalCaution(inbound: string | null | undefined, reply?: string | null): boolean {
+  return MEDICAL_RE.test(normalizeForMatch(inbound ?? '')) || MEDICAL_RE.test(normalizeForMatch(reply ?? ''))
+}
+
+/** Payment / deposit asks (accents already stripped). */
+const PAYMENT_RE =
+  /\b(numero de cuenta|cuenta (bancaria|de banco|monetaria)|datos (bancarios|de pago|para (el )?(pago|deposito|anticipo))|como (pago|puedo pagar|le pago|hago el pago|deposito)|donde (pago|deposito)|forma de pago|formas de pago|metodos? de pago|pagar con tarjeta|link de pago|enlace de pago|transferencia|hacer el deposito|depositar|pagar el anticipo|pago del anticipo|bank account|payment|pay the deposit|how (do|can) i pay)\b/
+
+/**
+ * True when the guest wants to PAY (bank account, deposit, card, link).
+ * The bot never handles money, so this is the moment to offer an advisor
+ * — the test run's guest asked for the account number for her deposit
+ * and the bot just said the team would send it (2026-09-24, B8).
+ */
+export function isPaymentRequest(message: string | null | undefined): boolean {
+  return PAYMENT_RE.test(normalizeForMatch(message ?? ''))
+}
+
+/** Step 1 of the two-step handoff protocol, worded for a payment ask. */
+export const PAYMENT_HANDOFF_OFFER =
+  '¿Desea que le comunique con un asesor de nuestro equipo para coordinar el pago? 😊'

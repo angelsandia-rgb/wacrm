@@ -10,6 +10,16 @@ import {
 } from './hotel-close'
 
 describe('stripTrailingPermissionQuestion', () => {
+  it('strips a "quedo atenta para registrar" wait, even stacked with a permission question (B51)', () => {
+    expect(
+      stripTrailingPermissionQuestion('Paquete San Ricardo del 23/10 al 24/10, Gabriela. Quedo atenta para registrar las fechas.'),
+    ).toBe('Paquete San Ricardo del 23/10 al 24/10, Gabriela.')
+    expect(
+      stripTrailingPermissionQuestion('Todo listo, Gabriela. Quedo atenta para registrarla. ¿Desea que se la deje lista?'),
+    ).toBe('Todo listo, Gabriela.')
+    expect(stripTrailingPermissionQuestion('Quedo atenta a cualquier duda. 😊')).toBeNull()
+  })
+
   it('strips the permission questions seen in the 2026-09-24 test run', () => {
     expect(
       stripTrailingPermissionQuestion(

@@ -120,6 +120,23 @@ describe('resolveNightlyRate', () => {
     expect(resolveNightlyRate(withHoliday, '2026-03-05', 'standard')).toBe(700) // Thu, out of season
   })
 
+  it('inside a season, a tier the season leaves out never borrows the always-on rate', () => {
+    const season = (occupancy: ProductRate['occupancy'], price: number): ProductRate => ({
+      day_of_week: 'sat', occupancy, price, date_from: '2027-03-21', date_to: '2027-03-27',
+    })
+    const junior: ProductRate[] = [
+      { day_of_week: 'sat', occupancy: 'couple', price: 800, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'group', price: 1125, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+      season('couple', 800),
+      season('group', 1200),
+    ]
+    expect(resolveNightlyRate(junior, '2027-03-27', 'group')).toBe(1200) // Sat, in season
+    expect(resolveNightlyRate(junior, '2027-03-27', 'quad')).toBeNull() // not the normal Q1500
+    expect(resolveNightlyRate(junior, '2027-03-27', 'standard')).toBeNull() // no 1-guest rate either
+    expect(resolveNightlyRate(junior, '2027-04-03', 'quad')).toBe(1500) // Sat, out of season
+  })
+
   it('returns null when the day has no rate', () => {
     expect(resolveNightlyRate([], '2026-03-05', 'standard')).toBeNull()
     expect(resolveNightlyRate(RATES, '2026-03-02', 'standard')).toBeNull() // Mon, unpriced

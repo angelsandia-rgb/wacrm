@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
-import { summarizeRates, type DayOfWeek } from '@/lib/products/rates'
+import { formatDateEs, summarizeRates, type DayOfWeek } from '@/lib/products/rates'
 
 // Bounds how much of the catalog reaches the prompt — plenty for a
 // small/medium product list, keeps token spend predictable for
@@ -89,19 +89,29 @@ function groupBy<T, K>(rows: T[], key: (row: T) => K): Map<K, T[]> {
 }
 
 /** "Lun–Jue Q800 · Vie Q1000 · Sáb–Dom Q1200 · pareja Lun–Dom Q1400
- *  (temporada 2026-12-24–2026-12-31: Q1500)". Compact enough for the prompt. */
+ *  · temporada 24/12/2026–31/12/2026: Lun–Dom Q1500". Compact enough for
+ *  the prompt. */
 function formatRateSummary(rates: RateRow[], currency: string): string {
   const fmt = (n: number) => formatCurrency(n, currency)
   const parts: string[] = []
   const always = summarizeRates(rates, fmt)
   if (always) parts.push(always)
 
-  const seasons = rates.filter((r) => r.date_from && r.date_to)
-  if (seasons.length > 0) {
-    const from = seasons[0].date_from!
-    const to = seasons[0].date_to!
-    const prices = [...new Set(seasons.map((r) => fmt(r.price)))]
-    parts.push(`temporada ${from}–${to}: ${prices.join(' / ')}`)
+  // One clause per season, broken down by day and guest tier exactly like
+  // the always-on rates. Before, every season collapsed into a single
+  // unlabeled price list under the FIRST season's dates — two seasons
+  // (fin de año + Semana Santa) read as one, with no hint which price
+  // was for how many guests.
+  const bySeason = new Map<string, RateRow[]>()
+  for (const r of rates) {
+    if (!r.date_from || !r.date_to) continue
+    const key = `${r.date_from}|${r.date_to}`
+    bySeason.set(key, [...(bySeason.get(key) ?? []), r])
+  }
+  for (const [key, rows] of [...bySeason].sort(([a], [b]) => a.localeCompare(b))) {
+    const [from, to] = key.split('|')
+    const body = summarizeRates(rows.map((r) => ({ ...r, date_from: null, date_to: null })), fmt)
+    if (body) parts.push(`temporada ${formatDateEs(from)}–${formatDateEs(to)}: ${body}`)
   }
   return parts.join(' · ')
 }
