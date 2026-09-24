@@ -266,6 +266,9 @@ export interface Message {
   status: MessageStatus;
   created_at: string;
   reply_to_message_id?: string;
+  /** Voice-note transcript, filled when the AI transcribes an inbound
+   *  audio (migration 156, `ai_voice_notes` flag). */
+  transcript?: string | null;
   /**
    * Only set when `content_type === 'interactive'` — the stable id of
    * the button or list row the customer tapped. The Flows engine uses
