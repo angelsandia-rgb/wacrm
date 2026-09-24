@@ -21,7 +21,7 @@ import { buildSystemPrompt, aiAutoReplyRetryDelayMs, type AutoReplyCalendarConte
 import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
-import { latestUserMessage } from './query'
+import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
@@ -52,6 +52,7 @@ import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
 import {
+  acceptsPhotoOffer,
   guestAskedForPhotos,
   isLocationQuestion,
   isMedicalCaution,
@@ -59,7 +60,8 @@ import {
   isPhotoPromise,
   mapsLinkIn,
   PAYMENT_HANDOFF_OFFER,
-  productAskedAbout,
+  photoOnlyReplyText,
+  productForPhotoRequest,
 } from './hotel-media-intent'
 import { closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
@@ -964,15 +966,27 @@ export async function dispatchInboundToAiReply(
     // an unambiguous single match (productAskedAbout); the photo send is
     // deduped per conversation, so mentioning the item again re-sends
     // nothing.
-    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel && guestAskedForPhotos(latestInbound)) {
-      const asked = productAskedAbout(latestInbound, hotelProductNames, businessName)
+    // A photo request is the guest asking to see something, or a plain
+    // "sí" to the bot's own "¿le comparto una foto…?". When it doesn't
+    // name the item ("y como es?"), the item comes from the bot's previous
+    // reply or the guest's recent messages (productForPhotoRequest).
+    const previousBotReply = previousAssistantMessage(messages)
+    const photoRequested = guestAskedForPhotos(latestInbound) || acceptsPhotoOffer(latestInbound, previousBotReply)
+    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel && photoRequested) {
+      const asked = productForPhotoRequest(
+        latestInbound,
+        previousBotReply,
+        earlierUserMessages(messages, 3),
+        hotelProductNames,
+        businessName,
+      )
       if (asked) resolvedSendPhotoProductName = asked
     }
     // Hotel item photos only when the guest asked to see something (owner,
     // 2026-09-24: "quiero 2 Suite Premium del 24 al 26" got four photos
     // "de golpe"). A reply that already PROMISES the photo keeps it — not
     // sending would contradict the text the guest is about to read.
-    if (resolvedSendPhotoProductName && isHotel && !guestAskedForPhotos(latestInbound) && !isPhotoPromise(text)) {
+    if (resolvedSendPhotoProductName && isHotel && !photoRequested && !isPhotoPromise(text)) {
       resolvedSendPhotoProductName = null
     }
 
@@ -1102,6 +1116,14 @@ export async function dispatchInboundToAiReply(
         transient: true,
       })
       return
+    }
+
+    // The model answered a photo request with ONLY the photo marker (live
+    // test 2026-09-24: "si" to "¿le comparto una foto?", twice). The photo
+    // is the answer — send it with a short line, not the "dificultad
+    // temporal" fallback and a handoff.
+    if (!outboundText.trim() && !handoff && isHotel && resolvedSendPhotoProductName) {
+      outboundText = photoOnlyReplyText(resolvedSendPhotoProductName)
     }
 
     if (!outboundText && !handoff) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { guestAskedForPhotos, isLocationQuestion, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
+import { acceptsPhotoOffer, guestAskedForPhotos, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -145,5 +145,38 @@ describe('guestAskedForPhotos', () => {
     for (const m of ['Quiero reservar 2 Suite Premium para 2 parejas del 24 al 26 de marzo', '¿Cuánto cuesta la Suite Premium?', 'somos 4 personas', 'quiero ver disponibilidad para marzo']) {
       expect(guestAskedForPhotos(m), m).toBe(false)
     }
+  })
+})
+
+describe('acceptsPhotoOffer', () => {
+  const OFFER = 'La Suite Premium es ideal. ¿Le gustaría que le comparta una foto de la habitación?'
+  it('a short yes right after the bot offered a photo', () => {
+    for (const m of ['si', 'Sí', 'si porfa', 'claro', 'dale', 'ok', 'me encantaría']) {
+      expect(acceptsPhotoOffer(m, OFFER), m).toBe(true)
+    }
+  })
+  it('not when the bot asked something else, or the guest said more than a yes', () => {
+    expect(acceptsPhotoOffer('si', '¿Para qué fechas la desea?')).toBe(false)
+    expect(acceptsPhotoOffer('si', 'Le comparto la foto de la suite.')).toBe(false)
+    expect(acceptsPhotoOffer('si, del 21 al 23 de octubre para dos personas por favor', OFFER)).toBe(false)
+    expect(acceptsPhotoOffer('no gracias', OFFER)).toBe(false)
+  })
+})
+
+describe('productForPhotoRequest', () => {
+  const NAMES = ['Suite Premium', 'Junior Suite Familiar', 'Suite Master Deluxe']
+  it('falls back to the bot reply, then to earlier guest messages', () => {
+    expect(productForPhotoRequest('y como es?', 'La Suite Premium tiene 2 camas Queen.', [], NAMES)).toBe('Suite Premium')
+    expect(productForPhotoRequest('y como es?', 'Tenemos Suite Premium y Junior Suite Familiar.', ['cuanto sale la deluxe'], NAMES)).toBe('Suite Master Deluxe')
+    expect(productForPhotoRequest('fotos de la junior', 'La Suite Premium…', [], NAMES)).toBe('Junior Suite Familiar')
+    expect(productForPhotoRequest('y como es?', '¿Qué fechas?', ['hola'], NAMES)).toBeNull()
+  })
+})
+
+describe('photoOnlyReplyText', () => {
+  it('uses the right article', () => {
+    expect(photoOnlyReplyText('Suite Premium')).toBe('¡Con mucho gusto! Aquí puede ver la Suite Premium. 😊')
+    expect(photoOnlyReplyText('Paquete Romántico')).toBe('¡Con mucho gusto! Aquí puede ver el Paquete Romántico. 😊')
+    expect(photoOnlyReplyText('Junior Suite Familiar')).toBe('¡Con mucho gusto! Aquí puede ver Junior Suite Familiar. 😊')
   })
 })

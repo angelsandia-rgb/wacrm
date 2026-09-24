@@ -186,3 +186,58 @@ const PHOTO_REQUEST_RE =
 export function guestAskedForPhotos(message: string | null | undefined): boolean {
   return PHOTO_REQUEST_RE.test(normalizeForMatch(message ?? ''))
 }
+
+/** A short yes: "si", "sí porfa", "claro", "dale", "ok", "me encantaría"… */
+const SHORT_YES_RE =
+  /^(si|sii+|claro|ok|okay|oki|dale|va|sale|bueno|porfa|por favor|me encantaria|yes|sure|please)\b/
+/** A bot question offering photos: "¿Le gustaría que le comparta una foto…?" */
+const PHOTO_OFFER_RE = /¿[^?]*\b(fotos?|fotograf[ií]as?|im[aá]gen(es)?)\b[^?]*\?/i
+
+/**
+ * True when the guest's message is a plain yes to a photo offer the bot
+ * made in its previous reply. Real case, 2026-09-24: "¿Le gustaría que le
+ * comparta una foto de la habitación?" → "si" was not a photo request by
+ * the words alone, so the photo was dropped and the guest got the
+ * "dificultad temporal" fallback instead.
+ */
+export function acceptsPhotoOffer(
+  guestMessage: string | null | undefined,
+  previousBotReply: string | null | undefined,
+): boolean {
+  const guest = normalizeForMatch(guestMessage ?? '')
+  if (!guest || guest.split(' ').length > 6 || !SHORT_YES_RE.test(guest)) return false
+  return PHOTO_OFFER_RE.test(previousBotReply ?? '')
+}
+
+/**
+ * The item a photo request points at when the request itself doesn't
+ * name one ("y como es?" right after "cuánto sale la premium"): the
+ * guest's latest message first, then the bot's previous reply, then the
+ * guest's earlier messages, newest first. Each step must be an
+ * unambiguous single match (`productAskedAbout`); null otherwise.
+ */
+export function productForPhotoRequest(
+  latestGuestMessage: string,
+  previousBotReply: string | null | undefined,
+  earlierGuestMessages: readonly string[],
+  productNames: readonly string[],
+  businessName?: string | null,
+): string | null {
+  for (const candidate of [latestGuestMessage, previousBotReply ?? '', ...earlierGuestMessages]) {
+    const hit = productAskedAbout(candidate, productNames, businessName)
+    if (hit) return hit
+  }
+  return null
+}
+
+/** The text sent with an item's photos when the model's reply was ONLY
+ *  the photo marker — the photo is the answer, so no fallback message. */
+export function photoOnlyReplyText(productName: string): string {
+  const first = normalizeForMatch(productName).split(' ')[0] ?? ''
+  const article = ['suite', 'habitacion', 'cabana', 'villa'].includes(first)
+    ? 'la '
+    : ['paquete', 'masaje', 'tour', 'salon', 'plan'].includes(first)
+      ? 'el '
+      : ''
+  return `¡Con mucho gusto! Aquí puede ver ${article}${productName}. 😊`
+}

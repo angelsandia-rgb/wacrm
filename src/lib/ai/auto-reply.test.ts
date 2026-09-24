@@ -2695,6 +2695,66 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     )
   })
 
+  it('hotel vertical, "si" to the bot photo offer with a marker-only reply: sends the photo and a short line, not the fallback (live test 2026-09-24)', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'y como es?' },
+      { role: 'assistant', content: 'La Suite Premium es ideal para parejas. ¿Le gustaría que le comparta una foto de la habitación?' },
+      { role: 'user', content: 'si' },
+    ])
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: '',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image', mediaUrl: 'https://cdn.example.com/suite.jpg' }),
+    )
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '¡Con mucho gusto! Aquí puede ver la Suite Premium. 😊' }),
+    )
+    expect(h.engineSendText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
+  })
+
+  it('hotel vertical, "y como es?" without naming the room: sends the photo of the room the guest just asked about', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'cuanto sale la premium' },
+      { role: 'assistant', content: 'Tiene tarifa de Q700 de domingo a jueves. ¿Para qué fechas la desea?' },
+      { role: 'user', content: 'y como es?' },
+    ])
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+      { id: 'p2', name: 'Junior Suite Familiar', image_url: 'https://cdn.example.com/junior.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: 'Es ideal para parejas, con 2 camas Queen y baño privado. ¿Para qué fechas la desea?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image', mediaUrl: 'https://cdn.example.com/suite.jpg' }),
+    )
+  })
+
   it('hotel vertical, product is in a non-bookable category: no nudge, just the photo', async () => {
     h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Me muestra el llavero?' }])
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
