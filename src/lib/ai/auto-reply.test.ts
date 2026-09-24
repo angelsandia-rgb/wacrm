@@ -2614,7 +2614,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     )
   })
 
-  it('hotel vertical, reservation already complete: recaps it instead of asking again', async () => {
+  it('hotel vertical, reservation already complete: no recap/"¿Confirmamos?" nudge after the photo (2026-09-24 test run)', async () => {
     h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
@@ -2639,14 +2639,10 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
       sendPhotoProductName: 'Suite Premium',
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).toHaveBeenLastCalledWith(
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
-      expect.objectContaining({
-        contentText: expect.stringContaining(
-          'Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas',
-        ),
-      }),
+      expect.objectContaining({ contentText: expect.stringContaining('Perfecto, esto sería') }),
     )
   })
 

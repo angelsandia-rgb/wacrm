@@ -3641,6 +3641,15 @@ async function sendHotelBookingNudge(args: {
     db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle(),
   ])
 
+  // Nothing left to ask: the request is complete, so the model's own
+  // CLOSING reply (or its earlier one, if it was already sent to the team)
+  // covers it. The old "complete" variant — "Perfecto, esto sería: … —
+  // ¿Confirmamos la reservación?" — fired right after the close whenever
+  // the same turn also sent an item photo (test run 2026-09-24, prueba #1:
+  // close + estimate + that recap/permission question = the exact
+  // duplicate the owner asked to remove).
+  if (row && missingReservationFields(row as ReservationFieldSnapshot).length === 0) return
+
   const snapshot: Row = (row as Row | null) ?? {
     category: slug,
     service_name: null,
