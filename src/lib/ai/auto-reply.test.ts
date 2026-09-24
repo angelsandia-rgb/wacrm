@@ -3572,7 +3572,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
   })
 
-  it('sends an explicit closing message before pausing the bot, once the guest explicitly confirms', async () => {
+  it('does not repeat a canned closing line when the model already wrote its own close (2026-09-22 test run)', async () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
@@ -3583,7 +3583,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       hall: null,
     }
     h.generateReply.mockResolvedValue({
-      text: '¡Perfecto, Carlos! Quedó registrada su solicitud.',
+      text: '¡Qué buen plan, Carlos! Su solicitud ya está con nuestro equipo.',
       handoff: false,
       markDealWon: false,
       moveToStageName: null,
@@ -3591,13 +3591,13 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       reservationProposals: [{ category: 'habitaciones', fields: { personas: '4' }, confirmed: true }],
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
       expect.objectContaining({
         conversationId: 'conv-1',
         messageType: 'text',
-        contentText: expect.stringContaining('compañero del equipo'),
+        contentText: expect.stringContaining('en breve le escribimos'),
       }),
     )
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
@@ -3747,12 +3747,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       ],
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
-    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
-      expect.anything(),
-      'acct-1',
-      expect.objectContaining({ contentText: expect.stringContaining('compañero del equipo') }),
-    )
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
 })

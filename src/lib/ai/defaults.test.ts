@@ -179,10 +179,11 @@ describe('buildSystemPrompt — hotel objection protocol and single CTA', () => 
 })
 
 describe('buildSystemPrompt — deposit amount in the closing CTA', () => {
-  it('requires naming the deposit amount before asking the guest to confirm', () => {
+  it('names the deposit amount, without turning it into a permission question', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
     expect(p.toLowerCase()).toContain('anticipo')
-    expect(p).toContain('¿Desea que registre esta opción con un anticipo estimado de Q400?')
+    expect(p).toContain('con un anticipo estimado de Q140')
+    expect(p).not.toContain('¿Desea que registre esta opción')
   })
 
   it('teaches never claiming the request is a confirmed reservation', () => {
@@ -256,7 +257,7 @@ describe('buildSystemPrompt — record_reservation: exact catalog name + no self
   // it was ready.
   it('clarifies that a plain "sí" directly answering the model\'s own just-asked confirm question DOES count as explicit confirmation', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
-    expect(p.toLowerCase()).toContain('does not mean a short, plain "sí"/"ok"/"dale"/"va" that is the guest\'s very next message directly answering')
+    expect(p.toLowerCase()).toContain('a plain "sí"/"ok"/"dale"/"va" answering it, that is their answer')
     expect(p.toLowerCase()).toContain('do not make a guest answer your own yes/no question twice')
   })
 })
@@ -411,10 +412,13 @@ describe('buildSystemPrompt — hotel multi-intent reservation marker (up to 2 p
 })
 
 describe('buildSystemPrompt — hotel recap before confirming + no-availability-checking', () => {
-  it('requires a recap of category/dates/people/price/deposit before asking to confirm', () => {
+  it('closes in ONE warm reply once every field is known — no recap round-trip, no permission question (2026-09-22 test run)', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
-    expect(p.toLowerCase()).toContain('recap')
-    expect(p.toLowerCase()).toContain('what it includes if you know it')
+    expect(p).toContain('CLOSING protocol')
+    expect(p).toContain('restate the key details in ONE natural sentence')
+    expect(p).toContain('Do NOT ask "¿desea que deje esta solicitud lista?"')
+    expect(p).toContain('do NOT end that closing reply with a question')
+    expect(p).not.toContain('Before you ask the guest to confirm, first lay out a short RECAP')
   })
 
   it('explicitly forbids the bot from checking/determining availability itself', () => {

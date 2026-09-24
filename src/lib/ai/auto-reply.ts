@@ -3419,8 +3419,8 @@ async function sendStayEstimateFollowUpIfDue(args: {
  * to check and costs at most one extra customer turn if wrong (the
  * proposal keeps re-emitting), same trade-off as before.
  *
- * Always sends an explicit closing line before pausing the bot —
- * `handOffToHuman` itself never sends anything customer-facing.
+ * Sends nothing customer-facing itself: the model's own reply this turn
+ * is the closing (see the comment above `handOffToHuman` below).
  *
  * When the guest DID confirm but the record is still missing a
  * required field (real incident, 2026-09-22, "Paquete Romántico": the
@@ -3499,18 +3499,14 @@ async function handOffIfReservationComplete(args: {
     console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
   }
 
-  try {
-    await sendMessageToConversation(db, accountId, {
-      conversationId,
-      messageType: 'text',
-      contentText: '¡Perfecto! Ya tengo lista su solicitud — un compañero del equipo le confirmará disponibilidad y el total en breve. 🙌',
-    })
-  } catch (err) {
-    // Best-effort: the handoff itself (pausing the bot, routing to a
-    // human) matters more than this closing line — never let a send
-    // failure here skip it.
-    console.error('[ai auto-reply] reservation-complete closing message failed:', err)
-  }
+  // No canned closing line here any more. The model's own reply — always
+  // non-empty by this point (an empty one takes the continuity-fallback
+  // path above and never reaches this function) — IS the warm close the
+  // CLOSING protocol asks for. The old fixed "¡Perfecto! Ya tengo lista su
+  // solicitud — un compañero del equipo le confirmará…" line just
+  // repeated it (real test run, 2026-09-22, Villa San Ricardo: every
+  // closed request got the model's close immediately followed by this
+  // same promise again; Angel: "evita los mensajes duplicados").
 
   await handOffToHuman({
     db,
