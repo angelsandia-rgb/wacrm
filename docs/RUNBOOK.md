@@ -272,6 +272,67 @@ recuperación) para alimentar este runbook.
 
 ---
 
+## 9. Respaldos de la base
+
+El proyecto de Supabase está en el plan **Free: sin backups automáticos**.
+La única copia es un `pg_dump` nocturno que corre en el VPS
+(`scripts/backup/`).
+
+- **Qué:** esquemas `public` (todos los datos de la app), `auth` (usuarios),
+  `storage` (solo metadatos; los archivos viven en Storage y **no** se
+  respaldan) y `cron` (jobs de pg_cron), en formato custom de `pg_dump`.
+- **Cuándo:** todos los días a las 09:15 UTC (03:15 en Guatemala), desde
+  `/etc/cron.d/sandia-db-backup`.
+- **Dónde:** `/var/backups/sandia/sandia-<fecha>.dump` en el VPS (Contabo,
+  otro proveedor distinto de Supabase), con 14 días de retención. Log en
+  `/var/log/sandia-db-backup.log`.
+- **Monitoreo:** cada corrida reporta el heartbeat `db_backup`. Si falla o no
+  corre en unas 60 h, aparece la alerta de heartbeat vencido en `/admin`.
+- Los dumps contienen tokens cifrados y los secretos de los crons: `chmod
+  600`, solo root. No copiarlos fuera del VPS sin cifrarlos.
+
+### Instalación (una vez)
+
+```bash
+mkdir -p /root/sandia-backup && chmod 700 /root/sandia-backup
+cp scripts/backup/sandia-db-backup.sh scripts/backup/sandia-db-restore-test.sh /root/sandia-backup/
+chmod 700 /root/sandia-backup/*.sh
+cp scripts/backup/backup.env.example /root/sandia-backup/backup.env
+chmod 600 /root/sandia-backup/backup.env
+nano /root/sandia-backup/backup.env   # PGPASSWORD y host del "Session pooler"
+cp scripts/backup/sandia-db-backup.cron /etc/cron.d/sandia-db-backup
+/root/sandia-backup/sandia-db-backup.sh          # primera corrida
+/root/sandia-backup/sandia-db-restore-test.sh    # probar que restaura
+```
+
+La contraseña de la base se toma de Supabase → Project Settings →
+Database. **Nunca** pegarla en un chat ni en el repo; se escribe solo en
+`backup.env` dentro del VPS.
+
+### Probar un respaldo
+
+`/root/sandia-backup/sandia-db-restore-test.sh [archivo.dump]` restaura en un
+Postgres desechable (imagen con pgvector) y compara los conteos de filas de
+las tablas clave con producción. Correrlo después de instalar y al menos una
+vez al mes.
+
+### Restaurar de verdad
+
+1. **No restaurar encima de producción.** Crear un proyecto nuevo de
+   Supabase, o usar una rama.
+2. Aplicar las migraciones de `supabase/migrations/` en orden, para tener
+   las extensiones, los roles y las políticas.
+3. Cargar los datos:
+   `pg_restore --data-only --no-owner --disable-triggers -d "<conexión>" archivo.dump`
+   (agregar `--schema=public --schema=auth` para limitar).
+4. Volver a crear los jobs de pg_cron desde las migraciones de
+   programación. Los del dump traen los secretos de cron de ese momento.
+5. Apuntar EasyPanel a la nueva URL y claves del proyecto, y reconstruir.
+6. Los archivos de Storage (medios, catálogos, archivos de clínica) **no**
+   vienen en el dump; se pierden si se pierde el proyecto de Supabase.
+
+---
+
 ## Post-incidente
 
 - Si el fix fue manual sobre infraestructura, abrir PR con el cambio
