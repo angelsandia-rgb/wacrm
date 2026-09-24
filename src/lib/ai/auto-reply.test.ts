@@ -3062,6 +3062,16 @@ describe('dispatchInboundToAiReply — autoRecordReservation tolerates a DD/MM/A
 })
 
 describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () => {
+  // Fixture dates are September 2026: pin "today" before them so the
+  // past-date guard (test run 2026-09-24) doesn't treat them as expired.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-01T12:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   // The other half of the 2026-09-20 fix: `hotelStayEstimate` (the
   // prompt-context figure) is always one turn stale — computed BEFORE
   // the very turn that completes or changes it — so the model alone can
@@ -3564,8 +3574,66 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
 })
 
 describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
+  // Fixture dates are September 2026: pin "today" before them so the
+  // past-date guard (test run 2026-09-24) doesn't treat them as expired.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-01T12:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+  })
+
+  it('replaces a trailing permission question with a warm close and notifies the team without the confirm marker (test run 2026-09-24)', async () => {
+    h.state.reservationRow = {
+      id: 'rr-1',
+      category: 'habitaciones',
+      guests: 1,
+      check_in: '2026-10-13',
+      check_out: '2026-10-14',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'La Suite Clásica es ideal para su viaje. ¿Desea que le deje registrada la solicitud para que el equipo le confirme disponibilidad y el total?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '1', entrada: '2026-10-13', salida: '2026-10-14' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const sent = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join(' ')
+    expect(sent).toContain('La Suite Clásica es ideal para su viaje.')
+    expect(sent).not.toContain('¿Desea que le deje registrada')
+    expect(sent).toMatch(/equipo/)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
+  })
+
+  it('never closes a request dated in the past (test run 2026-09-24, prueba #16)', async () => {
+    h.state.reservationRow = {
+      id: 'rr-1',
+      category: 'habitaciones',
+      guests: 2,
+      check_in: '2026-08-10',
+      check_out: '2026-08-12',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Queda registrada su solicitud.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '2' }, confirmed: true }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
   })
 
   it('does not notify the team twice when a follow-up turn re-emits the confirm marker for an already-sent request', async () => {
@@ -3749,7 +3817,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.updatePayload).toBeNull()
   })
 
-  it('two proposals in one turn (multi-intent) only hand off once — the unconfirmed one is a no-op', async () => {
+  it('two complete proposals in one turn (multi-intent) both close — the second no longer needs its own marker (test run 2026-09-24, prueba #13)', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
       guests: 4,
@@ -3770,7 +3838,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       ],
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(2)
     // The bot keeps answering follow-up questions after the close: the team
     // is notified, the conversation is NOT paused or assigned.
     expect(h.state.updatePayload?.ai_autoreply_disabled).not.toBe(true)

@@ -47,6 +47,8 @@ import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
 import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
+import { closeLine, hasConflictingAmount, isPastDate, stripTrailingPermissionQuestion } from './hotel-close'
+import { estimateDeposit } from '@/lib/reservations/price'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -164,7 +166,7 @@ const CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT =
   'No pude actualizar tu cita en este momento. Ya avisé a recepción para que lo revise y te confirme por este chat.'
 
 const AI_PROVIDER_FALLBACK_TEXT =
-  'Estoy teniendo una dificultad temporal para procesar tu mensaje. Ya avisé al equipo para que te dé seguimiento por este chat.'
+  'Estoy teniendo una dificultad temporal para procesar su mensaje. Ya avisé al equipo para que le dé seguimiento por este chat.'
 
 /** Sent to the customer the moment the explicit-human-request handoff
  *  fires (HANDOFF_SENTINEL). Real gap found 2026-09-20: `buildSystemPrompt`
@@ -176,7 +178,7 @@ const AI_PROVIDER_FALLBACK_TEXT =
  *  model left some text alongside the sentinel anyway, that text is sent
  *  instead (see the call site). */
 const HUMAN_HANDOFF_ACK_TEXT =
-  'Listo, en un momento te conecto con alguien del equipo para que te ayude. 🙌'
+  'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -1277,6 +1279,11 @@ export async function dispatchInboundToAiReply(
           !isGenericCategoryMenu && productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
         const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
         if (!proposal && !namedInReply && !askedInMessage) continue
+        // The guest asked about OTHER categories and this one only shows
+        // up because the reply names one of its products — e.g. a package
+        // "incluye 2 masajes relajantes" sent the Spa banner to a guest who
+        // only asked about the Luna de Miel package (test run 2026-09-24).
+        if (!proposal && !askedInMessage && askedCategories.length > 0 && !askedCategories.includes(slug as ReservationCategory)) continue
         try {
           await autoSendCategoryBanner({
             db,
@@ -1341,6 +1348,27 @@ export async function dispatchInboundToAiReply(
           accountId,
           throttleMinutes: 60,
         })
+      }
+    }
+
+    // Hotel CLOSE enforcement (test run 2026-09-24): when this turn's
+    // markers complete a request, a trailing "¿Desea que le deje
+    // registrada la solicitud…?" is replaced by a warm close line — the
+    // details ARE the go-ahead (owner's rule), so asking again is the
+    // duplicate he asked to remove. The reply then no longer ends in "?",
+    // which lets `handOffIfReservationComplete` close it below even when
+    // the model forgot the confirm marker.
+    if (isHotel && reservationProposals.length > 0) {
+      try {
+        const todayISO = dateKeyInZone(new Date(), businessTimeZone)
+        if (await anyReservationCompleteAfterTurn(db, accountId, conversationId, reservationProposals, todayISO)) {
+          const stripped = stripTrailingPermissionQuestion(outboundText)
+          if (stripped !== null) {
+            outboundText = [stripped, closeLine(conv.ai_reply_count ?? 0)].filter(Boolean).join('\n\n')
+          }
+        }
+      } catch (err) {
+        console.error('[ai auto-reply] close enforcement check failed (sending the reply as-is):', err)
       }
     }
 
@@ -1701,6 +1729,7 @@ export async function dispatchInboundToAiReply(
               stillAsking: outboundText.trim().endsWith('?'),
               currency: hotelCurrency,
               sinceISO: conv.ai_context_reset_at,
+              todayISO: dateKeyInZone(new Date(), businessTimeZone),
             })
           } catch (err) {
             console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
@@ -1717,6 +1746,8 @@ export async function dispatchInboundToAiReply(
             db, accountId, configOwnerUserId, conversationId,
             currency: hotelCurrency, depositPercent: hotelDepositPercent,
             sinceISO: conv.ai_context_reset_at,
+            modelText: outboundText,
+            todayISO: dateKeyInZone(new Date(), businessTimeZone),
           })
         } catch (err) {
           console.error('[ai auto-reply] proactive stay estimate follow-up failed:', err)
@@ -2780,6 +2811,50 @@ function normalizeReservationDate(v?: string): string | undefined {
  * model actually gave are written (a sparse later turn never blanks an
  * earlier one).
  */
+/**
+ * Whether any of this turn's reservation markers leaves its request
+ * complete (every required field, no date in the past) — computed BEFORE
+ * the reply is sent, by merging the markers into the current active rows,
+ * because the rows themselves are only written after the send. Drives the
+ * CLOSE enforcement right before `sendReplyWithRetry`.
+ */
+async function anyReservationCompleteAfterTurn(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+  proposals: GenerateResult['reservationProposals'],
+  todayISO: string,
+): Promise<boolean> {
+  const { data } = await db
+    .from('reservation_requests')
+    .select('category, service_name, guests, check_in, check_out, use_date, hall, guest_confirmed_at')
+    .eq('account_id', accountId)
+    .eq('conversation_id', conversationId)
+    .eq('is_active_build', true)
+  const rows = (data ?? []) as (ReservationFieldSnapshot & { guest_confirmed_at: string | null })[]
+  for (const p of proposals) {
+    const row = rows.find((r) => r.category === p.category)
+    const startNew = ['1', 'true', 'si', 'sí', 'yes', 'nueva'].includes((p.fields.nueva ?? '').trim().toLowerCase())
+    if (row?.guest_confirmed_at && !startNew) continue // already sent — not a new close
+    const base: ReservationFieldSnapshot = startNew || !row ? { category: p.category as ReservationCategory } : { ...row }
+    const f = p.fields
+    const guests = f.personas != null && Number.isFinite(Number(f.personas)) ? Math.round(Number(f.personas)) : undefined
+    const merged: ReservationFieldSnapshot = {
+      ...base,
+      service_name: f.servicio ?? base.service_name,
+      guests: guests ?? base.guests,
+      check_in: normalizeReservationDate(f.entrada) ?? base.check_in,
+      check_out: normalizeReservationDate(f.salida) ?? base.check_out,
+      use_date: normalizeReservationDate(f.fecha) ?? base.use_date,
+      hall: f.salon ?? base.hall,
+    }
+    if (missingReservationFields(merged).length > 0) continue
+    if (isPastDate(merged.check_in ?? merged.use_date ?? null, todayISO)) continue
+    return true
+  }
+  return false
+}
+
 async function autoRecordReservation(args: {
   db: SupabaseClient
   accountId: string
@@ -2827,6 +2902,11 @@ async function autoRecordReservation(args: {
   if (minutes !== undefined) input.duration_minutes = minutes
   if (f.salon) input.hall = f.salon
   if (f.decoracion) input.decoration = f.decoracion
+  // Free-text details the team needs and no column holds — the spa /
+  // activity time, catering, the occasion, an early check-in request
+  // (test run 2026-09-24: "a las 2 pm" and "con catering" were said to
+  // the guest but never reached the request).
+  if (f.nota) input.notes = f.nota.trim().slice(0, 500)
   // habitaciones/paquetes are ALWAYS priced deterministically (see
   // `computeStayEstimateStatus` and the proactive follow-up below) —
   // never let a model-supplied `precio` for these two categories
@@ -2844,8 +2924,43 @@ async function autoRecordReservation(args: {
   const price = toNum(f.precio)
   if (price !== undefined && !isStayCategory) input.estimated_price = price
 
+  // A request the team was already told about: remember what it said, so
+  // a guest's later change (new dates, people, item) reaches them too —
+  // test run 2026-09-24, prueba #18: "me cambiaron el viaje, del 20 al
+  // 21" after the close stayed only in the chat, the request kept the
+  // old dates and nobody was notified.
+  const { data: before } = await db
+    .from('reservation_requests')
+    .select('service_name, guests, check_in, check_out, use_date, guest_confirmed_at')
+    .eq('account_id', accountId)
+    .eq('conversation_id', conversationId)
+    .eq('category', proposal.category)
+    .eq('is_active_build', true)
+    .maybeSingle()
+
   const id = await upsertReservationRequest(db, accountId, input)
   if (!id) return
+
+  const prior = before as {
+    service_name: string | null; guests: number | null; check_in: string | null
+    check_out: string | null; use_date: string | null; guest_confirmed_at: string | null
+  } | null
+  if (prior?.guest_confirmed_at && !startNew) {
+    const changed =
+      (input.service_name !== undefined && input.service_name !== prior.service_name) ||
+      (input.guests !== undefined && input.guests !== prior.guests) ||
+      (input.check_in !== undefined && input.check_in !== prior.check_in) ||
+      (input.check_out !== undefined && input.check_out !== prior.check_out) ||
+      (input.use_date !== undefined && input.use_date !== prior.use_date)
+    if (changed) {
+      await notifyTeamRequestReady(
+        db,
+        accountId,
+        conversationId,
+        '✏️ El huésped pidió un CAMBIO en una solicitud que ya se había enviado al equipo. Revise los nuevos datos antes de confirmar.',
+      )
+    }
+  }
 
   await db.from('ai_action_log').insert({
     account_id: accountId,
@@ -3352,9 +3467,15 @@ async function sendStayEstimateFollowUpIfDue(args: {
   currency: string
   depositPercent: number
   sinceISO: string | null
+  /** The reply the model sent this turn — a different figure in it gets
+   *  an explicit correction (test run 2026-09-24, prueba #8: the model
+   *  said Q1,160 from the weekday rate table, this message said Q1,500
+   *  for the real Saturday rate, and the guest was left with both). */
+  modelText?: string
+  todayISO?: string
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO } = args
-  const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent)
+  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO } = args
+  const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
 
   if (result.status === 'unpriceable') {
     void dispatchSystemAlert({
@@ -3383,10 +3504,16 @@ async function sendStayEstimateFollowUpIfDue(args: {
   )
   if (alreadySentThisTotal) return
 
+  const conflicting =
+    Boolean(modelText) && hasConflictingAmount(modelText ?? '', result.total, estimateDeposit(result.total, depositPercent))
+  const contentText = conflicting
+    ? `Una corrección importante sobre el monto que le mencioné: ${result.text.charAt(0).toLowerCase()}${result.text.slice(1)}`
+    : result.text
+
   await sendMessageToConversation(db, accountId, {
     conversationId,
     messageType: 'text',
-    contentText: result.text,
+    contentText,
   })
 
   await db.from('ai_action_log').insert({
@@ -3472,10 +3599,12 @@ async function handOffIfReservationComplete(args: {
   stillAsking: boolean
   currency: string
   sinceISO: string | null
+  /** Business-local YYYY-MM-DD — a request dated in the past is never
+   *  closed (test run 2026-09-24, prueba #16: "del 10 al 12 de
+   *  septiembre", asked on the 23rd, was registered, priced and sent). */
+  todayISO?: string
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO } = args
-
-  if (!confirmed) return
+  const { db, accountId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
 
   const { data: row } = await db
     .from('reservation_requests')
@@ -3491,6 +3620,9 @@ async function handOffIfReservationComplete(args: {
   // follow-up question must not notify the team a second time.
   if ((row as { guest_confirmed_at?: string | null }).guest_confirmed_at) return
   if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) {
+    // Only a guest who explicitly tried to confirm hears the "me falta X"
+    // nudge; an implicit close (see below) with a gap just waits.
+    if (!confirmed) return
     await sendReservationNudge({
       db, accountId, configOwnerUserId, conversationId,
       snapshot: row as ReservationFieldSnapshot,
@@ -3499,6 +3631,16 @@ async function handOffIfReservationComplete(args: {
     })
     return
   }
+
+  const dated = row as { check_in?: string | null; use_date?: string | null }
+  if (isPastDate(dated.check_in ?? dated.use_date ?? null, todayISO)) return
+
+  // Implicit close: every field is known and the bot's own reply this turn
+  // doesn't ask anything, so per the CLOSING protocol that reply WAS the
+  // close — even if the model forgot the confirm marker (test run
+  // 2026-09-24: "Queda anotado…" with no marker left the team un-notified
+  // twice; and with two categories in one turn only one could carry the
+  // marker). `stillAsking` below still blocks a reply that asks something.
 
   // Only gated here, AFTER the missing-fields nudge above — a
   // still-asking bot reply about a genuinely missing field (e.g. "¿me
