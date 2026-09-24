@@ -66,18 +66,34 @@ export async function recoverUnansweredInbound(
     if (!conv.contact_id) continue
     result.scanned++
 
-    // The thread's latest message must be a plain customer text — the only
+    // The customer's latest message must be a plain text — the only
     // inbound the webhooks hand to the AI (interactive replies and media
-    // go elsewhere, and anything we sent after it means it was answered).
-    const { data: last } = await db
+    // go elsewhere).
+    const { data: lastCustomer } = await db
       .from('messages')
       .select('id, sender_type, content_type, created_at')
       .eq('conversation_id', conv.id)
+      .eq('sender_type', 'customer')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    const msg = last as { id: string; sender_type: string; content_type: string; created_at: string } | null
-    if (!msg || msg.sender_type !== 'customer' || msg.content_type !== 'text') continue
+    const msg = lastCustomer as { id: string; sender_type: string; content_type: string; created_at: string } | null
+    if (!msg || msg.content_type !== 'text') continue
+
+    // Answered = some TEXT we sent after it. Images alone don't count: the
+    // hotel bot sends the banner/photos BEFORE its text, so a restart
+    // between the two left a thread whose last message is our photo and
+    // no reply at all — and this sweep skipped it as "answered" (test run
+    // 2026-09-24, prueba #27, killed by a deploy mid-reply).
+    const { data: repliesAfter } = await db
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conv.id)
+      .in('sender_type', ['bot', 'agent'])
+      .eq('content_type', 'text')
+      .gt('created_at', msg.created_at)
+      .limit(1)
+    if (repliesAfter && repliesAfter.length > 0) continue
     const age = now - Date.parse(msg.created_at)
     if (age < MIN_AGE_MS || age > MAX_AGE_MS) continue
 
