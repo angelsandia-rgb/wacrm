@@ -47,7 +47,7 @@ import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
 import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
-import { closeLine, hasConflictingAmount, isPastDate, stripTrailingPermissionQuestion } from './hotel-close'
+import { closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 
@@ -1367,6 +1367,13 @@ export async function dispatchInboundToAiReply(
     // duplicate he asked to remove. The reply then no longer ends in "?",
     // which lets `handOffIfReservationComplete` close it below even when
     // the model forgot the confirm marker.
+    // The menu / catalog goes out right after this text: drop a trailing
+    // "si gusta, le comparto el menú" that the attachment would contradict.
+    if ((sendRestaurantMenu && hasRestaurantMenu) || sendCatalog) {
+      const withoutOffer = stripTrailingAttachmentOffer(outboundText)
+      if (withoutOffer) outboundText = withoutOffer
+    }
+
     if (isHotel && reservationProposals.length > 0) {
       try {
         const todayISO = dateKeyInZone(new Date(), businessTimeZone)
@@ -1735,7 +1742,7 @@ export async function dispatchInboundToAiReply(
               db, accountId, conversationId, configOwnerUserId,
               category: proposal.category as ReservationCategory,
               confirmed: proposal.confirmed,
-              stillAsking: outboundText.trim().endsWith('?'),
+              stillAsking: isStillAsking(outboundText),
               currency: hotelCurrency,
               sinceISO: conv.ai_context_reset_at,
               todayISO: dateKeyInZone(new Date(), businessTimeZone),
