@@ -35,6 +35,7 @@ interface ReservationSummaryRow {
   duration_minutes: number | null
   hall: string | null
   estimated_price: number | null
+  guest_confirmed_at?: string | null
 }
 
 /**
@@ -77,7 +78,7 @@ export async function loadActiveReservationsSummary(
   const { data } = await db
     .from('reservation_requests')
     .select(
-      'category, service_name, guests, check_in, check_out, use_date, duration_minutes, hall, estimated_price',
+      'category, service_name, guests, check_in, check_out, use_date, duration_minutes, hall, estimated_price, guest_confirmed_at',
     )
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
@@ -100,6 +101,7 @@ export async function loadActiveReservationsSummary(
     if (r.estimated_price != null && r.estimated_price > 0) {
       bits.push(`estimado ${formatCurrency(r.estimated_price, currency)}`)
     }
+    if (r.guest_confirmed_at) bits.push('YA ENVIADA AL EQUIPO')
     return `- ${bits.join(' · ')}`
   }
 

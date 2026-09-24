@@ -3572,6 +3572,30 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
   })
 
+  it('does not notify the team twice when a follow-up turn re-emits the confirm marker for an already-sent request', async () => {
+    h.state.reservationRow = {
+      id: 'rr-1',
+      category: 'habitaciones',
+      guests: 2,
+      check_in: '2026-10-15',
+      check_out: '2026-10-16',
+      use_date: null,
+      hall: null,
+      guest_confirmed_at: '2026-09-24T02:42:00Z',
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Sí, el desayuno está incluido. 😊',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '2' }, confirmed: true }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.notificationInserts).toEqual([])
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
+  })
+
   it('does not repeat a canned closing line when the model already wrote its own close (2026-09-22 test run)', async () => {
     h.state.reservationRow = {
       id: 'rr-1',
@@ -3600,7 +3624,10 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
         contentText: expect.stringContaining('en breve le escribimos'),
       }),
     )
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    // The bot keeps answering follow-up questions after the close: the team
+    // is notified, the conversation is NOT paused or assigned.
+    expect(h.state.updatePayload?.ai_autoreply_disabled).not.toBe(true)
+    expect(h.state.notificationInserts.length).toBeGreaterThan(0)
   })
 
   // Real incident, 2026-09-23 (7-case live QA run, DEMO account): the
@@ -3748,7 +3775,10 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    // The bot keeps answering follow-up questions after the close: the team
+    // is notified, the conversation is NOT paused or assigned.
+    expect(h.state.updatePayload?.ai_autoreply_disabled).not.toBe(true)
+    expect(h.state.notificationInserts.length).toBeGreaterThan(0)
   })
 })
 

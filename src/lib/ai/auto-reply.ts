@@ -1697,8 +1697,6 @@ export async function dispatchInboundToAiReply(
             await handOffIfReservationComplete({
               db, accountId, conversationId, configOwnerUserId,
               category: proposal.category as ReservationCategory,
-              handoffAgentId: config.handoffAgentId,
-              alreadyAssigned: Boolean(conv.assigned_agent_id),
               confirmed: proposal.confirmed,
               stillAsking: outboundText.trim().endsWith('?'),
               currency: hotelCurrency,
@@ -2224,6 +2222,33 @@ async function handOffToHuman(args: {
   // agent+ teammate directly instead of waiting on that.
   if (!willAssign && !alreadyAssigned) {
     void notifyHandoffUnassigned(db, accountId, conversationId, fullSummary)
+  }
+}
+
+/**
+ * The "request is ready" signal to the team WITHOUT pausing the bot:
+ * internal note + in-app notification to every agent+ teammate, both
+ * carrying the active-requests recap. Best-effort — never throws.
+ */
+async function notifyTeamRequestReady(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+  summary: string,
+): Promise<void> {
+  try {
+    const fullSummary = await appendActiveReservationsRecap(db, accountId, conversationId, summary)
+    const { error: noteError } = await db.from('messages').insert({
+      conversation_id: conversationId,
+      sender_type: 'bot',
+      content_type: 'internal_note',
+      content_text: fullSummary,
+      status: 'sent',
+    })
+    if (noteError) console.error('[ai auto-reply] failed to insert request-ready note:', noteError)
+    await notifyHandoffUnassigned(db, accountId, conversationId, fullSummary)
+  } catch (err) {
+    console.error('[ai auto-reply] notifyTeamRequestReady failed:', err)
   }
 }
 
@@ -3440,8 +3465,6 @@ async function handOffIfReservationComplete(args: {
   conversationId: string
   configOwnerUserId: string
   category: ReservationCategory
-  handoffAgentId: string | null
-  alreadyAssigned: boolean
   /** CONFIRM_RESERVATION_SENTINEL this turn — see the doc comment above. */
   confirmed: boolean
   /** Does the model's own reply text THIS turn still end in "?" — see
@@ -3450,19 +3473,23 @@ async function handOffIfReservationComplete(args: {
   currency: string
   sinceISO: string | null
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, handoffAgentId, alreadyAssigned, confirmed, stillAsking, currency, sinceISO } = args
+  const { db, accountId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO } = args
 
   if (!confirmed) return
 
   const { data: row } = await db
     .from('reservation_requests')
-    .select('id, category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
+    .select('id, category, service_name, guests, check_in, check_out, use_date, hall, estimated_price, guest_confirmed_at')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', category)
     .eq('is_active_build', true)
     .maybeSingle()
   if (!row) return
+  // Already sent to the team on an earlier turn — the bot keeps chatting
+  // after the close (see below), and a re-emitted confirm marker on a
+  // follow-up question must not notify the team a second time.
+  if ((row as { guest_confirmed_at?: string | null }).guest_confirmed_at) return
   if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) {
     await sendReservationNudge({
       db, accountId, configOwnerUserId, conversationId,
@@ -3499,24 +3526,27 @@ async function handOffIfReservationComplete(args: {
     console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
   }
 
-  // No canned closing line here any more. The model's own reply — always
-  // non-empty by this point (an empty one takes the continuity-fallback
-  // path above and never reaches this function) — IS the warm close the
-  // CLOSING protocol asks for. The old fixed "¡Perfecto! Ya tengo lista su
-  // solicitud — un compañero del equipo le confirmará…" line just
-  // repeated it (real test run, 2026-09-22, Villa San Ricardo: every
-  // closed request got the model's close immediately followed by this
-  // same promise again; Angel: "evita los mensajes duplicados").
-
-  await handOffToHuman({
+  // No canned closing line: the model's own reply — always non-empty by
+  // this point (an empty one takes the continuity-fallback path and never
+  // reaches this function) — IS the warm close the CLOSING protocol asks
+  // for (the old fixed "un compañero del equipo le confirmará…" line just
+  // repeated it — test run 2026-09-22, Villa San Ricardo).
+  //
+  // And no pause either: the team is told (internal note + in-app
+  // notification, same recap a hand-off carries) but the bot keeps
+  // answering the guest's simple follow-up questions — in that same test
+  // run "¿El desayuno está incluido?", asked right after closing, went
+  // unanswered because the thread was already parked on a human. A person
+  // takes the thread over from the inbox (assigning it stops the bot), and
+  // anything only a person can do stays on the prompt's own hand-off
+  // protocol. Deliberately not assigning `handoffAgentId` here for that
+  // same reason — an assigned thread silences the bot.
+  await notifyTeamRequestReady(
     db,
     accountId,
     conversationId,
-    handoffAgentId,
-    alreadyAssigned,
-    summary:
-      '🤖 Se completaron los datos de la solicitud del huésped. La IA transfirió esta conversación para que un compañero prepare la cotización o avance la solicitud.',
-  })
+    '🤖 El huésped completó y confirmó su solicitud. La IA sigue respondiendo sus dudas; un compañero debe confirmar disponibilidad y el total (tome la conversación para responder usted).',
+  )
 
   await db.from('ai_action_log').insert({
     account_id: accountId,
@@ -3524,7 +3554,7 @@ async function handOffIfReservationComplete(args: {
     action: 'auto_handoff_reservation_complete',
     target_id: conversationId,
     input: { category, source: 'auto_reply_autonomous' },
-    result: { conversation_id: conversationId, handed_off_to: handoffAgentId },
+    result: { conversation_id: conversationId, handed_off_to: null, bot_kept_replying: true },
   })
 }
 
