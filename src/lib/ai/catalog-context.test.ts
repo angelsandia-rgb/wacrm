@@ -112,6 +112,25 @@ describe('loadCatalogContext', () => {
     expect(res![0]).toContain('— Vista jardín')
   })
 
+  it('lists each season separately, with its dates and guest tiers', async () => {
+    const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
+    const season = (occupancy: string, price: number, date_from: string, date_to: string) =>
+      days.map((day_of_week) => ({ product_id: 'r1', day_of_week, occupancy, price, date_from, date_to }))
+    const res = await loadCatalogContext(
+      makeDb([{ id: 'r1', name: 'Suite Premium', price: 0, description: null }], 'GTQ', {
+        vertical: 'hotel',
+        rates: [
+          ...season('standard', 450, '2026-12-24', '2027-01-01'),
+          ...season('couple', 870, '2026-12-24', '2027-01-01'),
+          ...season('couple', 870, '2027-03-21', '2027-03-27'),
+        ],
+      }),
+      'acct-1',
+    )
+    expect(res![0]).toMatch(/temporada 24\/12\/2026–01\/01\/2027: Lun–Dom .*450 · pareja Lun–Dom .*870/)
+    expect(res![0]).toMatch(/temporada 21\/03\/2027–27\/03\/2027: pareja Lun–Dom .*870/)
+  })
+
   it('a hotel product with no rates still shows its base price', async () => {
     const res = await loadCatalogContext(
       makeDb([{ id: 's1', name: 'Masaje', price: 250, description: null }], 'GTQ', {

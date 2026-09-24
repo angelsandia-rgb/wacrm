@@ -46,7 +46,15 @@ import type { GenerateResult } from './types'
 import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
-import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
+import {
+  isLocationQuestion,
+  isMedicalCaution,
+  isPaymentRequest,
+  isPhotoPromise,
+  mapsLinkIn,
+  PAYMENT_HANDOFF_OFFER,
+  productAskedAbout,
+} from './hotel-media-intent'
 import { closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
@@ -1281,6 +1289,9 @@ export async function dispatchInboundToAiReply(
       // run 2026-09-24, prueba #22).
       const isComplaint = COMPLAINT_RE.test(latestInbound ?? '')
       const askedCategories = isComplaint ? [] : categorySlugsMentioned(latestInbound)
+      // "¿Dónde quedan?" wants the map, not a gallery — even when the reply
+      // names a room while answering the rest of the message (B42).
+      const isLocationAsk = isLocationQuestion(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
@@ -1288,6 +1299,7 @@ export async function dispatchInboundToAiReply(
           !isGenericCategoryMenu && productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
         const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
         if (!proposal && !namedInReply && !askedInMessage) continue
+        if (isLocationAsk && !askedInMessage) continue
         // The guest asked about OTHER categories and this one only shows
         // up because the reply names one of its products — e.g. a package
         // "incluye 2 masajes relajantes" sent the Spa banner to a guest who
@@ -1374,6 +1386,16 @@ export async function dispatchInboundToAiReply(
       if (withoutOffer) outboundText = withoutOffer
     }
 
+    // Location asked but the reply left the map out → append the account's
+    // own Maps link from its prompt (owner, 2026-09-24: the link, not the
+    // Rooms banner, is the answer to "¿dónde quedan?").
+    if (isHotel && isLocationQuestion(latestInbound) && !mapsLinkIn(outboundText)) {
+      const mapsLink = mapsLinkIn(config.systemPrompt)
+      if (mapsLink) outboundText = `${outboundText.trim()}
+
+📍 ${mapsLink}`
+    }
+
     if (isHotel && reservationProposals.length > 0) {
       try {
         const todayISO = dateKeyInZone(new Date(), businessTimeZone)
@@ -1386,6 +1408,18 @@ export async function dispatchInboundToAiReply(
       } catch (err) {
         console.error('[ai auto-reply] close enforcement check failed (sending the reply as-is):', err)
       }
+    }
+
+    // The bot never handles money: a payment ask ("¿me pasa el número de
+    // cuenta para el anticipo?") gets step 1 of the handoff protocol when
+    // the model didn't already offer a person (test run 2026-09-24, B8).
+    // The close check below keeps looking at the text WITHOUT this offer,
+    // so a complete request still closes and reaches the team.
+    const textBeforePaymentOffer = outboundText
+    if (isHotel && isPaymentRequest(latestInbound) && !/conect|comunic|asesor/i.test(outboundText)) {
+      outboundText = `${outboundText.trim()}
+
+${PAYMENT_HANDOFF_OFFER}`
     }
 
     try {
@@ -1562,7 +1596,7 @@ export async function dispatchInboundToAiReply(
       }
     } else if (moveToStageName) {
       try {
-        await autoMoveDealStage({ db, accountId, contactId, conversationId, configOwnerUserId, stageName: moveToStageName })
+        await autoMoveDealStage({ db, accountId, contactId, conversationId, configOwnerUserId, stageName: moveToStageName, isHotel })
       } catch (err) {
         console.error('[ai auto-reply] autonomous move_deal failed:', err)
       }
@@ -1739,10 +1773,10 @@ export async function dispatchInboundToAiReply(
         if (!conv.ai_handoff_at) {
           try {
             await handOffIfReservationComplete({
-              db, accountId, conversationId, configOwnerUserId,
+              db, accountId, contactId, conversationId, configOwnerUserId,
               category: proposal.category as ReservationCategory,
               confirmed: proposal.confirmed,
-              stillAsking: isStillAsking(outboundText),
+              stillAsking: isStillAsking(textBeforePaymentOffer),
               currency: hotelCurrency,
               sinceISO: conv.ai_context_reset_at,
               todayISO: dateKeyInZone(new Date(), businessTimeZone),
@@ -1782,7 +1816,14 @@ export async function dispatchInboundToAiReply(
     // prompt has the model close an item reply with its own warm booking
     // invitation, and a canned second question right after it reads like
     // a form. This stays as the safety net for replies that forgot to ask.
-    if (photoSentProductId && isHotel && !outboundText.includes('?')) {
+    // Never right after a health caution or a complaint (B44).
+    if (
+      photoSentProductId &&
+      isHotel &&
+      !outboundText.includes('?') &&
+      !isMedicalCaution(latestInbound, outboundText) &&
+      !COMPLAINT_RE.test(latestInbound ?? '')
+    ) {
       try {
         await sendHotelBookingNudge({
           db,
@@ -2432,13 +2473,17 @@ async function loadDealStageOptions(args: {
       .limit(1)
       .maybeSingle()
 
-    const preSale = await loadPreSaleStages(db, categoryPipeline.id)
+    // Hotel category pipelines: the last pre-sale stage ("Esperando
+    // confirmación") is set by the code on close, and a deal only moves
+    // forward — so the model is offered neither (see autoMoveDealStage).
+    const allPreSale = await loadPreSaleStages(db, categoryPipeline.id)
+    const preSale = allPreSale.length >= 3 ? allPreSale.slice(0, -1) : allPreSale
     if (deal) {
-      const current = preSale.find((s) => s.id === deal.stage_id)
-      if (!current) return null
-      const otherStageNames = preSale.filter((s) => s.id !== deal.stage_id).map((s) => s.name)
+      const currentIndex = allPreSale.findIndex((s) => s.id === deal.stage_id)
+      if (currentIndex === -1) return null
+      const otherStageNames = preSale.slice(currentIndex + 1).map((s) => s.name)
       if (otherStageNames.length === 0) return null
-      return { hasDeal: true, currentStageName: current.name, otherStageNames }
+      return { hasDeal: true, currentStageName: allPreSale[currentIndex].name, otherStageNames }
     }
     const otherStageNames = preSale.map((s) => s.name)
     if (otherStageNames.length === 0) return null
@@ -2531,17 +2576,21 @@ async function resolveHotelCategoryPipeline(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
+  /** Known category (the request that just closed) — skips the lookup. */
+  knownCategory?: string,
 ): Promise<{ id: string } | null> {
   try {
-    const { data: row } = await db
-      .from('reservation_requests')
-      .select('category')
-      .eq('account_id', accountId)
-      .eq('conversation_id', conversationId)
-      .eq('is_active_build', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle<{ category: string }>()
+    const { data: row } = knownCategory
+      ? { data: { category: knownCategory } }
+      : await db
+          .from('reservation_requests')
+          .select('category')
+          .eq('account_id', accountId)
+          .eq('conversation_id', conversationId)
+          .eq('is_active_build', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle<{ category: string }>()
     if (!row?.category) return null
 
     const { data: pipelines } = await db
@@ -2653,10 +2702,24 @@ async function autoMoveDealStage(args: {
   conversationId: string
   configOwnerUserId: string
   stageName: string
+  /** Hotel vertical: the model may only move a deal through the middle
+   *  stages ("Nueva solicitud" → "Conversación"); the LAST pre-sale stage
+   *  ("Esperando confirmación") is reserved for the code, set the moment a
+   *  complete request is sent to the team (owner, 2026-09-24). */
+  isHotel?: boolean
+  /** Set by `handOffIfReservationComplete`: the move to the last
+   *  pre-sale stage, for that request's own category pipeline. */
+  closingCategory?: ReservationCategory
 }): Promise<void> {
-  const { db, accountId, contactId, conversationId, configOwnerUserId, stageName } = args
+  const { db, accountId, contactId, conversationId, configOwnerUserId, stageName, isHotel, closingCategory } = args
 
-  const categoryPipeline = await resolveHotelCategoryPipeline(db, accountId, conversationId)
+  const categoryPipeline = await resolveHotelCategoryPipeline(db, accountId, conversationId, closingCategory)
+  // The model's own marker can't use the stage the code sets on close.
+  const blocksStage = (stages: { name: string }[], name: string) =>
+    Boolean(isHotel) &&
+    !closingCategory &&
+    stages.length >= 3 &&
+    stages[stages.length - 1].name.trim().toLowerCase() === name.trim().toLowerCase()
 
   const { data: deal, error: dealErr } = categoryPipeline
     ? await db
@@ -2685,7 +2748,13 @@ async function autoMoveDealStage(args: {
     const target = stages.find(
       (s) => s.name.trim().toLowerCase() === stageName.trim().toLowerCase(),
     )
-    if (!target || target.id === deal.stage_id) return
+    if (!target || target.id === deal.stage_id || blocksStage(stages, target.name)) return
+    // Never backward (test run 2026-09-24, B35: a deal already at
+    // "Esperando confirmación" went back to "Conversación" on a later
+    // follow-up question). A deal parked outside the pre-sale stages (a
+    // person moved it past "won") is left alone too.
+    const currentIndex = stages.findIndex((s) => s.id === deal.stage_id)
+    if (currentIndex === -1 || stages.indexOf(target) < currentIndex) return
 
     let moved
     try {
@@ -2723,7 +2792,7 @@ async function autoMoveDealStage(args: {
   const target = stages.find(
     (s) => s.name.trim().toLowerCase() === stageName.trim().toLowerCase(),
   )
-  if (!target) return
+  if (!target || blocksStage(stages, target.name)) return
 
   const [{ data: contact }, { data: account }] = await Promise.all([
     db.from('contacts').select('name, phone').eq('id', contactId).maybeSingle(),
@@ -3650,6 +3719,7 @@ async function sendPastDateClarification(args: {
 async function handOffIfReservationComplete(args: {
   db: SupabaseClient
   accountId: string
+  contactId: string
   conversationId: string
   configOwnerUserId: string
   category: ReservationCategory
@@ -3665,7 +3735,7 @@ async function handOffIfReservationComplete(args: {
    *  septiembre", asked on the 23rd, was registered, priced and sent). */
   todayISO?: string
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
+  const { db, accountId, contactId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
 
   const { data: row } = await db
     .from('reservation_requests')
@@ -3771,6 +3841,24 @@ async function handOffIfReservationComplete(args: {
     input: { category, source: 'auto_reply_autonomous' },
     result: { conversation_id: conversationId, handed_off_to: null, bot_kept_replying: true },
   })
+
+  // The request is with the team: its deal goes to the category
+  // pipeline's last pre-sale stage ("Esperando confirmación"), created
+  // there if the chat never had one. Best-effort — the close already
+  // happened.
+  try {
+    const pipeline = await resolveHotelCategoryPipeline(db, accountId, conversationId, category)
+    const stages = pipeline ? await loadPreSaleStages(db, pipeline.id) : []
+    const last = stages[stages.length - 1]
+    if (last && stages.length >= 2) {
+      await autoMoveDealStage({
+        db, accountId, contactId, conversationId, configOwnerUserId,
+        stageName: last.name, isHotel: true, closingCategory: category,
+      })
+    }
+  } catch (err) {
+    console.error('[ai auto-reply] moving the deal to the waiting stage after close failed:', err)
+  }
 }
 
 /**
