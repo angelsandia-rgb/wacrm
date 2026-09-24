@@ -1,0 +1,4 @@
+# /etc/cron.d/sandia-db-backup — nightly database backup (03:15 Guatemala).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 9 * * * root /root/sandia-backup/sandia-db-backup.sh >> /var/log/sandia-db-backup.log 2>&1
