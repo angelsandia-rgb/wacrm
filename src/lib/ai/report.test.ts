@@ -34,6 +34,7 @@ function dataset(over: Partial<KpiDataset> = {}): KpiDataset {
       handoffsAdvanced: 1,
       briefCompletionPct: 66.6667,
     },
+    csat: { delivered: 0, responded: 0, avgPercent: null, responseRate: null },
     ...over,
   };
 }

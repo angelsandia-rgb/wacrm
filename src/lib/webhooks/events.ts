@@ -21,6 +21,7 @@ export const WEBHOOK_EVENTS = [
   'appointment.scheduled', // a Google Calendar appointment was created for a contact
   'contact.brief_ready', // a deal was registered for a contact — snapshot its custom-field "brief"
   'reservation.updated', // a hotel reservation/service request was created or a field changed
+  'csat.received', // a customer answered a post-sale satisfaction survey (migration 151)
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
@@ -43,6 +44,7 @@ export const WEBHOOK_EVENT_DESCRIPTIONS: Record<WebhookEvent, string> = {
     "A deal was registered for a contact — carries the contact's custom-field values as a spec brief",
   'reservation.updated':
     'A hotel reservation/service request was created or one of its fields changed (rooms, spa, activities, packages, events)',
+  'csat.received': 'A customer answered a post-sale satisfaction (CSAT) survey',
 };
 
 /** Type-narrow an unknown value into a valid `WebhookEvent`. */

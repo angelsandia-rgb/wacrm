@@ -57,6 +57,7 @@ function makeDataset(overrides: Partial<KpiDataset> = {}): KpiDataset {
       handoffsAdvanced: 2,
       briefCompletionPct: 60,
     },
+    csat: { delivered: 0, responded: 0, avgPercent: null, responseRate: null },
     ...overrides,
   }
 }

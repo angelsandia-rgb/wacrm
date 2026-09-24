@@ -41,6 +41,7 @@ const EVENT_LABELS: Record<string, string> = {
   'broadcast.completed': 'Difusión finalizada',
   'contact.brief_ready': 'Requerimientos del prospecto (al registrar el negocio)',
   'reservation.updated': 'Solicitud de reserva/servicio (hotel — una pestaña por categoría)',
+  'csat.received': 'Encuesta de satisfacción respondida',
 };
 
 const EXPORT_ENTITIES: { key: string; label: string }[] = [
