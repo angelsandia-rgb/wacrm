@@ -37,7 +37,7 @@ import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/ale
 import { describeError, isUndefinedColumnError } from '@/lib/observability/describe-error'
 import {
   upsertReservationRequest,
-  categorySlugFromName,
+  categorySlugFromName, categorySlugsMentioned,
   type ReservationCategory,
   type ReservationInput,
 } from '@/lib/reservations/upsert'
@@ -46,6 +46,7 @@ import type { GenerateResult } from './types'
 import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
+import { isPhotoPromise, productAskedAbout } from './hotel-media-intent'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -101,13 +102,6 @@ const CUSTOMER_ASKS_FOR_CATALOG_RE = /\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\
  *  since neither counts as a `\w` character) while still correctly
  *  rejecting "menudo". */
 const CUSTOMER_ASKS_FOR_MENU_RE = /\bmen[uú](?![a-zà-ÿ])|\bla\s+carta\b/i
-
-/** The MODEL's own reply already promising a specific photo ("le
- *  comparto la foto de la Suite Clásica", "aquí tiene la imagen de..."),
- *  used only to detect when it forgot the `send_photo` marker for a
- *  promise it already made — see `guessPromisedProductName`. */
-const PHOTO_PROMISE_RE =
-  /\b(comparto|env[ií]o|le env[ií]o|aqu[ií]\s+tiene|aqu[ií]\s+est[aá]|le dejo)\b[^.!?\n]{0,25}\b(foto|imagen|fotograf[ií]a)/i
 
 /** A public-catalog URL in either shape: the long `/catalog/<uuid>`
  *  form or the short `/c/<slug>` alias (migration 116), with or without
@@ -199,6 +193,10 @@ interface DispatchArgs {
    *  function taking `DispatchArgs` ignores it. Omitted for callers
    *  with nothing to stop (tests, non-WhatsApp channels). */
   stopTyping?: () => void
+  /** Skip the burst-coalescing wait — for the inbound-recovery sweep,
+   *  which only picks up messages that have already sat unanswered for
+   *  minutes, so there is no burst left to coalesce. */
+  skipDebounce?: boolean
 }
 
 async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
@@ -365,7 +363,7 @@ export async function dispatchInboundToAiReply(
   // than silence).
   let isLatest: boolean
   try {
-    isLatest = await waitForQuietPeriod(conversationId)
+    isLatest = args.skipDebounce ? true : await waitForQuietPeriod(conversationId)
   } catch (err) {
     console.error('[ai auto-reply] debounce check failed, proceeding without it:', err)
     isLatest = true
@@ -600,6 +598,10 @@ export async function dispatchInboundToAiReply(
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
   let hotelCategoryProductNames = new Map<string, string[]>()
+    // Real active product names + the business name, for detecting the ONE
+    // item a guest's message asks about (hotel only — hotel-media-intent.ts).
+    let hotelProductNames: string[] = []
+    let businessName: string | null = null
     // Hoisted out of the `if (isHotel)` block below (where they're first
     // read) so the deterministic proactive-estimate follow-up, much
     // later in this function, can reuse them without re-querying.
@@ -673,6 +675,13 @@ export async function dispatchInboundToAiReply(
           accountId,
           (catalogModeRow?.name as string | null | undefined) ?? null,
         ).catch(() => new Map<string, string[]>())
+        businessName = (catalogModeRow?.name as string | null | undefined) ?? null
+        const { data: activeProducts } = await db
+          .from('products')
+          .select('name')
+          .eq('account_id', accountId)
+          .eq('is_active', true)
+        hotelProductNames = ((activeProducts ?? []) as { name: string }[]).map((p) => p.name)
       }
 
       // Clinic: the patient's one upcoming appointment, so the bot can
@@ -904,7 +913,7 @@ export async function dispatchInboundToAiReply(
     // exactly one active product plausibly matches the promised text —
     // see `guessPromisedProductName` — never guesses between several.
     let resolvedSendPhotoProductName = sendPhotoProductName
-    if (!sendPhotoProductName && !quickReplyId && PHOTO_PROMISE_RE.test(text)) {
+    if (!sendPhotoProductName && !quickReplyId && isPhotoPromise(text)) {
       const guessed = await guessPromisedProductName(db, accountId, text).catch(() => null)
       if (guessed) {
         resolvedSendPhotoProductName = guessed
@@ -926,6 +935,17 @@ export async function dispatchInboundToAiReply(
           throttleMinutes: 360,
         })
       }
+    }
+
+    // Hotel: the guest's OWN message names one specific item ("¿tiene fotos
+    // de la habitación deluxe?") → send that item's photo(s) ourselves,
+    // ahead of the text, instead of waiting for the model's marker. Only
+    // an unambiguous single match (productAskedAbout); the photo send is
+    // deduped per conversation, so mentioning the item again re-sends
+    // nothing.
+    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel) {
+      const asked = productAskedAbout(latestInbound, hotelProductNames, businessName)
+      if (asked) resolvedSendPhotoProductName = asked
     }
 
     // The provider call succeeded, so the key is valid again — clear any
@@ -1244,12 +1264,19 @@ export async function dispatchInboundToAiReply(
         lowerOutboundText.includes(c.name.toLowerCase()),
       ).length
       const isGenericCategoryMenu = mentionedCategoryLabels >= 2
+      // The guest's OWN message asking about exactly one category ("las
+      // habitaciones cuánto cuestan?", "¿qué tienen de spa?") — real gap
+      // 2026-09-24: the model answered that with the catalog link, named
+      // no room, and the banner only went out a turn later. Two or more
+      // categories in one message is a general question → no banner.
+      const askedCategories = categorySlugsMentioned(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
         const namedInReply =
           !isGenericCategoryMenu && productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
-        if (!proposal && !namedInReply) continue
+        const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
+        if (!proposal && !namedInReply && !askedInMessage) continue
         try {
           await autoSendCategoryBanner({
             db,
@@ -1275,6 +1302,45 @@ export async function dispatchInboundToAiReply(
             throttleMinutes: 60,
           })
         }
+      }
+    }
+
+    // Item photo(s) BEFORE the text, right after any category banner, so
+    // the guest sees the room/package first and the reply reads as the
+    // description of what they're looking at (banner → item photo →
+    // text). Real gap 2026-09-24: the photo arrived after a reply that
+    // said "si me confirma, le envío la foto".
+    let photoSentProductId: string | null = null
+    if (resolvedSendPhotoProductName) {
+      try {
+        photoSentProductId = await autoSendProductPhoto({
+          db,
+          accountId,
+          configOwnerUserId,
+          conversationId,
+          productName: resolvedSendPhotoProductName,
+          sinceISO: conv.ai_context_reset_at,
+        })
+      } catch (err) {
+        // Same reasoning as send_catalog above: never rethrow, always
+        // alert on an actual send failure (a real product/photo was
+        // found — Meta/network is what broke). A no-match or
+        // no-photo-on-file isn't an error at all — autoSendProductPhoto
+        // itself just returns quietly for those, nothing to catch here.
+        console.error('[ai auto-reply] autonomous send_photo failed:', describeError(err))
+        void dispatchSystemAlert({
+          severity: 'warning',
+          source: 'ai_dispatch_error',
+          title: 'AI tried to send a product photo but it could not be sent',
+          detail: {
+            account_id: accountId,
+            conversation_id: conversationId,
+            message: describeError(err).slice(0, 300),
+          },
+          dedupKey: `ai_send_photo_failed:${accountId}`,
+          accountId,
+          throttleMinutes: 60,
+        })
       }
     }
 
@@ -1490,39 +1556,6 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    let photoSentProductId: string | null = null
-    if (resolvedSendPhotoProductName) {
-      try {
-        photoSentProductId = await autoSendProductPhoto({
-          db,
-          accountId,
-          configOwnerUserId,
-          conversationId,
-          productName: resolvedSendPhotoProductName,
-          sinceISO: conv.ai_context_reset_at,
-        })
-      } catch (err) {
-        // Same reasoning as send_catalog above: never rethrow, always
-        // alert on an actual send failure (a real product/photo was
-        // found — Meta/network is what broke). A no-match or
-        // no-photo-on-file isn't an error at all — autoSendProductPhoto
-        // itself just returns quietly for those, nothing to catch here.
-        console.error('[ai auto-reply] autonomous send_photo failed:', describeError(err))
-        void dispatchSystemAlert({
-          severity: 'warning',
-          source: 'ai_dispatch_error',
-          title: 'AI tried to send a product photo but it could not be sent',
-          detail: {
-            account_id: accountId,
-            conversation_id: conversationId,
-            message: describeError(err).slice(0, 300),
-          },
-          dedupKey: `ai_send_photo_failed:${accountId}`,
-          accountId,
-          throttleMinutes: 60,
-        })
-      }
-    }
 
     // Defense in depth, same reasoning as send_photo above: the marker
     // is only ever taught for hotel accounts with at least one category
@@ -1700,7 +1733,11 @@ export async function dispatchInboundToAiReply(
     // remember to ask on its own (see `SEND_PRODUCT_PHOTO_SENTINEL_PREFIX`
     // for why: the model doesn't reliably re-invoke actions on later
     // turns in the same conversation).
-    if (photoSentProductId && isHotel) {
+    // Only when the reply didn't already ask the guest something: the
+    // prompt has the model close an item reply with its own warm booking
+    // invitation, and a canned second question right after it reads like
+    // a form. This stays as the safety net for replies that forgot to ask.
+    if (photoSentProductId && isHotel && !outboundText.includes('?')) {
       try {
         await sendHotelBookingNudge({
           db,
@@ -3623,28 +3660,32 @@ async function sendReservationNudge(args: {
   sinceISO: string | null
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, snapshot, currency, sinceISO } = args
-  const text = buildReservationFollowUpMessage(snapshot, currency)
+  // What the nudge is ABOUT (the canonical variant-0 rendering) — the
+  // dedupe key. The wording itself rotates between warm variants, so
+  // comparing the sent text would stop recognizing a repeat.
+  const signature = buildReservationFollowUpMessage(snapshot, currency, 0)
 
-  // Never repeat the exact same "would you like to book? I still need
-  // X" nudge back to back in one conversation — real incident
-  // 2026-09-21: a guest asking to see two different rooms in a row with
-  // no new dates/guests given got the identical nudge sentence twice
-  // within two minutes, which reads like a broken record rather than a
-  // natural conversation. Only skips when nothing about the request
-  // actually changed (the rendered text is identical); any real change
-  // in what's captured produces different text and still sends.
-  const { data: priorNudges } = await db
+  // Never repeat the same nudge back to back in one conversation — real
+  // incident 2026-09-21: a guest asking to see two different rooms in a
+  // row with no new dates/guests given got the identical nudge twice
+  // within two minutes, which reads like a broken record. Only skips when
+  // nothing about the request actually changed; any real change in what's
+  // captured produces a different signature and still sends.
+  const { data: priorNudges, count: priorCount } = await db
     .from('ai_action_log')
-    .select('input, created_at')
+    .select('input, created_at', { count: 'exact' })
     .eq('account_id', accountId)
     .eq('action', 'reservation_nudge')
     .eq('target_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(1)
   const lastNudge = ((priorNudges ?? []) as { input: unknown; created_at: string }[])[0]
-  const lastNudgeText = (lastNudge?.input as { text?: string } | null)?.text
+  const lastInput = lastNudge?.input as { signature?: string; text?: string } | null
+  const lastSignature = lastInput?.signature ?? lastInput?.text
   const lastNudgeStillRelevant = !sinceISO || (lastNudge && lastNudge.created_at > sinceISO)
-  if (lastNudge && lastNudgeStillRelevant && lastNudgeText === text) return
+  if (lastNudge && lastNudgeStillRelevant && lastSignature === signature) return
+
+  const text = buildReservationFollowUpMessage(snapshot, currency, priorCount ?? 0)
 
   await sendMessageToConversation(db, accountId, {
     conversationId,
@@ -3657,7 +3698,7 @@ async function sendReservationNudge(args: {
     actor_user_id: configOwnerUserId,
     action: 'reservation_nudge',
     target_id: conversationId,
-    input: { category: snapshot.category, text, source: 'auto_reply_autonomous' },
+    input: { category: snapshot.category, text, signature, source: 'auto_reply_autonomous' },
     result: { conversation_id: conversationId },
   })
 }

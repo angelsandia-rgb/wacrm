@@ -44,17 +44,34 @@ export function missingReservationFields(row: ReservationFieldSnapshot): string[
   return missing
 }
 
+/** Warm, varied closing invitations — the same canned sentence every time
+ *  read like a form (Angel, 2026-09-24: "súper amable, textos variados,
+ *  elocuente y cálida"). `{missing}` is the joined list of what's still
+ *  needed. Picked by `variant`, so a caller can rotate them. */
+const FOLLOW_UP_WITH_MISSING = [
+  '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito {missing}. 😊',
+  'Si le gusta, será un placer apartársela. ¿Me comparte {missing}?',
+  '¡Nos encantaría recibirle! Para dejar su solicitud lista, ¿me indica {missing}?',
+  'Cuando guste la reservamos. Para avanzar, ¿me ayuda con {missing}?',
+]
+const FOLLOW_UP_COMPLETE = [
+  '¿Le gustaría que confirmemos la reservación? Con gusto se la dejamos lista.',
+  '¿Desea que dejemos su solicitud lista? Será un placer atenderle.',
+  'Si le parece bien, con mucho gusto dejamos su reservación lista. ¿Le confirmo?',
+]
+
+const pick = (options: string[], variant: number) =>
+  options[((variant % options.length) + options.length) % options.length]
+
 /** Renders the missing-field list (see `missingReservationFields`) into
  *  the actual WhatsApp text sent after a photo or quote. */
-export function reservationFollowUpText(missing: string[]): string {
-  if (missing.length === 0) {
-    return '¿Le gustaría confirmar la reservación? Con gusto se la dejamos lista.'
-  }
+export function reservationFollowUpText(missing: string[], variant = 0): string {
+  if (missing.length === 0) return pick(FOLLOW_UP_COMPLETE, variant)
   const joined =
     missing.length === 1
       ? missing[0]
       : `${missing.slice(0, -1).join(', ')} y ${missing[missing.length - 1]}`
-  return `¿Le gustaría confirmar la reservación? Me falta ${joined} para dejarla lista.`
+  return pick(FOLLOW_UP_WITH_MISSING, variant).replace('{missing}', joined)
 }
 
 /**
@@ -84,7 +101,8 @@ export function reservationSummaryText(row: ReservationFieldSnapshot, currency: 
 export function buildReservationFollowUpMessage(
   row: ReservationFieldSnapshot,
   currency: string,
+  variant = 0,
 ): string {
   const missing = missingReservationFields(row)
-  return missing.length > 0 ? reservationFollowUpText(missing) : reservationSummaryText(row, currency)
+  return missing.length > 0 ? reservationFollowUpText(missing, variant) : reservationSummaryText(row, currency)
 }

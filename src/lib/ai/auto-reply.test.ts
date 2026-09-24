@@ -2542,7 +2542,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
       expect.objectContaining({
         messageType: 'text',
         contentText:
-          '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+          '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
       }),
     )
   })
@@ -2574,7 +2574,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
       expect.anything(),
       'acct-1',
       expect.objectContaining({
-        contentText: '¿Le gustaría confirmar la reservación? Me falta el número de personas para dejarla lista.',
+        contentText: '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito el número de personas. 😊',
       }),
     )
   })
@@ -2588,7 +2588,10 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     h.state.priorScheduleBookings = [
       {
         input: {
-          text: '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+          // Sent with a DIFFERENT wording variant; the dedupe keys on the
+          // signature (what is missing), not the rotating text.
+          text: 'Si le gusta, será un placer apartársela. ¿Me comparte las fechas de entrada y salida y el número de personas?',
+          signature: '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
         },
         created_at: '2026-09-21T16:32:00.000Z',
       },
@@ -3277,6 +3280,92 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
   })
 
+  it('sends the banner when the GUEST asks about one category, even if the reply names no product — real gap 2026-09-24 (conversation bac7922e-…): "las habitaciones cuanto cuestan?" got the catalog link and no banner until a turn later', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.state.products = [{ id: 'p1', name: 'Suite Master Deluxe', category_id: 'cat-1' }]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'las habitaciones cuanto cuestan?' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto. Le comparto el catálogo para que vea las opciones.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/rooms.jpg' }),
+    )
+  })
+
+  it('does not send a banner when the guest asks about several categories at once', async () => {
+    h.state.categories = [
+      { id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' },
+      { id: 'cat-2', name: 'Spa', banner_url: 'https://cdn.example.com/spa.jpg' },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'quiero una habitación y un masaje' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo con ambas cosas.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('sends the item photo when the guest asks about one specific item, BEFORE the text — real gap 2026-09-24: "tiene fotos de la habitación deluxe?"', async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Master Deluxe', image_url: 'https://cdn.example.com/deluxe.jpg', category_id: 'cat-1' },
+      { id: 'p2', name: 'Suite Premium', image_url: 'https://cdn.example.com/premium.jpg', category_id: 'cat-1' },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'tiene fotos de la habitación deluxe?' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Claro que sí. La Suite Master Deluxe tiene jacuzzi y vista al jardín. ¿Le gustaría reservarla?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image', mediaUrl: 'https://cdn.example.com/deluxe.jpg' }),
+    )
+    const photoOrder = h.sendMessageToConversation.mock.invocationCallOrder[0]
+    const textOrder = h.engineSendText.mock.invocationCallOrder[0]
+    expect(photoOrder).toBeLessThan(textOrder)
+    // The reply already asked to book — no canned second question after it.
+    const texts = h.sendMessageToConversation.mock.calls.filter(
+      (c: unknown[]) => (c[2] as { messageType?: string }).messageType === 'text',
+    )
+    expect(texts).toHaveLength(0)
+  })
+
+  it('never sends a photo the reply only offered conditionally — real incident 2026-09-24: "Si me confirma, le envío la foto" followed three seconds later by the photo', async () => {
+    h.state.products = [
+      { id: 'p1', name: 'Suite Master Deluxe', image_url: 'https://cdn.example.com/deluxe.jpg', category_id: 'cat-1' },
+      { id: 'p2', name: 'Suite Premium', image_url: 'https://cdn.example.com/premium.jpg', category_id: 'cat-1' },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'tiene fotos de las suites?' }])
+    h.generateReply.mockResolvedValue({
+      text: '¿Se refiere a la Suite Master Deluxe? Si me confirma, le envío la foto de esa habitación.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image' }),
+    )
+  })
+
   it('sends the banner when products share a leading word the model naturally drops while listing them — Real gap found 2026-09-21: "Tenemos estos paquetes: Romántico, San Vicente, San Ricardo y Luna de Miel" never contains the full "Paquete Romántico" product name, so a plain substring match against full names alone missed it entirely, twice in the same live conversation (a5340ecc-...)', async () => {
     h.state.categories = [{ id: 'cat-1', name: 'Paquetes', banner_url: 'https://cdn.example.com/paquetes.jpg' }]
     h.state.products = [
@@ -3631,7 +3720,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       expect.objectContaining({
         messageType: 'text',
         contentText:
-          '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+          '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
       }),
     )
     expect(h.state.updatePayload).toBeNull()

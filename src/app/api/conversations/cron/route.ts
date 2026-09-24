@@ -1,10 +1,11 @@
 import { timingSafeEqual } from 'node:crypto'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { supabaseAdmin } from '@/lib/conversations/admin-client'
 import { reassignUnclaimedConversations } from '@/lib/conversations/reassign'
 import { pruneEmptyStaleConversations } from '@/lib/conversations/prune-empty'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { checkAiLiveness } from '@/lib/ai/liveness'
+import { recoverUnansweredInbound } from '@/lib/ai/inbound-recovery'
 
 /**
  * Auto-assigns open conversations that have sat unclaimed past their
@@ -47,5 +48,16 @@ export async function GET(request: Request) {
     return { checkedAccounts: 0, deadAccounts: [] }
   })
   await recordHeartbeat('conversations_cron')
+  // Customer messages whose AI reply was lost (e.g. to a deploy restart
+  // mid-debounce) — re-dispatched after the response, since each can
+  // take a full provider call. Best-effort; see inbound-recovery.ts.
+  after(async () => {
+    try {
+      const recovered = await recoverUnansweredInbound(supabaseAdmin())
+      if (recovered.recovered > 0) console.warn('[conversations/cron] inbound recovery:', recovered)
+    } catch (err) {
+      console.error('[conversations/cron] inbound recovery failed:', err)
+    }
+  })
   return NextResponse.json({ ...result, ...pruned, aiLiveness })
 }
