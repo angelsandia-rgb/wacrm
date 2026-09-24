@@ -41,15 +41,27 @@ export const RESERVATION_CATEGORIES: ReservationCategory[] = [
  * one of the five hotel service kinds (a generic-account category, an
  * uncategorised product).
  */
+/** How each category is recognized in free text, in precedence order. */
+const CATEGORY_PATTERNS: [ReservationCategory, RegExp][] = [
+  ['habitaciones', /habitac|room|cuarto/],
+  ['spa', /\bspa\b|masaj/],
+  ['actividades', /actividad|activit|tour|excursi/],
+  ['paquetes', /paquete|package|combo/],
+  ['eventos', /evento|event|sal[oó]n|boda|banquete/],
+]
+
 export function categorySlugFromName(name: string | null | undefined): ReservationCategory | null {
   const n = (name ?? '').trim().toLowerCase()
   if (!n) return null
-  if (/habitac|room|cuarto/.test(n)) return 'habitaciones'
-  if (/\bspa\b|masaj/.test(n)) return 'spa'
-  if (/actividad|activit|tour|excursi/.test(n)) return 'actividades'
-  if (/paquete|package|combo/.test(n)) return 'paquetes'
-  if (/evento|event|sal[oó]n|boda|banquete/.test(n)) return 'eventos'
-  return null
+  return CATEGORY_PATTERNS.find(([, re]) => re.test(n))?.[0] ?? null
+}
+
+/** Every category a free-text message mentions (a guest's question can
+ *  name several: "habitación y un masaje"). */
+export function categorySlugsMentioned(text: string | null | undefined): ReservationCategory[] {
+  const n = (text ?? '').trim().toLowerCase()
+  if (!n) return []
+  return CATEGORY_PATTERNS.filter(([, re]) => re.test(n)).map(([slug]) => slug)
 }
 
 export type ReservationStatus = 'pending' | 'approved' | 'denied'

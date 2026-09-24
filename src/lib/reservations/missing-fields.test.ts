@@ -64,30 +64,42 @@ describe('missingReservationFields', () => {
 })
 
 describe('reservationFollowUpText', () => {
-  it('offers a plain confirmation when nothing is missing', () => {
+  it('offers a warm confirmation when nothing is missing', () => {
     expect(reservationFollowUpText([])).toBe(
-      '¿Le gustaría confirmar la reservación? Con gusto se la dejamos lista.',
+      '¿Le gustaría que confirmemos la reservación? Con gusto se la dejamos lista.',
     )
   })
 
   it('names a single missing field', () => {
     expect(reservationFollowUpText(['el número de personas'])).toBe(
-      '¿Le gustaría confirmar la reservación? Me falta el número de personas para dejarla lista.',
+      '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito el número de personas. 😊',
     )
   })
 
   it('joins two missing fields with "y"', () => {
     expect(reservationFollowUpText(['las fechas de entrada y salida', 'el número de personas'])).toBe(
-      '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+      '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
     )
   })
 
   it('joins three+ missing fields with commas and a trailing "y"', () => {
     expect(
       reservationFollowUpText(['la fecha', 'el número de personas', 'el salón que le interesa']),
-    ).toBe(
-      '¿Le gustaría confirmar la reservación? Me falta la fecha, el número de personas y el salón que le interesa para dejarla lista.',
-    )
+    ).toContain('la fecha, el número de personas y el salón que le interesa')
+  })
+
+  it('rotates between distinct warm wordings, always naming what is missing', () => {
+    const texts = [0, 1, 2, 3].map((v) => reservationFollowUpText(['el número de personas'], v))
+    expect(new Set(texts).size).toBe(4)
+    for (const t of texts) expect(t).toContain('el número de personas')
+    // Wraps around instead of failing past the last variant.
+    expect(reservationFollowUpText(['la fecha'], 4)).toBe(reservationFollowUpText(['la fecha'], 0))
+  })
+
+  it('never uses the old ungrammatical "Me falta las…"', () => {
+    for (let v = 0; v < 8; v++) {
+      expect(reservationFollowUpText(['las fechas de entrada y salida'], v)).not.toMatch(/me falta las/i)
+    }
   })
 })
 
@@ -146,7 +158,7 @@ describe('reservationSummaryText', () => {
 describe('buildReservationFollowUpMessage', () => {
   it('asks for missing fields when the reservation is incomplete', () => {
     expect(buildReservationFollowUpMessage({ category: 'habitaciones' }, 'GTQ')).toBe(
-      '¿Le gustaría confirmar la reservación? Me falta las fechas de entrada y salida y el número de personas para dejarla lista.',
+      '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
     )
   })
 

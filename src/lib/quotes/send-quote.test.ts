@@ -191,7 +191,7 @@ describe('sendQuoteToConversation', () => {
     expect(h.sendMessageToConversation).toHaveBeenLastCalledWith(db, 'acct-1', {
       conversationId: 'conv-1',
       messageType: 'text',
-      contentText: '¿Le gustaría confirmar la reservación? Me falta el número de personas para dejarla lista.',
+      contentText: '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito el número de personas. 😊',
     })
   })
 

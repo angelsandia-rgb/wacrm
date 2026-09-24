@@ -122,7 +122,10 @@ describe('buildSystemPrompt — hotel category: ask-which-item, not a repeated d
       hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
     })
     expect(p.toLowerCase()).toContain('the system automatically sends')
-    expect(p.toLowerCase()).toContain('you do not send this yourself')
+    expect(p.toLowerCase()).toContain('you never send them yourself')
+    // The photo is never offered conditionally (real incident 2026-09-24).
+    expect(p).toContain('si me confirma, le envío la foto')
+    expect(p.toLowerCase()).toContain('never talk about sending photos conditionally')
     expect(p).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
   })
 
@@ -133,8 +136,14 @@ describe('buildSystemPrompt — hotel category: ask-which-item, not a repeated d
       catalog: ['- Paquete Romántico (Q1,100)'],
       hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
     })
-    expect(p.toLowerCase()).toContain('must not re-list the category')
-    expect(p.toLowerCase()).toContain('ask which one interests them')
+    // Warm brief description, item names, then a very kind question —
+    // without repeating the banner's price list.
+    expect(p.toLowerCase()).toContain('not the full price list')
+    expect(p.toLowerCase()).toContain('which one interests them most')
+    expect(p.toLowerCase()).toContain('vary your wording every time')
+    // Specific item: describe it, then a warm, varied booking invitation.
+    expect(p.toLowerCase()).toContain('invitation to book it')
+    expect(p.toLowerCase()).toContain('never repeat the same invitation sentence')
     expect(p).toContain(SEND_CATALOG_SENTINEL)
   })
 
@@ -341,7 +350,7 @@ describe('buildSystemPrompt — category banner is now app-side, never a model m
       mode: 'auto_reply',
       hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }],
     })
-    expect(p.toLowerCase()).toContain('never sends the same category')
+    expect(p.toLowerCase()).toContain('each image goes out at most once per conversation')
   })
 })
 
