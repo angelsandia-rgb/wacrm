@@ -42,12 +42,6 @@ import { AlertsPanel } from '@/components/admin/alerts-panel';
 
 type Company = PlatformCompany;
 
-function toDateInputValue(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
 interface PlatformBankSettings {
   bank_name: string | null;
   account_number: string | null;
@@ -100,6 +94,7 @@ export default function PlatformAdminPage() {
   const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   const [deletingCompanyId, setDeletingCompanyId] = useState<string | null>(null);
   const [savingHiddenNavId, setSavingHiddenNavId] = useState<string | null>(null);
+  const [savingFeatureFlagsId, setSavingFeatureFlagsId] = useState<string | null>(null);
   const [addingNumberId, setAddingNumberId] = useState<string | null>(null);
   const [savingBillingId, setSavingBillingId] = useState<string | null>(null);
 
@@ -530,6 +525,30 @@ export default function PlatformAdminPage() {
     }
   };
 
+  const setCompanyFeatureFlags = async (company: Company, flags: string[]) => {
+    setSavingFeatureFlagsId(company.id);
+    setError(null);
+    try {
+      const response = await fetch(`/api/admin/companies/${company.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set_feature_flags: flags }),
+      });
+      const body = await readResponseJson<{ error?: string }>(response);
+      if (!response.ok)
+        throw new Error(body.error ?? 'No se pudieron guardar las funciones en prueba');
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudieron guardar las funciones en prueba'
+      );
+    } finally {
+      setSavingFeatureFlagsId(null);
+    }
+  };
+
   const addWhatsAppNumber = async (company: Company) => {
     if (
       !window.confirm(
@@ -768,6 +787,7 @@ export default function PlatformAdminPage() {
           billing: savingBillingId,
           vertical: changingVerticalId,
           hiddenNav: savingHiddenNavId,
+          featureFlags: savingFeatureFlagsId,
           resendInvite: resendingInviteId,
           deleteCompany: deletingCompanyId,
         }}
@@ -790,195 +810,13 @@ export default function PlatformAdminPage() {
         onSetHiddenNav={(company, keys) =>
           void setCompanyHiddenNav(company, keys)
         }
+        onSetFeatureFlags={(company, flags) =>
+          void setCompanyFeatureFlags(company, flags)
+        }
       />
 
       <AiDemo />
 
-      {/* Legacy company table retained as a rollback reference while the
-          master-detail view above carries every existing action. */}
-      <Card className="hidden">
-        <CardHeader>
-          <CardTitle>Empresas</CardTitle>
-          <CardDescription>
-            {companies.length} empresas registradas · consumo de los últimos 30
-            días
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Empresa</TableHead>
-                <TableHead>Dueño</TableHead>
-                <TableHead>Usuarios</TableHead>
-                <TableHead>Cupos</TableHead>
-                <TableHead>Números WhatsApp</TableHead>
-                <TableHead>Conversaciones</TableHead>
-                <TableHead>Mensajes</TableHead>
-                <TableHead>Tokens IA</TableHead>
-                <TableHead>Estado</TableHead>
-                <TableHead>Próximo pago</TableHead>
-                <TableHead>Alta</TableHead>
-                <TableHead className="text-right">Acción</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {companies.map((company) => (
-                <TableRow key={company.id}>
-                  <TableCell className="font-medium">{company.name}</TableCell>
-                  <TableCell>
-                    <div>{company.owner?.name || 'Sin nombre'}</div>
-                    <div className="text-muted-foreground text-xs">
-                      {company.owner?.email || 'Sin correo'}
-                    </div>
-                  </TableCell>
-                  <TableCell>{company.memberCount}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={
-                          company.memberCount >= company.seatLimit
-                            ? 'text-amber-500'
-                            : 'text-muted-foreground'
-                        }
-                      >
-                        {company.memberCount} / {company.seatLimit}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={addingSeatId === company.id}
-                        onClick={() => void addSeat(company)}
-                      >
-                        {addingSeatId === company.id
-                          ? 'Guardando…'
-                          : '+1 asiento'}
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={
-                          company.whatsappNumberCount >=
-                          company.whatsappNumberLimit
-                            ? 'text-amber-500'
-                            : 'text-muted-foreground'
-                        }
-                      >
-                        {company.whatsappNumberCount} /{' '}
-                        {company.whatsappNumberLimit}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={addingNumberId === company.id}
-                        onClick={() => void addWhatsAppNumber(company)}
-                      >
-                        {addingNumberId === company.id
-                          ? 'Guardando…'
-                          : '+1 número'}
-                      </Button>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {company.usage30d.conversations.toLocaleString('es-GT')}
-                  </TableCell>
-                  <TableCell>
-                    {company.usage30d.messages.toLocaleString('es-GT')}
-                  </TableCell>
-                  <TableCell>
-                    {company.usage30d.aiTokens.toLocaleString('es-GT')}
-                  </TableCell>
-                  <TableCell>
-                    <span
-                      className={
-                        company.suspendedAt
-                          ? 'text-destructive'
-                          : 'text-emerald-500'
-                      }
-                    >
-                      {company.suspendedAt ? 'Suspendida' : 'Activa'}
-                    </span>
-                    {company.suspendedReason ? (
-                      <div
-                        className="text-muted-foreground max-w-48 truncate text-xs"
-                        title={company.suspendedReason}
-                      >
-                        {company.suspendedReason}
-                      </div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      type="date"
-                      defaultValue={toDateInputValue(company.nextPaymentDueAt)}
-                      disabled={savingDueDateId === company.id}
-                      onBlur={(event) => {
-                        if (
-                          event.target.value !==
-                          toDateInputValue(company.nextPaymentDueAt)
-                        )
-                          void changeDueDate(company, event.target.value);
-                      }}
-                      className="h-8 w-36 text-xs"
-                    />
-                    {company.lastMarkedPaidAt ? (
-                      <div className="text-muted-foreground mt-1 text-xs">
-                        Último pago:{' '}
-                        {new Date(company.lastMarkedPaidAt).toLocaleDateString(
-                          'es-GT'
-                        )}
-                      </div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    {new Date(company.createdAt).toLocaleDateString('es-GT')}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={markingPaidId === company.id}
-                        onClick={() => void markPaid(company)}
-                      >
-                        {markingPaidId === company.id
-                          ? 'Guardando…'
-                          : 'Marcar pagada'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          company.suspendedAt ? 'outline' : 'destructive'
-                        }
-                        disabled={changingId === company.id}
-                        onClick={() => void changeSuspension(company)}
-                      >
-                        {changingId === company.id
-                          ? 'Guardando…'
-                          : company.suspendedAt
-                            ? 'Reactivar'
-                            : 'Suspender'}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!loading && companies.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={12}
-                    className="text-muted-foreground py-8 text-center"
-                  >
-                    No hay empresas registradas.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>

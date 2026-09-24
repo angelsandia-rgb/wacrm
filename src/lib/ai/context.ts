@@ -5,8 +5,11 @@ import {
   MAX_INBOUND_IMAGES_PER_REPLY,
   type InboundImageResolver,
 } from './inbound-image'
+import { MAX_VOICE_NOTES_PER_REPLY, type VoiceNoteTranscriber } from './voice-notes'
 
 interface DbMessage {
+  id?: string
+  transcript?: string | null
   sender_type: 'customer' | 'agent' | 'bot'
   content_type: string
   content_text: string | null
@@ -35,6 +38,12 @@ interface DbMessage {
  * Ordered oldest-first (chronological) so the transcript reads
  * naturally and the most recent customer message lands last.
  *
+ * When `voiceTranscriber` is passed (auto-reply, `ai_voice_notes` flag),
+ * inbound customer `audio` messages become a `user` turn with the voice
+ * note's transcript; the newest few are transcribed on demand and cached
+ * (voice-notes.ts). Without it, audio rows are skipped as before — and
+ * `transcript` isn't selected, so this never depends on migration 156.
+ *
  * `sinceISO`, when given, excludes messages at or before that instant —
  * this is `conversations.ai_context_reset_at` (migration 142), set by
  * the "reset conversation for AI" action so the bot forgets everything
@@ -46,14 +55,19 @@ export async function buildConversationContext(
   limit: number = aiContextMessageLimit(),
   imageResolver?: InboundImageResolver | null,
   sinceISO?: string | null,
+  voiceTranscriber?: VoiceNoteTranscriber | null,
 ): Promise<ChatMessage[]> {
-  const contentTypes = imageResolver
-    ? ['text', 'template', 'image']
-    : ['text', 'template']
+  const contentTypes = ['text', 'template']
+  if (imageResolver) contentTypes.push('image')
+  if (voiceTranscriber) contentTypes.push('audio')
 
   let query = db
     .from('messages')
-    .select('sender_type, content_type, content_text, media_url')
+    .select(
+      voiceTranscriber
+        ? 'id, transcript, sender_type, content_type, content_text, media_url'
+        : 'sender_type, content_type, content_text, media_url',
+    )
     .eq('conversation_id', conversationId)
     // Automation templates persist the rendered/substituted body in
     // content_text. Treat them as assistant turns just like bot text so
@@ -66,7 +80,7 @@ export async function buildConversationContext(
 
   if (error) throw error
 
-  const rows = ((data ?? []) as DbMessage[]).reverse()
+  const rows = ((data ?? []) as unknown as DbMessage[]).reverse()
 
   // Resolve customer photos newest-first so the cap keeps the most
   // recent ones, then stop downloading once we've hit it.
@@ -88,6 +102,26 @@ export async function buildConversationContext(
     }
   }
 
+  // Voice notes newest-first under the same kind of cap; cached ones are
+  // free, so they don't count against it.
+  const transcriptByRow = new Map<number, string>()
+  if (voiceTranscriber) {
+    let transcribed = 0
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const m = rows[i]
+      if (m.sender_type !== 'customer' || m.content_type !== 'audio' || !m.id) continue
+      const cached = m.transcript?.trim()
+      if (cached) {
+        transcriptByRow.set(i, cached)
+        continue
+      }
+      if (transcribed >= MAX_VOICE_NOTES_PER_REPLY) continue
+      transcribed += 1
+      const text = await voiceTranscriber({ id: m.id, media_url: m.media_url, transcript: null })
+      if (text) transcriptByRow.set(i, text)
+    }
+  }
+
   const out: ChatMessage[] = []
   rows.forEach((m, i) => {
     const role: ChatMessage['role'] = m.sender_type === 'customer' ? 'user' : 'assistant'
@@ -104,6 +138,14 @@ export async function buildConversationContext(
         content: text || '(El cliente envió una foto.)',
         images,
       })
+      return
+    }
+
+    if (m.content_type === 'audio') {
+      const transcript = transcriptByRow.get(i)
+      // A note we couldn't transcribe adds nothing the model can use.
+      if (!transcript) return
+      out.push({ role, content: `(Nota de voz del cliente, transcrita): ${transcript}` })
       return
     }
 

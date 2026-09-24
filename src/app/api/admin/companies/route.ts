@@ -4,6 +4,7 @@ import { platformAdminClient } from '@/lib/platform/admin-client';
 import { platformInviteRedirectUrl } from '@/lib/http/base-url';
 import { computeCompanyHandoffMetrics } from '@/lib/admin/company-metrics';
 import { mapInviteError } from '@/lib/admin/invite-errors';
+import { normalizeFeatureFlags } from '@/lib/features/flags';
 import { fetchAllRows, fetchAllRowsIn } from '@/lib/supabase/fetch-all';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -21,7 +22,7 @@ export async function GET() {
       admin
         .from('accounts')
         .select(
-          'id, name, owner_user_id, created_at, suspended_at, suspended_reason, next_payment_due_at, last_marked_paid_at, subscription_amount, subscription_currency, seat_limit, whatsapp_number_limit, industry_vertical, vertical_applied_at, hidden_nav_keys'
+          'id, name, owner_user_id, created_at, suspended_at, suspended_reason, next_payment_due_at, last_marked_paid_at, subscription_amount, subscription_currency, seat_limit, whatsapp_number_limit, industry_vertical, vertical_applied_at, hidden_nav_keys, feature_flags'
         )
         .order('created_at', { ascending: false }),
       admin
@@ -140,6 +141,7 @@ export async function GET() {
           hiddenNavKeys: Array.isArray(account.hidden_nav_keys)
             ? (account.hidden_nav_keys as string[])
             : null,
+          featureFlags: normalizeFeatureFlags(account.feature_flags),
           owner: owner ? { name: owner.full_name, email: owner.email } : null,
           usage30d: {
             messages: messages.count ?? 0,

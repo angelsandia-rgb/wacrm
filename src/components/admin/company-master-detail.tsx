@@ -34,6 +34,7 @@ import {
   NAV_SECTION_KEYS,
 } from '@/lib/verticals';
 import { cn } from '@/lib/utils';
+import { FEATURE_FLAGS, FEATURE_FLAG_KEYS } from '@/lib/features/flags';
 
 /** Spanish labels for the toggleable sidebar sections (keys = `labelKey`s
  *  in `src/components/layout/sidebar.tsx`). Order = display order. */
@@ -77,6 +78,8 @@ export interface PlatformCompany {
   /** Explicit per-company sidebar-section override (migration 107).
    *  `null` = inherit the vertical default. */
   hiddenNavKeys: string[] | null;
+  /** Per-company feature flags switched on (migration 156). */
+  featureFlags: string[];
   owner: { name: string | null; email: string } | null;
   usage30d: { messages: number; conversations: number; aiTokens: number };
   handoffs30d: {
@@ -130,6 +133,7 @@ interface Props {
     billing: string | null;
     vertical: string | null;
     hiddenNav: string | null;
+    featureFlags: string | null;
     resendInvite: string | null;
     deleteCompany: string | null;
   };
@@ -154,6 +158,8 @@ interface Props {
   /** Set the per-company hidden sidebar sections. `null` clears the
    *  override so the company inherits its vertical default. */
   onSetHiddenNav(company: PlatformCompany, keys: string[] | null): void;
+  /** Replace the company's enabled feature flags. */
+  onSetFeatureFlags(company: PlatformCompany, flags: string[]): void;
 }
 
 export function CompanyMasterDetail({
@@ -169,6 +175,7 @@ export function CompanyMasterDetail({
   onSetVertical,
   onApplyVerticalKit,
   onSetHiddenNav,
+  onSetFeatureFlags,
   onResendInvite,
   onDeleteCompany,
 }: Props) {
@@ -633,6 +640,47 @@ export function CompanyMasterDetail({
                   </div>
                 );
               })()}
+
+              <div className="border-border rounded-xl border p-4">
+                <h3 className="flex items-center gap-2 font-semibold">
+                  <Building2 className="text-primary size-4" />
+                  Funciones en prueba
+                </h3>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Activa una función nueva solo para esta empresa para probarla
+                  con tráfico real antes de habilitarla para todas.
+                </p>
+                <div className="mt-3 space-y-3">
+                  {FEATURE_FLAG_KEYS.map((key) => {
+                    const on = selected.featureFlags.includes(key);
+                    const busy = busyIds.featureFlags === selected.id;
+                    return (
+                      <label key={key} className="flex items-start gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 size-4"
+                          disabled={busy}
+                          checked={on}
+                          onChange={() =>
+                            onSetFeatureFlags(
+                              selected,
+                              on
+                                ? selected.featureFlags.filter((k) => k !== key)
+                                : [...selected.featureFlags, key]
+                            )
+                          }
+                        />
+                        <span>
+                          <span className="font-medium">{FEATURE_FLAGS[key].label}</span>
+                          <span className="text-muted-foreground block text-xs">
+                            {FEATURE_FLAGS[key].description}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
 
               {selected.suspendedReason ? (
                 <div className="border-destructive/20 bg-destructive/5 text-destructive rounded-xl border p-3 text-sm">

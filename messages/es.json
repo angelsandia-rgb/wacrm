@@ -1242,6 +1242,7 @@
       "photo": "Foto",
       "video": "Video",
       "audio": "Audio",
+      "transcript": "Transcripción",
       "unavailable": "{label} no disponible",
       "document": "Documento",
       "locationShared": "Ubicación compartida",

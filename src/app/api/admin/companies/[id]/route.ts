@@ -3,6 +3,7 @@ import { requirePlatformAdmin, toErrorResponse } from '@/lib/auth/account';
 import { platformAdminClient } from '@/lib/platform/admin-client';
 import { markAccountPaid } from '@/lib/admin/subscriptions';
 import { isVerticalSlug, NAV_SECTION_KEYS, VERTICAL_SLUGS } from '@/lib/verticals';
+import { normalizeFeatureFlags } from '@/lib/features/flags';
 
 export async function PATCH(
   request: Request,
@@ -151,6 +152,31 @@ export async function PATCH(
         .update({ industry_vertical: body.set_vertical })
         .eq('id', id)
         .select('id, industry_vertical')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data)
+        return NextResponse.json(
+          { error: 'Empresa no encontrada' },
+          { status: 404 }
+        );
+      return NextResponse.json({ company: data });
+    }
+
+    if ('set_feature_flags' in body) {
+      // Per-company feature flags (migration 156). Only registered keys
+      // are stored (src/lib/features/flags.ts).
+      const raw = body.set_feature_flags;
+      if (!Array.isArray(raw) || !raw.every((k) => typeof k === 'string')) {
+        return NextResponse.json(
+          { error: 'La lista de funciones es inválida' },
+          { status: 400 }
+        );
+      }
+      const { data, error } = await platformAdminClient()
+        .from('accounts')
+        .update({ feature_flags: normalizeFeatureFlags(raw) })
+        .eq('id', id)
+        .select('id, feature_flags')
         .maybeSingle();
       if (error) throw error;
       if (!data)

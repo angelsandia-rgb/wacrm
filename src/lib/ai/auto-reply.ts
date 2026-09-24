@@ -43,6 +43,9 @@ import {
 } from '@/lib/reservations/upsert'
 import type { LeadTemperature } from '@/types'
 import type { GenerateResult } from './types'
+import { makeInboundMediaDownloader } from './inbound-media'
+import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
+import { hasFeature } from '@/lib/features/flags'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -457,6 +460,10 @@ export async function dispatchInboundToAiReply(
     const imageResolver = providerSupportsVision(config.provider, config.model)
       ? makeInboundImageResolver(db, accountId, conversationId)
       : null
+    // Voice notes (feature flag `ai_voice_notes`): transcribed with the
+    // account's OpenAI key, cached on messages.transcript. Off unless the
+    // flag is on AND an OpenAI key exists; never blocks the reply.
+    const voiceTranscriber = await loadVoiceNoteTranscriber(db, accountId, conversationId, config)
     let messages: ChatMessage[]
     try {
       messages = await buildConversationContext(
@@ -465,6 +472,7 @@ export async function dispatchInboundToAiReply(
         undefined,
         imageResolver,
         conv.ai_context_reset_at,
+        voiceTranscriber,
       )
     } catch (err) {
       // Reading the thread failed. A single oversized / corrupt inbound
@@ -3990,5 +3998,38 @@ async function autoCreateQuoteFromChat(args: {
     target_id: created.quote.id,
     input: { items: proposal.items, format: proposal.format, source: 'auto_reply_autonomous' },
     result: { quote_id: created.quote.id, total: created.quote.total },
+  })
+}
+
+/**
+ * The voice-note transcriber for this reply, or null when the account
+ * doesn't have the `ai_voice_notes` flag, has no OpenAI key to transcribe
+ * with, or the flag can't be read (e.g. migration 156 not applied yet —
+ * degrade to "no voice notes", never break the reply).
+ */
+async function loadVoiceNoteTranscriber(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+  config: AiConfig,
+): Promise<VoiceNoteTranscriber | null> {
+  const apiKey = transcriptionKey(config)
+  if (!apiKey) return null
+  try {
+    const { data, error } = await db
+      .from('accounts')
+      .select('feature_flags')
+      .eq('id', accountId)
+      .maybeSingle()
+    if (error || !hasFeature((data as { feature_flags?: unknown } | null)?.feature_flags, 'ai_voice_notes')) {
+      return null
+    }
+  } catch {
+    return null
+  }
+  return makeVoiceNoteTranscriber({
+    db,
+    apiKey,
+    download: makeInboundMediaDownloader(db, accountId, conversationId),
   })
 }
