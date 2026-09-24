@@ -171,3 +171,18 @@ export function isPaymentRequest(message: string | null | undefined): boolean {
 /** Step 1 of the two-step handoff protocol, worded for a payment ask. */
 export const PAYMENT_HANDOFF_OFFER =
   '¿Desea que le comunique con un asesor de nuestro equipo para coordinar el pago? 😊'
+
+/** "¿tiene fotos?", "mándeme imágenes", "¿cómo es la suite?", "quiero
+ *  verla", "pics / photos / pictures" (accents already stripped). */
+const PHOTO_REQUEST_RE =
+  /\b(fotos?|fotografias?|imagen(es)?|pics?|photos?|pictures?|images?|video|videos|como (es|son|se ve|se ven|luce|lucen)|(ver (la|el|las|los|como)|verla|verlo|verlas|verlos|mirarla|mirarlo)|muestra|muestran|muestre|muestrame|muestreme|mostrar(me|nos)?|ensene|ensename|enseneme|what (does|do) .* look like|see (it|them|the))\b/
+
+/**
+ * True when the guest asks to SEE something. Hotel item photos go out
+ * only then — naming a room while booking it ("quiero 2 Suite Premium
+ * del 24 al 26") is not a request for its gallery (owner, 2026-09-24:
+ * four photos arrived "de golpe" on a plain booking message).
+ */
+export function guestAskedForPhotos(message: string | null | undefined): boolean {
+  return PHOTO_REQUEST_RE.test(normalizeForMatch(message ?? ''))
+}

@@ -558,6 +558,7 @@ vi.mock('./admin-client', () => ({
 
 import { dispatchInboundToAiReply } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
+import { CLOSE_AVAILABILITY_AND_TOTAL_LINE, CLOSE_AVAILABILITY_LINE } from './hotel-stay-estimate'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -2521,6 +2522,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
   })
 
   it('hotel vertical, no reservation started yet: nudges for the category\'s missing fields', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Tiene fotos de la Suite Premium?' }])
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
@@ -2548,6 +2550,7 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
   })
 
   it('hotel vertical, a reservation is already in progress for this product: only names what is still missing', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Tiene fotos de la Suite Premium?' }])
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
     h.state.products = [
       { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
@@ -2646,7 +2649,54 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
     )
   })
 
+  it('hotel vertical, a booking message naming a room is not a photo request: no photo (owner, 2026-09-24)', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero 2 Suite Premium del 24 al 26 de octubre' }])
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le ayudo con las dos Suite Premium.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image' }),
+    )
+  })
+
+  it('hotel vertical, the reply promises the photo: it still goes out even without a photo request', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero la Suite Premium' }])
+    h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: 'Le envío la foto de la Suite Premium.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image', mediaUrl: 'https://cdn.example.com/suite.jpg' }),
+    )
+  })
+
   it('hotel vertical, product is in a non-bookable category: no nudge, just the photo', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Me muestra el llavero?' }])
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
     h.state.products = [
       { id: 'p1', name: 'Llavero recuerdo', image_url: 'https://cdn.example.com/llavero.jpg', category_id: 'cat-9' },
@@ -3141,7 +3191,14 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
       reservationProposals: habReservationProposal(),
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    // The request closed this turn, so only the availability line goes
+    // out — the total the guest already has is not repeated.
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: CLOSE_AVAILABILITY_LINE }),
+    )
   })
 
   it('alerts an owner when the stay is complete but genuinely unpriceable (e.g. an ambiguous name) instead of staying silent', async () => {
@@ -3159,7 +3216,13 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
       reservationProposals: habReservationProposal(),
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    // No total to share: the close ends with the team confirming both.
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: CLOSE_AVAILABILITY_AND_TOTAL_LINE }),
+    )
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         dedupKey: 'ai_stay_unpriceable:conv-1',

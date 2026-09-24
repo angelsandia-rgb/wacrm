@@ -173,8 +173,16 @@ export type StayEstimateStatus =
       status: 'priced'
       reservationRequestId: string
       text: string
+      /** The same figures worded as the LAST message after the bot's
+       *  closing reply — no item/dates recap (the close just said them),
+       *  and the one mention that a colleague confirms availability. */
+      closingText: string
       total: number
     }
+
+/** Sent after a hotel close when there is no fresh total to share. */
+export const CLOSE_AVAILABILITY_LINE = 'Un compañero le confirmará la disponibilidad en breve. 😊'
+export const CLOSE_AVAILABILITY_AND_TOTAL_LINE = 'Un compañero le confirmará la disponibilidad y el total en breve. 😊'
 
 /**
  * Same underlying data `loadHotelStayEstimate` computes, but as a
@@ -251,5 +259,12 @@ export async function computeStayEstimateStatus(
     await db.from('reservation_requests').update({ estimated_price: total }).eq('id', rr.id)
   }
 
-  return { status: 'priced', reservationRequestId: rr.id, text, total }
+  const nightsPart = `${quote.nights.length} ${nightsWord}`
+  const peoplePart = rooms > 1 ? headcountEs(rr.guests, rooms, perRoom) : null
+  const closingText =
+    `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
+    `${peoplePart ? ` (${peoplePart})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
+    CLOSE_AVAILABILITY_LINE
+
+  return { status: 'priced', reservationRequestId: rr.id, text, closingText, total }
 }
