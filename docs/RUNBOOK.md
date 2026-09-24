@@ -67,11 +67,11 @@ luego se investiga con calma. No depurar en caliente sobre `main`.
 4. Si el problema es un cambio de esquema reciente aplicado a mano,
    revertirlo con una migración nueva (nunca editar tablas desde el panel;
    ver `supabase/migrations/`).
-5. Restaurar desde backup: **Database → Backups**. Supabase toma backups
-   diarios automáticos (y PITR si está habilitado). **Un restore
-   sobreescribe TODO** — anunciarlo, exportar antes lo que se pueda, y
-   preferir restaurar a un proyecto nuevo para comparar antes de
-   promover.
+5. Restaurar desde backup: el proyecto está en el plan **Free, que no
+   tiene backups de Supabase** (Database → Backups aparece vacío). La
+   única copia es el `pg_dump` nocturno del VPS → sección 9. **Nunca**
+   restaurar encima de producción: restaurar a un proyecto nuevo,
+   comparar y recién entonces promover.
 
 ---
 
