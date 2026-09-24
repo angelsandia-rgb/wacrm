@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLocationQuestion, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
+import { guestAskedForPhotos, isLocationQuestion, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -132,5 +132,18 @@ describe('isPaymentRequest', () => {
   it('ignores price questions', () => {
     expect(isPaymentRequest('¿cuánto cuesta la suite premium?')).toBe(false)
     expect(isPaymentRequest('¿de cuánto es el anticipo?')).toBe(false)
+  })
+})
+
+describe('guestAskedForPhotos', () => {
+  it('detects requests to see an item', () => {
+    for (const m of ['¿Tiene fotos de la Suite Premium?', 'mándeme imágenes', '¿Cómo es la habitación?', 'quiero verla', 'can I see photos?', 'muéstreme el jacuzzi', '¿me muestra la suite?', '¿nos puede mostrar el salón?']) {
+      expect(guestAskedForPhotos(m), m).toBe(true)
+    }
+  })
+  it('a booking or price question is not a photo request', () => {
+    for (const m of ['Quiero reservar 2 Suite Premium para 2 parejas del 24 al 26 de marzo', '¿Cuánto cuesta la Suite Premium?', 'somos 4 personas', 'quiero ver disponibilidad para marzo']) {
+      expect(guestAskedForPhotos(m), m).toBe(false)
+    }
   })
 })

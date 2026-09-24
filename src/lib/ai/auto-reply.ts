@@ -6,7 +6,12 @@ import { buildConversationContext } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
-import { loadHotelStayEstimate, computeStayEstimateStatus } from './hotel-stay-estimate'
+import {
+  CLOSE_AVAILABILITY_AND_TOTAL_LINE,
+  CLOSE_AVAILABILITY_LINE,
+  computeStayEstimateStatus,
+  loadHotelStayEstimate,
+} from './hotel-stay-estimate'
 import { loadKnownContactFacts, loadActiveReservationsSummary } from './known-context'
 import { loadClinicAppointmentContext } from '@/lib/clinic/appointment-context'
 import { transitionAppointment } from '@/lib/clinic/appointments'
@@ -47,6 +52,7 @@ import { makeInboundMediaDownloader } from './inbound-media'
 import { makeVoiceNoteTranscriber, transcriptionKey, type VoiceNoteTranscriber } from './voice-notes'
 import { hasFeature } from '@/lib/features/flags'
 import {
+  guestAskedForPhotos,
   isLocationQuestion,
   isMedicalCaution,
   isPaymentRequest,
@@ -958,9 +964,16 @@ export async function dispatchInboundToAiReply(
     // an unambiguous single match (productAskedAbout); the photo send is
     // deduped per conversation, so mentioning the item again re-sends
     // nothing.
-    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel) {
+    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel && guestAskedForPhotos(latestInbound)) {
       const asked = productAskedAbout(latestInbound, hotelProductNames, businessName)
       if (asked) resolvedSendPhotoProductName = asked
+    }
+    // Hotel item photos only when the guest asked to see something (owner,
+    // 2026-09-24: "quiero 2 Suite Premium del 24 al 26" got four photos
+    // "de golpe"). A reply that already PROMISES the photo keeps it — not
+    // sending would contradict the text the guest is about to read.
+    if (resolvedSendPhotoProductName && isHotel && !guestAskedForPhotos(latestInbound) && !isPhotoPromise(text)) {
+      resolvedSendPhotoProductName = null
     }
 
     // The provider call succeeded, so the key is valid again — clear any
@@ -1762,6 +1775,7 @@ ${PAYMENT_HANDOFF_OFFER}`
     // most one carries `confirmed: true`, so this loop can never fire
     // `handOffIfReservationComplete`'s hand-off twice in the same turn.
     if (isHotel) {
+      let closedStayThisTurn = false
       for (const proposal of reservationProposals) {
         try {
           await autoRecordReservation({
@@ -1772,7 +1786,7 @@ ${PAYMENT_HANDOFF_OFFER}`
         }
         if (!conv.ai_handoff_at) {
           try {
-            await handOffIfReservationComplete({
+            const closed = await handOffIfReservationComplete({
               db, accountId, contactId, conversationId, configOwnerUserId,
               category: proposal.category as ReservationCategory,
               confirmed: proposal.confirmed,
@@ -1781,6 +1795,7 @@ ${PAYMENT_HANDOFF_OFFER}`
               sinceISO: conv.ai_context_reset_at,
               todayISO: dateKeyInZone(new Date(), businessTimeZone),
             })
+            if (closed && (proposal.category === 'habitaciones' || proposal.category === 'paquetes')) closedStayThisTurn = true
           } catch (err) {
             console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
           }
@@ -1798,6 +1813,7 @@ ${PAYMENT_HANDOFF_OFFER}`
             sinceISO: conv.ai_context_reset_at,
             modelText: outboundText,
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
+            closing: closedStayThisTurn,
           })
         } catch (err) {
           console.error('[ai auto-reply] proactive stay estimate follow-up failed:', err)
@@ -3565,9 +3581,18 @@ async function sendStayEstimateFollowUpIfDue(args: {
    *  for the real Saturday rate, and the guest was left with both). */
   modelText?: string
   todayISO?: string
+  /** A room/package request was sent to the team THIS turn: the bot's
+   *  close no longer mentions the team or the total (prompt), so this
+   *  message is the last word — total + deposit + "un compañero le
+   *  confirmará la disponibilidad", or just that line when there's no
+   *  fresh total to share (owner, 2026-09-24). */
+  closing?: boolean
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO } = args
+  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing } = args
   const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
+
+  const sendLine = (contentText: string) =>
+    sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText })
 
   if (result.status === 'unpriceable') {
     void dispatchSystemAlert({
@@ -3579,9 +3604,14 @@ async function sendStayEstimateFollowUpIfDue(args: {
       accountId,
       throttleMinutes: 360,
     })
+    if (closing) await sendLine(CLOSE_AVAILABILITY_AND_TOTAL_LINE)
     return
   }
-  if (result.status !== 'priced') return // incomplete / too_large_group — nothing to do yet
+  if (result.status !== 'priced') {
+    // incomplete / too_large_group / uneven_rooms — no total to share yet.
+    if (closing) await sendLine(CLOSE_AVAILABILITY_AND_TOTAL_LINE)
+    return
+  }
 
   const { data: priorSends } = await db
     .from('ai_action_log')
@@ -3594,19 +3624,20 @@ async function sendStayEstimateFollowUpIfDue(args: {
       (row.result as { total?: number } | null)?.total === result.total &&
       (!sinceISO || row.created_at > sinceISO),
   )
-  if (alreadySentThisTotal) return
+  if (alreadySentThisTotal) {
+    // The guest already has this exact total — don't repeat it.
+    if (closing) await sendLine(CLOSE_AVAILABILITY_LINE)
+    return
+  }
 
+  const baseText = closing ? result.closingText : result.text
   const conflicting =
     Boolean(modelText) && hasConflictingAmount(modelText ?? '', result.total, estimateDeposit(result.total, depositPercent))
   const contentText = conflicting
-    ? `Una corrección importante sobre el monto que le mencioné: ${result.text.charAt(0).toLowerCase()}${result.text.slice(1)}`
-    : result.text
+    ? `Una corrección importante sobre el monto que le mencioné: ${baseText.charAt(0).toLowerCase()}${baseText.slice(1)}`
+    : baseText
 
-  await sendMessageToConversation(db, accountId, {
-    conversationId,
-    messageType: 'text',
-    contentText,
-  })
+  await sendLine(contentText)
 
   await db.from('ai_action_log').insert({
     account_id: accountId,
@@ -3741,7 +3772,7 @@ async function handOffIfReservationComplete(args: {
    *  closed (test run 2026-09-24, prueba #16: "del 10 al 12 de
    *  septiembre", asked on the 23rd, was registered, priced and sent). */
   todayISO?: string
-}): Promise<void> {
+}): Promise<boolean> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
 
   const { data: row } = await db
@@ -3752,22 +3783,22 @@ async function handOffIfReservationComplete(args: {
     .eq('category', category)
     .eq('is_active_build', true)
     .maybeSingle()
-  if (!row) return
+  if (!row) return false
   // Already sent to the team on an earlier turn — the bot keeps chatting
   // after the close (see below), and a re-emitted confirm marker on a
   // follow-up question must not notify the team a second time.
-  if ((row as { guest_confirmed_at?: string | null }).guest_confirmed_at) return
+  if ((row as { guest_confirmed_at?: string | null }).guest_confirmed_at) return false
   if (missingReservationFields(row as ReservationFieldSnapshot).length > 0) {
     // Only a guest who explicitly tried to confirm hears the "me falta X"
     // nudge; an implicit close (see below) with a gap just waits.
-    if (!confirmed) return
+    if (!confirmed) return false
     await sendReservationNudge({
       db, accountId, configOwnerUserId, conversationId,
       snapshot: row as ReservationFieldSnapshot,
       currency,
       sinceISO,
     })
-    return
+    return false
   }
 
   const dated = row as { check_in?: string | null; use_date?: string | null; service_name?: string | null }
@@ -3782,7 +3813,7 @@ async function handOffIfReservationComplete(args: {
       serviceName: dated.service_name ?? null,
       sinceISO,
     })
-    return
+    return false
   }
 
   // Implicit close: every field is known and the bot's own reply this turn
@@ -3798,7 +3829,7 @@ async function handOffIfReservationComplete(args: {
   // must still fire; it's only the actual hand-off below (telling the
   // guest their COMPLETE request is with the team) that must never
   // happen on the same turn the bot is still asking something.
-  if (stillAsking) return
+  if (stillAsking) return false
 
   // Marks this row as guest-confirmed (as opposed to a staff `status`
   // change, which only happens later via the inbox approve/deny
@@ -3866,6 +3897,7 @@ async function handOffIfReservationComplete(args: {
   } catch (err) {
     console.error('[ai auto-reply] moving the deal to the waiting stage after close failed:', err)
   }
+  return true
 }
 
 /**

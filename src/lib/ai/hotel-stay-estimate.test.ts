@@ -343,6 +343,9 @@ describe('several rooms (B43)', () => {
     if (res.status !== 'priced') return
     expect(res.total).toBe(1000) // 2 rooms × couple Wed 500
     expect(res.text).toContain('2 habitaciones × 2 personas')
+    // The after-close wording: no item/dates recap, one availability line.
+    expect(res.closingText).toMatch(/^El total estimado de su solicitud es de .*1.?000 por 1 noche \(2 habitaciones × 2 personas\), con un anticipo de .*500 para apartarla\. Un compañero le confirmará la disponibilidad en breve\. 😊$/)
+    expect(res.closingText).not.toContain('Master Suite Deluxe')
     const summary = await loadHotelStayEstimate(
       makeDb({ reservation: { ...RESV, guests: 4, rooms: 2 }, rates: RATES, products: PRODUCTS }),
       'acct-1', 'cv-1', 'GTQ',
