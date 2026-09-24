@@ -82,6 +82,8 @@ if [ "$toc_entries" -lt "$MIN_TOC_ENTRIES" ]; then
 fi
 
 mv "$BACKUP_DIR/$partial" "$BACKUP_DIR/$name"
+# The dump is written by the container, which ignores this shell's umask.
+chmod 600 "$BACKUP_DIR/$name"
 find "$BACKUP_DIR" -maxdepth 1 -name 'sandia-*.dump' -mtime +"$RETENTION_DAYS" -delete
 kept="$(find "$BACKUP_DIR" -maxdepth 1 -name 'sandia-*.dump' | wc -l)"
 

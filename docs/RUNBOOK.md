@@ -299,15 +299,33 @@ cp scripts/backup/sandia-db-backup.sh scripts/backup/sandia-db-restore-test.sh /
 chmod 700 /root/sandia-backup/*.sh
 cp scripts/backup/backup.env.example /root/sandia-backup/backup.env
 chmod 600 /root/sandia-backup/backup.env
-nano /root/sandia-backup/backup.env   # PGPASSWORD y host del "Session pooler"
+# Contraseña del rol de solo lectura `sandia_backup` (migración 157):
+# se genera EN el VPS y solo su verificador SCRAM va a la base.
+python3 - <<'PY'
+import os, hashlib, hmac, base64, secrets, re
+pw = secrets.token_urlsafe(32); salt = os.urandom(16); it = 4096
+s = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, it)
+ck = hmac.new(s, b"Client Key", "sha256").digest()
+b = lambda x: base64.b64encode(x).decode()
+print("alter role sandia_backup password 'SCRAM-SHA-256$%d:%s$%s:%s';" % (it, b(salt), b(hashlib.sha256(ck).digest()), b(hmac.new(s, b"Server Key", "sha256").digest())))
+p = "/root/sandia-backup/backup.env"
+open(p, "w").write(re.sub(r"(?m)^PGPASSWORD=.*$", "PGPASSWORD=" + pw, open(p).read()))
+PY
+# → correr el `alter role ...` impreso en el SQL editor de Supabase
 cp scripts/backup/sandia-db-backup.cron /etc/cron.d/sandia-db-backup
 /root/sandia-backup/sandia-db-backup.sh          # primera corrida
 /root/sandia-backup/sandia-db-restore-test.sh    # probar que restaura
 ```
 
-La contraseña de la base se toma de Supabase → Project Settings →
-Database. **Nunca** pegarla en un chat ni en el repo; se escribe solo en
-`backup.env` dentro del VPS.
+El respaldo usa el rol `sandia_backup` (solo lectura + `BYPASSRLS`), nunca
+la contraseña de `postgres`. Su contraseña vive solo en `backup.env` dentro
+del VPS; a la base (y a este repo) solo llega su verificador SCRAM, con el
+que no se puede iniciar sesión. Para rotarla: repetir el bloque de Python
+de arriba y correr el `alter role` que imprime.
+
+**Instalado y probado el 2026-09-24:** primera copia 2.4 MB / 1476 objetos;
+la prueba de restauración cargó `public` + `auth` sin errores y los conteos
+coincidieron con producción.
 
 ### Probar un respaldo
 

@@ -48,8 +48,14 @@ do $$ begin
   create role service_role nologin; create role authenticator nologin;
   create role supabase_auth_admin nologin; create role supabase_storage_admin nologin;
 exception when duplicate_object then null; end $$;
+-- pg_restore --schema restores a schema's objects but not the schema
+-- itself, and the clinic's appointment no-overlap constraint needs
+-- btree_gist (uuid in a GiST exclusion).
+create schema if not exists auth;
+create schema if not exists storage;
 create schema if not exists extensions;
 create extension if not exists vector with schema public;
+create extension if not exists btree_gist with schema extensions;
 create extension if not exists pgcrypto with schema extensions;
 create extension if not exists "uuid-ossp" with schema extensions;
 create extension if not exists pg_trgm with schema extensions;
