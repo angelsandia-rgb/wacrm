@@ -6,7 +6,7 @@ import { exportEntity, isExportEntity } from '@/lib/google-sheets/bulk-export'
 
 /**
  * POST /api/google-sheets/export   (admin+)
- * Body: { entity: 'contacts' | 'deals' | 'quotes' | 'products' }
+ * Body: { entity: 'contacts' | 'deals' | 'quotes' | 'quote_items' | 'funnel' | 'products' }
  *
  * Phase 2 — dumps the account's current rows for that entity into a
  * dedicated tab of the connected spreadsheet ("Export <Entidad>"),
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as { entity?: unknown } | null
     if (!body || !isExportEntity(body.entity)) {
       return NextResponse.json(
-        { error: "entity must be one of 'contacts', 'deals', 'quotes', 'products'" },
+        { error: "entity must be one of 'contacts', 'deals', 'quotes', 'quote_items', 'funnel', 'products'" },
         { status: 400 },
       )
     }

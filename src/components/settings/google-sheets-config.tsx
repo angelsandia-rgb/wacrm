@@ -47,6 +47,8 @@ const EVENT_LABELS: Record<string, string> = {
 const EXPORT_ENTITIES: { key: string; label: string }[] = [
   { key: 'deals', label: 'Negociaciones' },
   { key: 'quotes', label: 'Cotizaciones' },
+  { key: 'quote_items', label: 'Cotización ítems (ingresos por producto)' },
+  { key: 'funnel', label: 'Embudo por contacto' },
   { key: 'contacts', label: 'Contactos' },
   { key: 'products', label: 'Productos' },
 ];
