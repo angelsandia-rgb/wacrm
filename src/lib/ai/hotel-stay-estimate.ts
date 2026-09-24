@@ -212,11 +212,14 @@ export async function computeStayEstimateStatus(
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
   const deposit = estimateDeposit(quote.total, depositPercent)
+  const peopleWord = Number(rr.guests) === 1 ? 'persona' : 'personas'
+  // No "a person confirms availability" disclaimer here: the model's own
+  // closing already says it once, and repeating it in every system
+  // message read as duplicated noise (test run 2026-09-22).
   const text =
     `El total estimado sería de ${formatCurrency(quote.total, currency)} por ${quote.nights.length} ${nightsWord} ` +
-    `para ${rr.guests} personas en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
-    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}. ` +
-    `La disponibilidad y el precio final los confirma una persona del hotel.`
+    `para ${rr.guests} ${peopleWord} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
+    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.`
 
   // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
   // Panel figure correct even if this exact total was already stored
