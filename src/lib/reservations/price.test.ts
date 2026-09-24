@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { estimateStayPrice, resolveStayProductId, estimateDeposit } from './price'
+import { estimateStayPrice, resolveStayProductId, estimateDeposit, guestsPerRoom, roomCount } from './price'
 
 // 2026-09-09 is a Wednesday. Couple rate Wed–Thu = 500, Fri = 700.
 const RATES = [
@@ -81,5 +81,32 @@ describe('estimateDeposit', () => {
   it('rounds to the nearest whole unit', () => {
     expect(estimateDeposit(500, 33)).toBe(165) // 165.0
     expect(estimateDeposit(333, 50)).toBe(167) // 166.5 → 167
+  })
+})
+
+describe('several rooms (B43)', () => {
+  it('splits the total headcount evenly or gives up', () => {
+    expect(guestsPerRoom(4, 2)).toBe(2)
+    expect(guestsPerRoom(4, null)).toBe(4)
+    expect(guestsPerRoom(5, 2)).toBeNull() // how they split is the guest's call
+    expect(guestsPerRoom(1, 2)).toBeNull()
+    expect(roomCount(null)).toBe(1)
+    expect(roomCount(3)).toBe(3)
+  })
+
+  it('prices every room at the per-room occupancy', async () => {
+    const db = makeDb({ rates: RATES, products: [{ id: 'p1', name: 'Suite Premium' }] })
+    // Wed + Thu nights, 2 rooms × couple rate 500 = 2000
+    expect(
+      await estimateStayPrice(db, 'a', {
+        service_name: 'Suite Premium', guests: 4, rooms: 2, check_in: '2026-09-09', check_out: '2026-09-11',
+      }),
+    ).toBe(2000)
+    // 4 people in ONE couple-only room → no tier → a person prices it
+    expect(
+      await estimateStayPrice(db, 'a', {
+        service_name: 'Suite Premium', guests: 4, check_in: '2026-09-09', check_out: '2026-09-11',
+      }),
+    ).toBeNull()
   })
 })

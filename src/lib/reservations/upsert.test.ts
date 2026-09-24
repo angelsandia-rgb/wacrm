@@ -6,7 +6,8 @@ vi.mock('@/lib/webhooks/deliver', () => ({ dispatchWebhookEvent: dispatch }))
 // Link ownership is exercised separately with real validation and tenant-aware stubs.
 vi.mock('./validate-links', () => ({ reservationLinksBelongToAccount: vi.fn().mockResolvedValue(true) }))
 // Price recompute is wiring-only here; `price.test.ts` covers the calc.
-vi.mock('./price', () => ({
+vi.mock('./price', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./price')>()),
   estimateStayPrice: vi.fn().mockResolvedValue(null),
   resolveStayProductId: vi.fn().mockResolvedValue(null),
 }))
@@ -430,6 +431,28 @@ describe('syncReservationToContactFields (via upsertReservationRequest)', () => 
       'f-occ': 'Pareja',
     })
     expect(rows.every((r) => r.contact_id === 'contact-9')).toBe(true)
+  })
+
+  it('shows the room count for a several-room request', async () => {
+    const { admin, calls } = makeAdmin(
+      { id: 'r1' },
+      {
+        readback: {
+          category: 'habitaciones',
+          contact_id: 'contact-9',
+          service_name: 'Suite Premium',
+          guests: 4,
+          rooms: 2,
+          check_in: '2026-10-30',
+          check_out: '2026-11-01',
+        },
+        customFields: HOTEL_FIELDS,
+      },
+    )
+    await upsertReservationRequest(admin, 'acct-1', { category: 'habitaciones', conversation_id: 'conv-1', rooms: 2 })
+    const byField = Object.fromEntries(calls.customValueUpserts[0].map((r) => [r.custom_field_id, r.value]))
+    expect(byField['f-guests']).toBe('4 (2 habitaciones)')
+    expect(byField['f-occ']).toBe('2 × Pareja')
   })
 
   it('does nothing for a non-room category', async () => {

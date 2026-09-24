@@ -4,7 +4,7 @@ import { nightsBetween, occupancyForGuests, isValidHotelDate } from '@/lib/produ
 import { isUndefinedColumnError } from '@/lib/observability/describe-error'
 import { reservationLinksBelongToAccount } from './validate-links'
 import { reservationFieldError } from './validate-fields'
-import { estimateStayPrice } from './price'
+import { estimateStayPrice, guestsPerRoom, roomCount } from './price'
 
 /** Hard ceiling on reservation rows the AI may accumulate for one
  *  (conversation, category). A backstop: a model that keeps re-asserting
@@ -75,6 +75,8 @@ export interface ReservationInput {
   quote_id?: string | null
   service_name?: string | null
   guests?: number | null
+  /** Identical rooms (migration 159); `guests` stays the total. */
+  rooms?: number | null
   check_in?: string | null
   check_out?: string | null
   use_date?: string | null
@@ -104,6 +106,7 @@ const SETTABLE_KEYS = [
   'quote_id',
   'service_name',
   'guests',
+  'rooms',
   'check_in',
   'check_out',
   'use_date',
@@ -207,19 +210,21 @@ export async function upsertReservationRequest(
     product_id?: string | null
     service_name?: string | null
     guests?: number | null
+    rooms?: number | null
     check_in?: string | null
     check_out?: string | null
   } | null = null
   let stayFieldsChanged = false
 
   if (input.conversation_id) {
-    const LOOKUP_COLS = 'id, check_in, check_out, use_date, guests, service_name, product_id'
+    const LOOKUP_COLS = 'id, check_in, check_out, use_date, guests, rooms, service_name, product_id'
     type ExistingRow = {
       id: string
       check_in: string | null
       check_out: string | null
       use_date: string | null
       guests: number | null
+      rooms: number | null
       service_name: string | null
       product_id: string | null
     }
@@ -306,12 +311,14 @@ export async function upsertReservationRequest(
           product_id: (patch.product_id as string | undefined) ?? existing.product_id,
           service_name: (patch.service_name as string | undefined) ?? existing.service_name,
           guests: (patch.guests as number | undefined) ?? existing.guests,
+          rooms: (patch.rooms as number | undefined) ?? existing.rooms,
           check_in: nextCheckIn,
           check_out: nextCheckOut,
         }
         stayFieldsChanged =
           datesMoved ||
           (patch.guests !== undefined && patch.guests !== existing.guests) ||
+          (patch.rooms !== undefined && patch.rooms !== existing.rooms) ||
           (patch.service_name !== undefined && patch.service_name !== existing.service_name)
       }
     }
@@ -363,6 +370,7 @@ export async function upsertReservationRequest(
         product_id: input.product_id ?? null,
         service_name: input.service_name ?? null,
         guests: input.guests ?? null,
+        rooms: input.rooms ?? null,
         check_in: input.check_in ?? null,
         check_out: input.check_out ?? null,
       }
@@ -426,13 +434,14 @@ async function syncReservationToContactFields(
   try {
     const { data: r } = await admin
       .from('reservation_requests')
-      .select('category, contact_id, service_name, guests, check_in, check_out')
+      .select('category, contact_id, service_name, guests, rooms, check_in, check_out')
       .eq('id', reservationId)
       .maybeSingle<{
         category: string
         contact_id: string | null
         service_name: string | null
         guests: number | null
+        rooms: number | null
         check_in: string | null
         check_out: string | null
       }>()
@@ -448,9 +457,12 @@ async function syncReservationToContactFields(
     if (r.check_out) wanted['Fecha de salida'] = r.check_out
     if (nights > 0) wanted['Noches'] = String(nights)
     if (r.guests && r.guests > 0) {
-      wanted['Huéspedes'] = String(r.guests)
-      const occupancy = occupancyForGuests(r.guests)
-      wanted['Ocupación'] = occupancy ? OCCUPANCY_LABEL_ES[occupancy] : 'Grupo grande (5+)'
+      const rooms = roomCount(r.rooms)
+      wanted['Huéspedes'] = rooms > 1 ? `${r.guests} (${rooms} habitaciones)` : String(r.guests)
+      const perRoom = guestsPerRoom(r.guests, r.rooms)
+      const occupancy = perRoom ? occupancyForGuests(perRoom) : null
+      const label = occupancy ? OCCUPANCY_LABEL_ES[occupancy] : rooms > 1 ? 'Varias habitaciones' : 'Grupo grande (5+)'
+      wanted['Ocupación'] = rooms > 1 && occupancy ? `${rooms} × ${label}` : label
     }
     if (r.service_name) {
       wanted[r.category === 'paquetes' ? 'Paquete' : 'Habitación'] = r.service_name

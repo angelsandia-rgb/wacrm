@@ -14,3 +14,13 @@ describe('reservation fields', () => {
     expect(reservationFieldError({ check_in: '2026-09-09', guests: null })).toBeNull()
   })
 })
+
+describe('reservationFieldError rooms', () => {
+  it('accepts 1–20 rooms and rejects anything else', () => {
+    expect(reservationFieldError({ rooms: 2 })).toBeNull()
+    expect(reservationFieldError({ rooms: null })).toBeNull()
+    expect(reservationFieldError({ rooms: 0 })).not.toBeNull()
+    expect(reservationFieldError({ rooms: 21 })).not.toBeNull()
+    expect(reservationFieldError({ rooms: 1.5 })).not.toBeNull()
+  })
+})

@@ -2940,6 +2940,8 @@ async function anyReservationCompleteAfterTurn(
   return false
 }
 
+const isStayCategoryName = (category: string) => category === 'habitaciones' || category === 'paquetes'
+
 async function autoRecordReservation(args: {
   db: SupabaseClient
   accountId: string
@@ -2977,6 +2979,10 @@ async function autoRecordReservation(args: {
   if (f.servicio) input.service_name = f.servicio
   const guests = toInt(f.personas)
   if (guests !== undefined) input.guests = guests
+  // Several identical rooms ("2 Premium para 2 parejas" → habitaciones=2,
+  // personas=4). Rooms/packages only; the upsert validates 1–20 (B43).
+  const rooms = toInt(f.habitaciones)
+  if (rooms !== undefined && rooms >= 1 && rooms <= 20 && isStayCategoryName(proposal.category)) input.rooms = rooms
   const checkIn = toDate(f.entrada)
   if (checkIn) input.check_in = checkIn
   const checkOut = toDate(f.salida)
@@ -3016,7 +3022,7 @@ async function autoRecordReservation(args: {
   // old dates and nobody was notified.
   const { data: before } = await db
     .from('reservation_requests')
-    .select('service_name, guests, check_in, check_out, use_date, guest_confirmed_at')
+    .select('service_name, guests, rooms, check_in, check_out, use_date, guest_confirmed_at')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', proposal.category)
@@ -3027,13 +3033,14 @@ async function autoRecordReservation(args: {
   if (!id) return
 
   const prior = before as {
-    service_name: string | null; guests: number | null; check_in: string | null
+    service_name: string | null; guests: number | null; rooms: number | null; check_in: string | null
     check_out: string | null; use_date: string | null; guest_confirmed_at: string | null
   } | null
   if (prior?.guest_confirmed_at && !startNew) {
     const changed =
       (input.service_name !== undefined && input.service_name !== prior.service_name) ||
       (input.guests !== undefined && input.guests !== prior.guests) ||
+      (input.rooms !== undefined && input.rooms !== (prior.rooms ?? 1)) ||
       (input.check_in !== undefined && input.check_in !== prior.check_in) ||
       (input.check_out !== undefined && input.check_out !== prior.check_out) ||
       (input.use_date !== undefined && input.use_date !== prior.use_date)
@@ -3924,6 +3931,7 @@ async function sendHotelBookingNudge(args: {
     category: ReservationCategory
     service_name: string | null
     guests: number | null
+    rooms?: number | null
     check_in: string | null
     check_out: string | null
     use_date: string | null
@@ -3934,7 +3942,7 @@ async function sendHotelBookingNudge(args: {
   const [{ data: row }, { data: account }] = await Promise.all([
     db
       .from('reservation_requests')
-      .select('category, service_name, guests, check_in, check_out, use_date, hall, estimated_price')
+      .select('category, service_name, guests, rooms, check_in, check_out, use_date, hall, estimated_price')
       .eq('account_id', accountId)
       .eq('conversation_id', conversationId)
       .eq('category', slug)

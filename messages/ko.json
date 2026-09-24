@@ -2849,6 +2849,7 @@
     "title": "요청",
     "approve": "승인",
     "deny": "거절",
+    "rooms": "객실 {count}개",
     "guests": "{count}명"
   },
   "Clinic": {

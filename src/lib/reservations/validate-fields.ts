@@ -14,6 +14,10 @@ export function reservationFieldError(input: object): string | null {
       return 'Invalid reservation quantity'
     }
   }
+  const rooms = values.rooms
+  if (rooms != null && (typeof rooms !== 'number' || !Number.isInteger(rooms) || rooms < 1 || rooms > 20)) {
+    return 'Invalid reservation rooms'
+  }
   const price = values.estimated_price
   if (price != null && (typeof price !== 'number' || !Number.isFinite(price) || price < 0 || price > 9999999999.99)) {
     return 'Invalid reservation price'

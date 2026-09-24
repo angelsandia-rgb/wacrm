@@ -8,7 +8,7 @@ import {
   formatDateEs,
   type ProductRate,
 } from '@/lib/products/rates'
-import { resolveStayProductId, estimateDeposit } from '@/lib/reservations/price'
+import { resolveStayProductId, estimateDeposit, guestsPerRoom, roomCount } from '@/lib/reservations/price'
 
 // ============================================================
 // Pre-computed stay total for the auto-reply hotel bot.
@@ -32,9 +32,18 @@ interface ReservationRow {
   service_name: string | null
   product_id: string | null
   guests: number | null
+  /** Identical rooms (migration 159). null = 1. `guests` is the total. */
+  rooms: number | null
   check_in: string | null
   check_out: string | null
   estimated_price: number | null
+}
+
+/** "2 habitaciones × 2 personas" / "2 personas" — the headcount as the
+ *  guest said it. */
+function headcountEs(guests: number, rooms: number, perRoom: number): string {
+  const people = (n: number) => `${n} ${n === 1 ? 'persona' : 'personas'}`
+  return rooms > 1 ? `${rooms} habitaciones × ${people(perRoom)}` : people(guests)
 }
 
 /**
@@ -52,7 +61,7 @@ export async function loadHotelStayEstimate(
 ): Promise<string | null> {
   const { data: rr } = await db
     .from('reservation_requests')
-    .select('id, category, service_name, product_id, guests, check_in, check_out, estimated_price')
+    .select('id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('status', 'pending')
@@ -75,10 +84,15 @@ export async function loadHotelStayEstimate(
   const rates = (rateRows ?? []) as ProductRate[]
   if (rates.length === 0) return null
 
-  // Never invent an occupancy: it determines the tariff.
+  // Never invent an occupancy: it determines the tariff. Several rooms
+  // price each at its per-room occupancy — only when the total splits
+  // evenly (B43); otherwise a person prices it.
   if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return null
   const guests = rr.guests
-  const occupancy = occupancyForGuests(guests)
+  const rooms = roomCount(rr.rooms)
+  const perRoom = guestsPerRoom(guests, rr.rooms)
+  if (perRoom === null) return null
+  const occupancy = occupancyForGuests(perRoom)
   // 5+ guests has no tier at all, by design (Angel, 2026-09-18): never
   // auto-estimate that large a group — the bot's existing "no estimate
   // calculated" fallback ("un compañero prepara la cotización") already
@@ -95,26 +109,27 @@ export async function loadHotelStayEstimate(
     .map((n) => `${formatDateEs(n.date)} ${DAY_LABEL_ES[n.day_of_week].toLowerCase()} ${n.price == null ? '(sin tarifa)' : formatCurrency(n.price, currency)}`)
     .join(' · ')
 
+  const total = quote.total * rooms
   let text =
-    `${label} · ${guests} personas (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
-    `(${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}): ${breakdown}. ` +
-    `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}: ${formatCurrency(quote.total, currency)}.`
+    `${label} · ${headcountEs(guests, rooms, perRoom)} (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
+    `(${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}): ${breakdown}${rooms > 1 ? ' por habitación' : ''}. ` +
+    `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}${rooms > 1 ? ` (${rooms} habitaciones)` : ''}: ${formatCurrency(total, currency)}.`
   if (quote.missing.length > 0) {
     text += ` (${quote.missing.join(', ')} sin tarifa publicada — esas noches las cotiza una persona.)`
   } else {
     // Deposit only makes sense once the total is real, not a partial
     // subtotal — matches "never fake a complete quote" (price.ts).
-    const deposit = estimateDeposit(quote.total, depositPercent)
+    const deposit = estimateDeposit(total, depositPercent)
     text += ` Para apartar se requiere un anticipo del ${depositPercent}%, equivalente a ${formatCurrency(deposit, currency)}.`
   }
   text +=
     ' Este total sale de las tarifas publicadas del hotel; es un estimado — la disponibilidad y el precio final los confirma una persona.'
 
   // Best-effort: seed the reservation's price so the Sheet + Panel agree.
-  if (rr.estimated_price == null && quote.missing.length === 0 && quote.total > 0) {
+  if (rr.estimated_price == null && quote.missing.length === 0 && total > 0) {
     await db
       .from('reservation_requests')
-      .update({ estimated_price: quote.total })
+      .update({ estimated_price: total })
       .eq('id', rr.id)
       .is('estimated_price', null)
   }
@@ -152,6 +167,7 @@ export async function loadHotelStayEstimate(
 export type StayEstimateStatus =
   | { status: 'incomplete' }
   | { status: 'too_large_group' } // 5+ guests — never auto-priced, by design
+  | { status: 'uneven_rooms' } // several rooms, headcount doesn't split evenly — a person prices it
   | { status: 'unpriceable'; reason: 'no_product_match' | 'no_rates' | 'bad_dates' | 'missing_night_rate' }
   | {
       status: 'priced'
@@ -181,7 +197,7 @@ export async function computeStayEstimateStatus(
 ): Promise<StayEstimateStatus> {
   const { data: rr } = await db
     .from('reservation_requests')
-    .select('id, category, service_name, product_id, guests, check_in, check_out, estimated_price')
+    .select('id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('status', 'pending')
@@ -195,7 +211,10 @@ export async function computeStayEstimateStatus(
   if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return { status: 'incomplete' }
   if (todayISO && rr.check_in < todayISO) return { status: 'incomplete' }
 
-  const occupancy = occupancyForGuests(rr.guests)
+  const rooms = roomCount(rr.rooms)
+  const perRoom = guestsPerRoom(rr.guests, rr.rooms)
+  if (perRoom === null) return { status: 'uneven_rooms' }
+  const occupancy = occupancyForGuests(perRoom)
   if (occupancy === null) return { status: 'too_large_group' }
 
   const productId = await resolveStayProductId(db, accountId, rr)
@@ -215,22 +234,22 @@ export async function computeStayEstimateStatus(
 
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
-  const deposit = estimateDeposit(quote.total, depositPercent)
-  const peopleWord = Number(rr.guests) === 1 ? 'persona' : 'personas'
+  const total = quote.total * rooms
+  const deposit = estimateDeposit(total, depositPercent)
   // No "a person confirms availability" disclaimer here: the model's own
   // closing already says it once, and repeating it in every system
   // message read as duplicated noise (test run 2026-09-22).
   const text =
-    `El total estimado sería de ${formatCurrency(quote.total, currency)} por ${quote.nights.length} ${nightsWord} ` +
-    `para ${rr.guests} ${peopleWord} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
+    `El total estimado sería de ${formatCurrency(total, currency)} por ${quote.nights.length} ${nightsWord} ` +
+    `para ${headcountEs(rr.guests, rooms, perRoom)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
     `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.`
 
   // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
   // Panel figure correct even if this exact total was already stored
   // (e.g. from a stale model-supplied guess this now overwrites).
-  if (rr.estimated_price == null || Number(rr.estimated_price) !== quote.total) {
-    await db.from('reservation_requests').update({ estimated_price: quote.total }).eq('id', rr.id)
+  if (rr.estimated_price == null || Number(rr.estimated_price) !== total) {
+    await db.from('reservation_requests').update({ estimated_price: total }).eq('id', rr.id)
   }
 
-  return { status: 'priced', reservationRequestId: rr.id, text, total: quote.total }
+  return { status: 'priced', reservationRequestId: rr.id, text, total }
 }

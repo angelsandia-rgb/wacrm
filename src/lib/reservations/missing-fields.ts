@@ -11,6 +11,8 @@ import type { ReservationCategory } from './upsert'
 export interface ReservationFieldSnapshot {
   category: ReservationCategory
   guests?: number | null
+  /** Identical rooms (migration 159); null = 1. */
+  rooms?: number | null
   check_in?: string | null
   check_out?: string | null
   use_date?: string | null
@@ -89,6 +91,7 @@ export function reservationSummaryText(row: ReservationFieldSnapshot, currency: 
   if (row.service_name) bits.push(row.service_name)
   if (row.check_in && row.check_out) bits.push(`del ${formatDateEs(row.check_in)} al ${formatDateEs(row.check_out)}`)
   else if (row.use_date) bits.push(formatDateEs(row.use_date))
+  if (row.rooms && row.rooms > 1) bits.push(`${row.rooms} habitaciones`)
   if (row.guests) bits.push(`${row.guests} ${row.guests === 1 ? 'persona' : 'personas'}`)
   if (row.category === 'eventos' && row.hall) bits.push(row.hall)
   if (row.estimated_price != null && row.estimated_price > 0) {
