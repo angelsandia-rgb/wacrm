@@ -17,7 +17,7 @@ import { loadClinicAppointmentContext } from '@/lib/clinic/appointment-context'
 import { transitionAppointment } from '@/lib/clinic/appointments'
 import { loadQuickReplyContext } from './quick-reply-context'
 import { generateReply, isRetryableAiError, type GenerateArgs } from './generate'
-import { buildSystemPrompt, aiAutoReplyRetryDelayMs, type AutoReplyCalendarContext } from './defaults'
+import { buildSystemPrompt, aiAutoReplyRetryDelayMs, RECORD_RESERVATION_SENTINEL_PREFIX, type AutoReplyCalendarContext } from './defaults'
 import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
@@ -63,7 +63,7 @@ import {
   photoOnlyReplyText,
   productForPhotoRequest,
 } from './hotel-media-intent'
-import { closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 
@@ -181,6 +181,11 @@ const FAKE_APPOINTMENT_FALLBACK_TEXT =
  * the database rejected it. The original success claim is never sent. */
 const CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT =
   'No pude actualizar tu cita en este momento. Ya avisé a recepción para que lo revise y te confirme por este chat.'
+
+/** Appended to the system prompt for the one retry when a hotel reply
+ *  claimed "queda anotada…" without the record_reservation marker. */
+const MISSING_RECORD_MARKER_NOTE =
+  `SYSTEM CHECK (this turn only): your previous draft told the guest their request was noted or updated but did not include a ${RECORD_RESERVATION_SENTINEL_PREFIX}…]] marker, so NOTHING was saved and the team never sees it. Write your reply again and include that marker for the category with EVERY value you know — servicio, personas, entrada/salida or fecha… — including values the guest gave earlier in the conversation. Never ask again for something the guest already told you.`
 
 const AI_PROVIDER_FALLBACK_TEXT =
   'Estoy teniendo una dificultad temporal para procesar su mensaje. Ya avisé al equipo para que le dé seguimiento por este chat.'
@@ -872,6 +877,49 @@ export async function dispatchInboundToAiReply(
           err,
         })
         return
+      }
+    }
+
+    // Hotel: the reply tells the guest their request is noted ("Queda
+    // anotada la Suite Clásica Doble para 3 personas…") but carries no
+    // record_reservation marker, so nothing was saved — the team keeps the
+    // old request and the guest never gets the new total (live test
+    // 2026-09-24, gpt-5.4-mini, twice in a row after a post-close change).
+    // Retry once with an explicit note; alert if it still comes back empty.
+    if (
+      isHotel &&
+      !generation.handoff &&
+      (generation.reservationProposals ?? []).length === 0 &&
+      claimsRequestNoted(generation.text)
+    ) {
+      console.warn(
+        `[ai auto-reply] conversation ${conversationId}: reply claims the request was noted but has no record_reservation marker — retrying once`,
+      )
+      try {
+        const retry = await generateReplyWithOneRetry({
+          config,
+          systemPrompt: `${systemPrompt}
+
+${MISSING_RECORD_MARKER_NOTE}`,
+          messages,
+        })
+        if ((retry.reservationProposals ?? []).length > 0 && (retry.text.trim() || retry.handoff)) {
+          generation = retry
+        } else {
+          void dispatchSystemAlert({
+            severity: 'warning',
+            source: 'ai_dispatch_error',
+            title: 'AI told a hotel guest their request was noted but saved nothing (no record_reservation marker, twice)',
+            detail: { account_id: accountId, conversation_id: conversationId, model: config.model },
+            dedupKey: `ai_noted_without_marker:${accountId}`,
+            accountId,
+            throttleMinutes: 60,
+          })
+        }
+      } catch (err) {
+        // Keep the first reply: a failed retry must not cost the guest
+        // their answer.
+        console.error('[ai auto-reply] missing-record-marker retry failed:', describeError(err))
       }
     }
 

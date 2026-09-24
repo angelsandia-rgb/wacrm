@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  claimsRequestNoted,
   closeLine,
   isStillAsking,
   stripTrailingAttachmentOffer,
@@ -95,5 +96,18 @@ describe('statement-form offers, imperative asks and attachment offers (re-tests
       stripTrailingAttachmentOffer('El almuerzo es de 12:00 a 17:00. Si gusta, también le comparto el menú completo.'),
     ).toBe('El almuerzo es de 12:00 a 17:00.')
     expect(stripTrailingAttachmentOffer('El almuerzo es de 12:00 a 17:00.')).toBeNull()
+  })
+})
+
+describe('claimsRequestNoted', () => {
+  it('detects a "saved" claim', () => {
+    for (const m of ['Queda anotada la Suite Clásica Doble para 3 personas.', 'Perfecto, le registro 2 personas.', 'Ya quedó registrada su solicitud.', 'Quedan anotados sus datos.', 'Se la dejo anotada.']) {
+      expect(claimsRequestNoted(m), m).toBe(true)
+    }
+  })
+  it('ignores replies that save nothing', () => {
+    for (const m of ['¿Para qué fechas la desea?', 'La Suite Premium tiene 2 camas Queen.', 'El registro de entrada es a las 15:00.']) {
+      expect(claimsRequestNoted(m), m).toBe(false)
+    }
   })
 })

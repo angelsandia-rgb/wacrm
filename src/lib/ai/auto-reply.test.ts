@@ -3100,6 +3100,59 @@ describe('dispatchInboundToAiReply — autoRecordReservation never trusts a mode
   })
 })
 
+describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" without a record_reservation marker', () => {
+  // Live test 2026-09-24: after a post-close change the bot wrote "Queda
+  // anotada la Suite Clásica Doble para 3 personas…" with no marker, so
+  // the saved request stayed Suite Premium for 2 and the team never knew.
+  beforeEach(() => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+  })
+  const NOTED = {
+    text: 'Entendido. Queda anotada la Suite Clásica Doble para 3 personas, del 21/10/2026 al 23/10/2026.',
+    handoff: false,
+    markDealWon: false,
+    moveToStageName: null,
+  }
+
+  it('retries once and uses the reply that carries the marker', async () => {
+    h.generateReply
+      .mockResolvedValueOnce(NOTED)
+      .mockResolvedValueOnce({
+        ...NOTED,
+        reservationProposals: [
+          { category: 'habitaciones', fields: { servicio: 'Suite Clásica Doble', personas: '3', entrada: '2026-10-21', salida: '2026-10-23' }, confirmed: false },
+        ],
+      })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.generateReply.mock.calls[1][0].systemPrompt).toContain('SYSTEM CHECK')
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ service_name: 'Suite Clásica Doble', guests: 3 }),
+    )
+  })
+
+  it('alerts when the retry still saves nothing, and still answers the guest', async () => {
+    h.generateReply.mockResolvedValue(NOTED)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: 'ai_noted_without_marker:acct-1' }),
+    )
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: NOTED.text }))
+  })
+
+  it('does not retry when the reply already carries the marker', async () => {
+    h.generateReply.mockResolvedValue({
+      ...NOTED,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '3' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('dispatchInboundToAiReply — autoRecordReservation tolerates a DD/MM/AAAA date in the marker', () => {
   // Real incident, 2026-09-22: the 2026-09-21 change taught the model to
   // write customer-facing dates as DD/MM/AAAA while keeping YYYY-MM-DD
