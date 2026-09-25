@@ -1922,11 +1922,15 @@ ${PAYMENT_HANDOFF_OFFER}`
     // prompt has the model close an item reply with its own warm booking
     // invitation, and a canned second question right after it reads like
     // a form. This stays as the safety net for replies that forgot to ask.
+    // "Asked" includes an invitation without a "?" ("Si me indica sus
+    // fechas, con gusto le ayudo…") — live test 2026-09-25: that reply got
+    // the canned "¿me ayuda con las fechas…?" right after it.
     // Never right after a health caution or a complaint (B44).
     if (
       photoSentProductId &&
       isHotel &&
       !outboundText.includes('?') &&
+      !isStillAsking(outboundText) &&
       !isMedicalCaution(latestInbound, outboundText) &&
       !COMPLAINT_RE.test(latestInbound ?? '')
     ) {

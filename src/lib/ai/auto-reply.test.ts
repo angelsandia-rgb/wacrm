@@ -3142,6 +3142,28 @@ describe('dispatchInboundToAiReply — hotel findings, 20-chat test run 2026-09-
     )
   })
 
+  it('no canned booking nudge after the photo when the reply already invites the missing details (live test 2026-09-25)', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿tiene fotos de la Suite Premium?' }])
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: 'Claro, aquí se la comparto. Es muy cómoda. Si me indica sus fechas, con gusto le ayudo a dejar su solicitud lista.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledTimes(1) // the photo only
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image' }),
+    )
+  })
+
   it('drops a trailing photo offer when the item photo already went out', async () => {
     h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿cómo es la Suite Premium?' }])
     h.state.products = [
