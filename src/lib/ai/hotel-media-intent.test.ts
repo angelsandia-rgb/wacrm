@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceptsPhotoOffer, guestAskedForPhotos, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
+import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -178,5 +178,34 @@ describe('photoOnlyReplyText', () => {
     expect(photoOnlyReplyText('Suite Premium')).toBe('¡Con mucho gusto! Aquí puede ver la Suite Premium. 😊')
     expect(photoOnlyReplyText('Paquete Romántico')).toBe('¡Con mucho gusto! Aquí puede ver el Paquete Romántico. 😊')
     expect(photoOnlyReplyText('Junior Suite Familiar')).toBe('¡Con mucho gusto! Aquí puede ver Junior Suite Familiar. 😊')
+  })
+})
+
+describe('isExplicitHumanRequest', () => {
+  it('detects a plain ask for a person', () => {
+    for (const m of ['quiero hablar con una persona por favor', 'me puede comunicar con un asesor?', 'páseme con recepción', 'necesito hablar con alguien', 'can I talk to a human?', 'quiero hablar con el gerente']) {
+      expect(isExplicitHumanRequest(m), m).toBe(true)
+    }
+  })
+  it('ignores negations and unrelated messages', () => {
+    for (const m of ['no quiero hablar con nadie, solo info', 'no gracias', '¿hablan inglés?', 'quiero la suite premium']) {
+      expect(isExplicitHumanRequest(m), m).toBe(false)
+    }
+  })
+})
+
+describe('isPolicyQuestion', () => {
+  it('flags policy questions, not browsing', () => {
+    expect(isPolicyQuestion('si me quedo 4 noches me hacen descuento?')).toBe(true)
+    expect(isPolicyQuestion('puedo llevar a mi perrito?')).toBe(true)
+    expect(isPolicyQuestion('qué habitaciones tienen?')).toBe(false)
+  })
+})
+
+describe('stripTrailingPhotoOffer', () => {
+  it('removes only a trailing photo offer', () => {
+    expect(stripTrailingPhotoOffer('Es muy cómoda. ¿Le gustaría que le comparta una foto de esta habitación?')).toBe('Es muy cómoda.')
+    expect(stripTrailingPhotoOffer('Es muy cómoda. ¿Para qué fechas la desea?')).toBe('Es muy cómoda. ¿Para qué fechas la desea?')
+    expect(stripTrailingPhotoOffer('¿Le envío una foto?')).toBeNull()
   })
 })

@@ -241,3 +241,53 @@ export function photoOnlyReplyText(productName: string): string {
       : ''
   return `¡Con mucho gusto! Aquí puede ver ${article}${productName}. 😊`
 }
+
+/** "quiero hablar con una persona", "me comunica con un asesor", "páseme
+ *  con recepción", "talk to a human"… (accents already stripped). */
+const HUMAN_REQUEST_RE =
+  /\b(?:hablar|comunicar(?:me|nos)?|comuniqueme|comunicame|conectar(?:me)?|conecteme|paseme|pasame|pasen(?:me)?|atender(?:me)?|atienda(?:me)?)\s+(?:con\s+)?(?:una?\s+|el\s+|la\s+|alguien\s+de\s+)?(?:persona|humano|humana|asesor|asesora|agente|encargad[oa]|alguien|recepcion|recepcionista|gerente|operador|operadora|ejecutiv[oa])\b|\b(?:talk|speak|chat)\s+(?:to|with)\s+(?:a\s+)?(?:real\s+)?(?:human|person|agent|someone|representative)\b/
+const NEGATED_HUMAN_REQUEST_RE = /\b(?:no|nunca|tampoco)\s+(?:quiero|necesito|deseo|hace\s+falta)?\s*(?:hablar|comunicar|pasar|conectar)/
+
+/**
+ * True when the guest plainly asks for a person. The hotel owner's rule
+ * (VSR prompt): "YA PIDIÓ HABLAR CON UNA PERSONA — no vuelvas a
+ * preguntar, inicia la transferencia". Live test 2026-09-25: "quiero
+ * hablar con una persona por favor" got "¿Le gustaría que le conecte con
+ * alguien del equipo?" from gpt-5.4-mini instead of the transfer.
+ */
+export function isExplicitHumanRequest(message: string | null | undefined): boolean {
+  const text = normalizeForMatch(message ?? '')
+  if (!text || NEGATED_HUMAN_REQUEST_RE.test(text)) return false
+  return HUMAN_REQUEST_RE.test(text)
+}
+
+/** Discounts, pets, children, payment, schedules/policies — questions a
+ *  gallery doesn't answer (accents already stripped). */
+const POLICY_QUESTION_RE =
+  /\b(descuentos?|rebaja|promo(?:cion(?:es)?)?|oferta|mascotas?|perr(?:o|os|ito|itos)|gat(?:o|os|ito)|pet\s+friendly|ninos?|bebes?|menores|pag(?:o|ar)|anticipo|deposit(?:o|ar)|transferencia|tarjeta|factura|reembolso|cancel(?:ar|acion)|politicas?|horarios?|check\s*(?:in|out)|desayuno|parqueo|wi\s*fi|discount|pets?|dogs?|kids|children|refund|breakfast|parking)\b/
+
+/**
+ * True when the guest asks a policy/practical question. A reply to it may
+ * name a room or package in passing ("lo que sí existe es el 25% del
+ * Paquete Luna de Miel") — that alone must not send the category banner
+ * (live test 2026-09-25: the Paquetes banner went out on "¿me hacen
+ * descuento?").
+ */
+export function isPolicyQuestion(message: string | null | undefined): boolean {
+  return POLICY_QUESTION_RE.test(normalizeForMatch(message ?? ''))
+}
+
+/**
+ * The reply with a trailing "¿Le gustaría que le comparta una foto…?"
+ * removed — for a turn whose item photo already went out (live test
+ * 2026-09-25: the Master Deluxe photo arrived, then the text offered it).
+ * Returns the text unchanged when it doesn't end in such an offer, or
+ * null when nothing would be left.
+ */
+export function stripTrailingPhotoOffer(text: string): string | null {
+  const trimmed = text.trim()
+  const match = trimmed.match(/(?:^|[.!\n]\s*)(¿[^?]*\b(?:fotos?|fotograf[ií]as?|im[aá]gen(?:es)?)\b[^?]*\?)\s*$/i)
+  if (!match || match.index === undefined) return trimmed
+  const kept = trimmed.slice(0, match.index + match[0].indexOf(match[1])).trim()
+  return kept || null
+}
