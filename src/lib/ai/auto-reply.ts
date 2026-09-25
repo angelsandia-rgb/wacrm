@@ -54,14 +54,17 @@ import { hasFeature } from '@/lib/features/flags'
 import {
   acceptsPhotoOffer,
   guestAskedForPhotos,
+  isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
   isPaymentRequest,
   isPhotoPromise,
+  isPolicyQuestion,
   mapsLinkIn,
   PAYMENT_HANDOFF_OFFER,
   photoOnlyReplyText,
   productForPhotoRequest,
+  stripTrailingPhotoOffer,
 } from './hotel-media-intent'
 import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit } from '@/lib/reservations/price'
@@ -942,6 +945,10 @@ ${MISSING_RECORD_MARKER_NOTE}`,
     // catalog/menu request, the account has one to offer, and the model
     // didn't already send it, send it anyway.
     const latestInbound = latestUserMessage(messages)
+    // Hotel: a guest who plainly asks for a person is transferred now, not
+    // asked "¿le gustaría que le conecte…?" (owner's rule; live test
+    // 2026-09-25 — the model asked instead of transferring).
+    const explicitHumanAsk = isHotel && !handoff && isExplicitHumanRequest(latestInbound)
     const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
     const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
     const sendCatalog =
@@ -1174,7 +1181,7 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       outboundText = photoOnlyReplyText(resolvedSendPhotoProductName)
     }
 
-    if (!outboundText && !handoff) {
+    if (!outboundText && !handoff && !explicitHumanAsk) {
       console.warn(
         `[ai auto-reply] empty reply text for conversation ${conversationId}; sending continuity fallback`,
       )
@@ -1192,7 +1199,7 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       return
     }
 
-    if (handoff) {
+    if (handoff || explicitHumanAsk) {
       // The customer explicitly asked for a human AND then confirmed
       // it (the two-step protocol taught in `buildSystemPrompt` — the
       // model only ever emits this sentinel on that confirming turn,
@@ -1215,7 +1222,8 @@ ${MISSING_RECORD_MARKER_NOTE}`,
         await sendMessageToConversation(db, accountId, {
           conversationId,
           messageType: 'text',
-          contentText: outboundText || HUMAN_HANDOFF_ACK_TEXT,
+          // An explicit ask skips the model's own (usually "¿le conecto?") text.
+          contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
         })
       } catch (err) {
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
@@ -1375,6 +1383,9 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       // "¿Dónde quedan?" wants the map, not a gallery — even when the reply
       // names a room while answering the rest of the message (B42).
       const isLocationAsk = isLocationQuestion(latestInbound)
+      // Same for a policy question (discount, pets, payment…): a room or
+      // package named in passing is not the guest browsing that category.
+      const isPolicyAsk = isPolicyQuestion(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
@@ -1383,6 +1394,7 @@ ${MISSING_RECORD_MARKER_NOTE}`,
         const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
         if (!proposal && !namedInReply && !askedInMessage) continue
         if (isLocationAsk && !askedInMessage) continue
+        if (isPolicyAsk && !askedInMessage && !proposal) continue
         // The guest asked about OTHER categories and this one only shows
         // up because the reply names one of its products — e.g. a package
         // "incluye 2 masajes relajantes" sent the Spa banner to a guest who
@@ -1453,6 +1465,14 @@ ${MISSING_RECORD_MARKER_NOTE}`,
           throttleMinutes: 60,
         })
       }
+    }
+
+    // The item photo just went out: a trailing "¿Le gustaría que le
+    // comparta una foto…?" would offer what the guest is already looking
+    // at (live test 2026-09-25).
+    if (photoSentProductId && isHotel) {
+      const withoutOffer = stripTrailingPhotoOffer(outboundText)
+      if (withoutOffer) outboundText = withoutOffer
     }
 
     // Hotel CLOSE enforcement (test run 2026-09-24): when this turn's

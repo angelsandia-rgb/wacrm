@@ -3100,6 +3100,73 @@ describe('dispatchInboundToAiReply — autoRecordReservation never trusts a mode
   })
 })
 
+describe('dispatchInboundToAiReply — hotel findings, 20-chat test run 2026-09-25', () => {
+  beforeEach(() => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+  })
+
+  it('an explicit "quiero hablar con una persona" hands off now, with the ack, instead of asking again', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'quiero hablar con una persona por favor' }])
+    h.generateReply.mockResolvedValue({
+      text: '¿Le gustaría que le conecte con alguien del equipo?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: expect.stringContaining('le comunico con alguien del equipo') }),
+    )
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ contentText: '¿Le gustaría que le conecte con alguien del equipo?' }),
+    )
+    expect(h.state.updatePayload?.ai_handoff_summary).toEqual(expect.any(String))
+  })
+
+  it('a non-hotel account keeps the two-step protocol', async () => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'generic' }
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'quiero hablar con una persona por favor' }])
+    h.generateReply.mockResolvedValue({
+      text: '¿Le gustaría que le conecte con alguien del equipo?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '¿Le gustaría que le conecte con alguien del equipo?' }),
+    )
+  })
+
+  it('drops a trailing photo offer when the item photo already went out', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿cómo es la Suite Premium?' }])
+    h.state.products = [
+      { id: 'p1', name: 'Suite Premium', image_url: 'https://cdn.example.com/suite.jpg', category_id: 'cat-1' },
+    ]
+    h.state.productCategoryName = 'Habitaciones'
+    h.generateReply.mockResolvedValue({
+      text: 'Es ideal para parejas, con 2 camas Queen. ¿Le gustaría que le comparta una foto de esta habitación?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendPhotoProductName: 'Suite Premium',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ messageType: 'image' }),
+    )
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Es ideal para parejas, con 2 camas Queen.' }),
+    )
+  })
+})
+
 describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" without a record_reservation marker', () => {
   // Live test 2026-09-24: after a post-close change the bot wrote "Queda
   // anotada la Suite Clásica Doble para 3 personas…" with no marker, so
