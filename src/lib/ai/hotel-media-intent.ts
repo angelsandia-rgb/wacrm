@@ -277,17 +277,41 @@ export function isPolicyQuestion(message: string | null | undefined): boolean {
   return POLICY_QUESTION_RE.test(normalizeForMatch(message ?? ''))
 }
 
+/** A sentence that mentions a photo… */
+const PHOTO_WORD_RE = /\b(?:fotos?|fotograf[ií]as?|im[aá]gen(?:es)?)\b/i
+/** …with a verb of sending or showing it… */
+const PHOTO_VERB_RE = /\b(?:compart\w*|env[ií]\w*|mand\w*|mostr\w*|muestr\w*)\b/i
+/** …phrased as an offer ("si gusta…", "puedo…", "¿le gustaría…?"). */
+const PHOTO_OFFER_WORDING_RE =
+  /¿|\bsi\s+(?:gusta|desea|lo\s+desea|quiere|prefiere|le\s+parece)\b|\bpuedo\b|\ble\s+gustar[ií]a\b/i
+
 /**
- * The reply with a trailing "¿Le gustaría que le comparta una foto…?"
- * removed — for a turn whose item photo already went out (live test
- * 2026-09-25: the Master Deluxe photo arrived, then the text offered it).
- * Returns the text unchanged when it doesn't end in such an offer, or
- * null when nothing would be left.
+ * The reply without the sentences that OFFER a photo ("¿Le gustaría que
+ * le comparta una foto…?", "Si gusta, puedo compartirle una foto; …") —
+ * for a turn whose item photo already went out (live tests 2026-09-25:
+ * the photos arrived, then the text offered them). Returns the text
+ * unchanged when nothing matches, or null when nothing would be left.
  */
 export function stripTrailingPhotoOffer(text: string): string | null {
   const trimmed = text.trim()
-  const match = trimmed.match(/(?:^|[.!\n]\s*)(¿[^?]*\b(?:fotos?|fotograf[ií]as?|im[aá]gen(?:es)?)\b[^?]*\?)\s*$/i)
-  if (!match || match.index === undefined) return trimmed
-  const kept = trimmed.slice(0, match.index + match[0].indexOf(match[1])).trim()
+  let changed = false
+  const kept = trimmed
+    .split('\n')
+    .map((line) => {
+      const sentences = line.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [line]
+      return sentences
+        .filter((sentence) => {
+          const isOffer =
+            PHOTO_WORD_RE.test(sentence) && PHOTO_VERB_RE.test(sentence) && PHOTO_OFFER_WORDING_RE.test(sentence)
+          if (isOffer) changed = true
+          return !isOffer
+        })
+        .join('')
+        .trim()
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (!changed) return trimmed
   return kept || null
 }
