@@ -208,4 +208,13 @@ describe('stripTrailingPhotoOffer', () => {
     expect(stripTrailingPhotoOffer('Es muy cómoda. ¿Para qué fechas la desea?')).toBe('Es muy cómoda. ¿Para qué fechas la desea?')
     expect(stripTrailingPhotoOffer('¿Le envío una foto?')).toBeNull()
   })
+  it('removes a conditional photo offer anywhere, keeping the rest (live test 2026-09-25, gpt-5.4)', () => {
+    expect(
+      stripTrailingPhotoOffer(
+        'Es una opción muy agradable si buscan amplitud y descanso.\n\nSi gusta, puedo compartirle una foto; y si me indica sus fechas, también le oriento con la tarifa.',
+      ),
+    ).toBe('Es una opción muy agradable si buscan amplitud y descanso.')
+    const plain = 'Tiene 2 camas Queen. Le comparto que el desayuno está incluido.'
+    expect(stripTrailingPhotoOffer(plain)).toBe(plain)
+  })
 })
