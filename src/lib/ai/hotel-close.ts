@@ -121,3 +121,18 @@ export function hasConflictingAmount(text: string, total: number, deposit: numbe
 export function isPastDate(dateISO: string | null | undefined, todayISO: string | null | undefined): boolean {
   return Boolean(dateISO && todayISO && dateISO < todayISO)
 }
+
+/** "Queda anotada…", "le registro…", "ya quedó actualizada…" — the reply
+ *  tells the guest their request was saved. */
+const NOTED_CLAIM_RE =
+  /\b(?:queda(?:n)?|qued[oó]|ya\s+(?:qued[oó]|est[aá]n?))\s+(?:anotad|registrad|apuntad|actualizad)[ao]s?\b|\ble\s+(?:registro|anoto|actualizo)\b|\b(?:dejo|dejamos)\s+(?:anotad|registrad)[ao]s?\b/i
+
+/**
+ * True when the reply claims the request was noted/updated. Paired with
+ * "no record_reservation marker this turn", that's a claim nothing backs
+ * (live test 2026-09-24: "Queda anotada la Suite Clásica Doble para 3
+ * personas…" while the saved request stayed Suite Premium for 2).
+ */
+export function claimsRequestNoted(text: string): boolean {
+  return NOTED_CLAIM_RE.test(text)
+}
