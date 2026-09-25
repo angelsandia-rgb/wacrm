@@ -206,6 +206,10 @@ const AI_PROVIDER_FALLBACK_TEXT =
 const COMPLAINT_RE =
   /\b(sucia|sucio|queja|quejar|reclamo|reclamar|mal servicio|p[eé]simo|horrible|ladrones|estafa|no sirven|decepcion|molest[oa]|asco)\b/i
 
+/** A reply that already brings up the booking details — the post-photo
+ *  nudge would only ask the same thing again. */
+const REPLY_MENTIONS_BOOKING_RE = /\b(fechas?|personas|reserv\w*|apart\w*|solicitud)\b/i
+
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
 
@@ -1924,13 +1928,16 @@ ${PAYMENT_HANDOFF_OFFER}`
     // a form. This stays as the safety net for replies that forgot to ask.
     // "Asked" includes an invitation without a "?" ("Si me indica sus
     // fechas, con gusto le ayudo…") — live test 2026-09-25: that reply got
-    // the canned "¿me ayuda con las fechas…?" right after it.
+    // the canned "¿me ayuda con las fechas…?" right after it. Same for a
+    // reply that already brings up the booking in any wording ("Si desea,
+    // también puedo ayudarle con las fechas…", second live test that day).
     // Never right after a health caution or a complaint (B44).
     if (
       photoSentProductId &&
       isHotel &&
       !outboundText.includes('?') &&
       !isStillAsking(outboundText) &&
+      !REPLY_MENTIONS_BOOKING_RE.test(outboundText) &&
       !isMedicalCaution(latestInbound, outboundText) &&
       !COMPLAINT_RE.test(latestInbound ?? '')
     ) {
