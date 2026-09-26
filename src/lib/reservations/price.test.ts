@@ -246,6 +246,16 @@ describe('priceStay — 5-person rate (migration 161)', () => {
     expect(p.kind === 'quoted' && p.partial).toEqual([])
   })
 
+  it('4 adults + 1 child keep the 4-person rate + the child rate, never the 5-person one (owner, 2026-09-26)', () => {
+    const p = priceStay(withQuint(), { ...STAY, guests: 5, adults: 4, children_ages: [8] }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(1160 + 175 + 1500 + 200)
+    expect(p.kind === 'quoted' && p.partial).toEqual([])
+  })
+
+  it('without the adults/children split the 5-person room keeps collecting', () => {
+    expect(priceStay(withQuint(), { ...STAY, guests: 5 }, 5).kind).toBe('incomplete')
+  })
+
   it('6 adults: priced at the 5-person rate, flagged', () => {
     const p = priceStay(withQuint(), { ...STAY, adults: 6, children_ages: [] }, 5)
     expect(p.kind === 'quoted' && p.total).toBe(1500 + 1800)
