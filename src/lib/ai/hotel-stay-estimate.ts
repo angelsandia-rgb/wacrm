@@ -80,7 +80,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  *  the headcount as the guest said it. */
 function headcountEs(p: Quoted): string {
   if (p.children) {
-    const kids = p.children.charged + p.children.free
+    const kids = p.children.charged + p.children.free + p.children.older
     const adults = plural(p.children.adults, 'adulto', 'adultos')
     return kids > 0 ? `${adults} y ${plural(kids, 'niño', 'niños')}` : adults
   }
@@ -92,6 +92,25 @@ function headcountEs(p: Quoted): string {
  *  party — the guest sees why the total is lower than the headcount. */
 function freeChildNote(p: Quoted): string {
   return p.children && p.children.free > 0 ? ' (los menores de 6 años no pagan)' : ''
+}
+
+/** How a partial estimate was built — " (calculado con la tarifa de 4
+ *  personas; los mayores de 12 años como adultos)" — or ''. */
+function partialBasisNote(p: Quoted): string {
+  const bits: string[] = []
+  if (p.partial.includes('adults_over_tier')) bits.push('calculado con la tarifa publicada de 4 personas')
+  if (p.partial.includes('older_child')) bits.push('los mayores de 12 años se calcularon como adultos')
+  if (p.partial.includes('below_min_tier')) {
+    bits.push(`calculado con la tarifa mínima de la habitación (${OCCUPANCY_LABEL_ES[p.occupancy].trim() || p.occupancy})`)
+  }
+  return bits.length ? ` (${bits.join('; ')})` : ''
+}
+
+/** The one line a partial estimate always carries (owner, 2026-09-26:
+ *  "que le diga que ese es el estimado pero que por la cantidad de
+ *  personas el equipo validará disponibilidad y precio"). */
+function partialTeamLine(p: Quoted): string {
+  return `Como son ${p.guests} personas, el equipo validará la disponibilidad y el precio final.`
 }
 
 /**
@@ -119,9 +138,10 @@ export async function loadHotelStayEstimate(
   // Never invent an occupancy: it determines the tariff. Several rooms
   // price each at its per-room occupancy — only when the total splits
   // evenly (B43); a room that prices children needs the adults/children
-  // split first; 5+ adults or more people than the room takes are never
-  // auto-estimated (Angel, 2026-09-18) — the bot's existing "no estimate
-  // calculated" fallback already does what's wanted for all of these.
+  // split first. A room that prices children never refuses for headcount
+  // (owner, 2026-09-26): 5+ adults, a party over capacity or a 13+ child
+  // get a partial estimate the team validates (`quote.partial`); other
+  // rooms still skip 5+ (Angel, 2026-09-18).
   const quote = priceStay(rates, rr, maxGuests)
   if (quote.kind !== 'quoted' || quote.nights.length === 0) return null
   const { rooms, occupancy } = quote
@@ -150,6 +170,9 @@ export async function loadHotelStayEstimate(
   }
   text +=
     ' Este total sale de las tarifas publicadas del hotel; es un estimado — la disponibilidad y el precio final los confirma una persona.'
+  if (quote.partial.length > 0) {
+    text += ` SOLO ESTIMADO${partialBasisNote(quote)}: preséntelo así y diga que, por la cantidad de personas, el equipo validará la disponibilidad y el precio final — nunca niegue la solicitud.`
+  }
 
   // Best-effort: seed the reservation's price so the Sheet + Panel agree.
   if (rr.estimated_price == null && quote.missing.length === 0 && total > 0) {
@@ -259,8 +282,9 @@ export async function computeStayEstimateStatus(
   // message read as duplicated noise (test run 2026-09-22).
   const text =
     `El total estimado sería de ${formatCurrency(total, currency)} por ${quote.nights.length} ${nightsWord} ` +
-    `para ${headcountEs(quote)}${freeChildNote(quote)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
-    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.`
+    `para ${headcountEs(quote)}${freeChildNote(quote)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}${partialBasisNote(quote)}. ` +
+    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.` +
+    (quote.partial.length > 0 ? ` ${partialTeamLine(quote)}` : '')
 
   // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
   // Panel figure correct even if this exact total was already stored
@@ -273,8 +297,8 @@ export async function computeStayEstimateStatus(
   const peoplePart = rooms > 1 || quote.children ? `${headcountEs(quote)}${freeChildNote(quote)}` : null
   const closingText =
     `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
-    `${peoplePart ? ` (${peoplePart})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
-    CLOSE_AVAILABILITY_LINE
+    `${peoplePart ? ` (${peoplePart})` : ''}${partialBasisNote(quote)}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
+    (quote.partial.length > 0 ? `Es un estimado: ${partialTeamLine(quote)} 😊` : CLOSE_AVAILABILITY_LINE)
 
   return { status: 'priced', reservationRequestId: rr.id, text, closingText, total }
 }
