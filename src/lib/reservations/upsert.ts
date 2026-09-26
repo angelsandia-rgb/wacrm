@@ -77,6 +77,9 @@ export interface ReservationInput {
   guests?: number | null
   /** Identical rooms (migration 159); `guests` stays the total. */
   rooms?: number | null
+  /** Adults / each child's age (migration 160); `guests` stays the total. */
+  adults?: number | null
+  children_ages?: number[] | null
   check_in?: string | null
   check_out?: string | null
   use_date?: string | null
@@ -107,6 +110,8 @@ const SETTABLE_KEYS = [
   'service_name',
   'guests',
   'rooms',
+  'adults',
+  'children_ages',
   'check_in',
   'check_out',
   'use_date',
@@ -211,13 +216,15 @@ export async function upsertReservationRequest(
     service_name?: string | null
     guests?: number | null
     rooms?: number | null
+    adults?: number | null
+    children_ages?: number[] | null
     check_in?: string | null
     check_out?: string | null
   } | null = null
   let stayFieldsChanged = false
 
   if (input.conversation_id) {
-    const LOOKUP_COLS = 'id, check_in, check_out, use_date, guests, rooms, service_name, product_id'
+    const LOOKUP_COLS = 'id, check_in, check_out, use_date, guests, rooms, adults, children_ages, service_name, product_id'
     type ExistingRow = {
       id: string
       check_in: string | null
@@ -225,6 +232,8 @@ export async function upsertReservationRequest(
       use_date: string | null
       guests: number | null
       rooms: number | null
+      adults: number | null
+      children_ages: number[] | null
       service_name: string | null
       product_id: string | null
     }
@@ -312,6 +321,8 @@ export async function upsertReservationRequest(
           service_name: (patch.service_name as string | undefined) ?? existing.service_name,
           guests: (patch.guests as number | undefined) ?? existing.guests,
           rooms: (patch.rooms as number | undefined) ?? existing.rooms,
+          adults: (patch.adults as number | undefined) ?? existing.adults,
+          children_ages: (patch.children_ages as number[] | undefined) ?? existing.children_ages,
           check_in: nextCheckIn,
           check_out: nextCheckOut,
         }
@@ -319,6 +330,9 @@ export async function upsertReservationRequest(
           datesMoved ||
           (patch.guests !== undefined && patch.guests !== existing.guests) ||
           (patch.rooms !== undefined && patch.rooms !== existing.rooms) ||
+          (patch.adults !== undefined && patch.adults !== existing.adults) ||
+          (patch.children_ages !== undefined &&
+            JSON.stringify(patch.children_ages) !== JSON.stringify(existing.children_ages ?? null)) ||
           (patch.service_name !== undefined && patch.service_name !== existing.service_name)
       }
     }
@@ -371,6 +385,8 @@ export async function upsertReservationRequest(
         service_name: input.service_name ?? null,
         guests: input.guests ?? null,
         rooms: input.rooms ?? null,
+        adults: input.adults ?? null,
+        children_ages: input.children_ages ?? null,
         check_in: input.check_in ?? null,
         check_out: input.check_out ?? null,
       }
@@ -389,7 +405,7 @@ export async function upsertReservationRequest(
     stayFieldsChanged &&
     effectiveStay?.check_in &&
     effectiveStay.check_out &&
-    effectiveStay.guests
+    (effectiveStay.guests || effectiveStay.adults)
   ) {
     const priced = await estimateStayPrice(admin, accountId, effectiveStay).catch(() => null)
     if (priced != null) {
@@ -434,7 +450,7 @@ async function syncReservationToContactFields(
   try {
     const { data: r } = await admin
       .from('reservation_requests')
-      .select('category, contact_id, service_name, guests, rooms, check_in, check_out')
+      .select('category, contact_id, service_name, guests, rooms, adults, children_ages, check_in, check_out')
       .eq('id', reservationId)
       .maybeSingle<{
         category: string
@@ -442,6 +458,8 @@ async function syncReservationToContactFields(
         service_name: string | null
         guests: number | null
         rooms: number | null
+        adults: number | null
+        children_ages: number[] | null
         check_in: string | null
         check_out: string | null
       }>()
@@ -463,6 +481,13 @@ async function syncReservationToContactFields(
       const occupancy = perRoom ? occupancyForGuests(perRoom) : null
       const label = occupancy ? OCCUPANCY_LABEL_ES[occupancy] : rooms > 1 ? 'Varias habitaciones' : 'Grupo grande (5+)'
       wanted['Ocupación'] = rooms > 1 && occupancy ? `${rooms} × ${label}` : label
+      // Adults/children split (migration 160): "5 (4 adultos, 1 niño: 8)".
+      const ages = r.children_ages ?? []
+      if (r.adults && ages.length > 0) {
+        const kids = `${ages.length} ${ages.length === 1 ? 'niño' : 'niños'}: ${ages.join(', ')}`
+        wanted['Huéspedes'] = `${r.guests} (${r.adults} ${r.adults === 1 ? 'adulto' : 'adultos'}, ${kids})`
+        wanted['Ocupación'] = `Familiar (${r.adults} ${r.adults === 1 ? 'adulto' : 'adultos'} + ${kids})`
+      }
     }
     if (r.service_name) {
       wanted[r.category === 'paquetes' ? 'Paquete' : 'Habitación'] = r.service_name

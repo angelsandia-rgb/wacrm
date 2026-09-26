@@ -262,7 +262,9 @@ export function parseGeneration(
       for (const pair of restParts.join('|').split(';')) {
         const eq = pair.indexOf('=')
         if (eq < 1) continue
-        const key = pair.slice(0, eq).trim().toLowerCase()
+        // Accents dropped so "niños=" / "edades_niños=" / "decoración=" match
+        // the documented ASCII keys.
+        const key = pair.slice(0, eq).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         const val = pair.slice(eq + 1).trim()
         if (key && val) fields[key] = val
       }

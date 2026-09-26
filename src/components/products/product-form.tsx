@@ -53,8 +53,9 @@ function emptyPriceOptionDraft(): PriceOptionDraft {
 // flattened to product_rates rows on save.
 // ------------------------------------------------------------
 
-type RateOccupancy = 'standard' | 'couple' | 'group' | 'quad';
-const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group', 'quad'];
+// `child` = price per child 6–12 for the night (migration 160).
+type RateOccupancy = 'standard' | 'couple' | 'group' | 'quad' | 'child';
+const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group', 'quad', 'child'];
 
 type DayRates = Record<RateOccupancy, string>;
 type RateBlockDraft = Record<DayOfWeek, DayRates>;
@@ -65,7 +66,7 @@ interface SeasonDraft {
 }
 
 function emptyDayRates(): DayRates {
-  return { standard: '', couple: '', group: '', quad: '' };
+  return { standard: '', couple: '', group: '', quad: '', child: '' };
 }
 function emptyRateBlock(): RateBlockDraft {
   return Object.fromEntries(
@@ -152,20 +153,22 @@ function RateGrid({
 
   return (
     <div className="space-y-1.5">
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-end gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-end gap-1.5">
         <span />
         <Label className="text-muted-foreground text-[11px]">{t('rateCol1')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol2')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol3')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol4')}</Label>
+        <Label className="text-muted-foreground text-[11px]">{t('rateColChild')}</Label>
       </div>
 
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-center gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5">
         <span className="text-muted-foreground text-[11px]">{t('rateAllDays')}</span>
         {cellInput(fill.standard, (v) => setFill((p) => ({ ...p, standard: v })))}
         {cellInput(fill.couple, (v) => setFill((p) => ({ ...p, couple: v })))}
         {cellInput(fill.group, (v) => setFill((p) => ({ ...p, group: v })))}
         {cellInput(fill.quad, (v) => setFill((p) => ({ ...p, quad: v })))}
+        {cellInput(fill.child, (v) => setFill((p) => ({ ...p, child: v })))}
       </div>
       <Button
         type="button"
@@ -184,7 +187,7 @@ function RateGrid({
       {DAY_ORDER.map((day) => (
         <div
           key={day}
-          className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr] items-center gap-1.5"
+          className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5"
         >
           <span className="text-muted-foreground text-xs">{DAY_LABEL_ES[day]}</span>
           {RATE_OCCUPANCIES.map((occ) =>
@@ -224,6 +227,8 @@ export function ProductForm({
   const [price, setPrice] = useState('');
   const [baseInstallationCost, setBaseInstallationCost] = useState('');
   const [durationMinutes, setDurationMinutes] = useState('');
+  // Hotel: most people (adults + children) the room takes (migration 160).
+  const [maxGuests, setMaxGuests] = useState('');
   // Product photo gallery — up to MAX_PRODUCT_IMAGES (migration 117).
   // First one is the "main" photo (mirrors the legacy `image_url`).
   const [imageUrls, setImageUrls] = useState<string[]>([]);
@@ -252,6 +257,7 @@ export function ProductForm({
     setDurationMinutes(
       product?.duration_minutes != null ? String(product.duration_minutes) : ''
     );
+    setMaxGuests(product?.max_guests != null ? String(product.max_guests) : '');
     setImageUrls(
       product?.image_urls?.length
         ? product.image_urls
@@ -523,6 +529,18 @@ export function ProductForm({
       if (isHotel) {
         body.category_id = categoryId || null;
         body.rates = resolvedRates;
+        const trimmedCap = maxGuests.trim();
+        if (trimmedCap === '') {
+          body.max_guests = null;
+        } else {
+          const cap = Number(trimmedCap);
+          if (!Number.isInteger(cap) || cap < 1 || cap > 50) {
+            toast.error(t('toastMaxGuestsInvalid'));
+            setSaving(false);
+            return;
+          }
+          body.max_guests = cap;
+        }
       }
       if (isClinic) {
         const trimmed = durationMinutes.trim();
@@ -798,6 +816,22 @@ export function ProductForm({
                     </Button>
                   </div>
                 )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">{t('maxGuestsLabel')}</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="50"
+                  step="1"
+                  inputMode="numeric"
+                  value={maxGuests}
+                  onChange={(e) => setMaxGuests(e.target.value)}
+                  placeholder="—"
+                  className="bg-muted border-border text-foreground h-9 w-28"
+                />
+                <p className="text-muted-foreground text-xs">{t('maxGuestsHint')}</p>
               </div>
 
               <div className="border-border space-y-3 rounded-md border p-3">

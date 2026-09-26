@@ -177,3 +177,30 @@ describe('buildReservationFollowUpMessage', () => {
     ).toBe('Perfecto, esto sería: Suite Premium, del 01/10/2026 al 03/10/2026, 2 personas. ¿Confirmamos la reservación?')
   })
 })
+
+describe('missingReservationFields — room that prices children (migration 160)', () => {
+  const BASE = { category: 'habitaciones' as const, check_in: '2026-11-13', check_out: '2026-11-15', needs_party_split: true }
+
+  it('asks how many adults and children, even with a headcount', () => {
+    expect(missingReservationFields({ ...BASE, guests: 5 })).toEqual([
+      'cuántos adultos y cuántos niños van (y la edad de cada niño)',
+    ])
+  })
+
+  it('asks for the missing ages when the split does not add up', () => {
+    expect(missingReservationFields({ ...BASE, guests: 5, adults: 2, children_ages: [8, 10] })).toEqual([
+      'la edad de cada niño',
+    ])
+  })
+
+  it('complete once adults + each child age match the headcount (or no children)', () => {
+    expect(missingReservationFields({ ...BASE, guests: 5, adults: 4, children_ages: [8] })).toEqual([])
+    expect(missingReservationFields({ ...BASE, guests: 4, adults: 4, children_ages: [] })).toEqual([])
+  })
+
+  it('other rooms keep asking only for the number of people', () => {
+    expect(missingReservationFields({ category: 'habitaciones', check_in: '2026-11-13', check_out: '2026-11-15' })).toEqual([
+      'el número de personas',
+    ])
+  })
+})

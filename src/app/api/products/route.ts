@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
-import { parseRates } from '@/lib/products/rates'
+import { parseMaxGuests, parseRates } from '@/lib/products/rates'
 import { parseDurationMinutes } from '@/lib/products/duration'
 import { resolveCategoryId } from '@/lib/products/categories'
 
@@ -106,6 +106,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: duration.error }, { status: 400 })
   }
 
+  const maxGuests = parseMaxGuests(body.max_guests)
+  if (!maxGuests.ok) {
+    return NextResponse.json({ error: maxGuests.error }, { status: 400 })
+  }
+
   const admin = supabaseAdmin()
 
   const category = await resolveCategoryId(admin, ctx.accountId, body.category_id)
@@ -127,6 +132,7 @@ export async function POST(request: Request) {
       image_urls: imageUrls,
       is_active: isActive,
       category_id: category.value,
+      ...(maxGuests.value !== undefined ? { max_guests: maxGuests.value } : {}),
     })
     .select()
     .single()

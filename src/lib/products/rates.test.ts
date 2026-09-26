@@ -9,6 +9,9 @@ import {
   occupancyForGuests,
   formatRoomRatesCell,
   parseRoomRatesCell,
+  parseMaxGuests,
+  splitChildAges,
+  quoteStayWithChildren,
   DAY_ORDER,
   type ProductRate,
 } from './rates'
@@ -368,5 +371,48 @@ describe('formatRoomRatesCell / parseRoomRatesCell (quad round trip)', () => {
       { day_of_week: 'fri', occupancy: 'standard', price: 400 },
       { day_of_week: 'fri', occupancy: 'quad', price: 1400 },
     ])
+  })
+})
+
+describe('children (migration 160)', () => {
+  const R: ProductRate[] = [
+    { day_of_week: 'thu', occupancy: 'quad', price: 1160, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+    { day_of_week: 'thu', occupancy: 'child', price: 175, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'child', price: 200, date_from: null, date_to: null },
+  ]
+
+  it('splits ages: under 6 free, 6–12 charged, 13+ older', () => {
+    expect(splitChildAges([2, 5, 6, 12, 13])).toEqual({ free: 2, charged: 2, older: 1 })
+  })
+
+  it('child price follows the night: corporativa Thu, recreativa Fri', () => {
+    // 2026-11-12 Thu, 2026-11-13 Fri
+    const q = quoteStayWithChildren(R, '2026-11-12', '2026-11-14', 4, 1)
+    expect(q.nights.map((n) => n.price)).toEqual([1160 + 175, 1500 + 200])
+    expect(q.missing).toEqual([])
+  })
+
+  it('a night without a child rate is missing, never priced as free', () => {
+    const q = quoteStayWithChildren(R.filter((r) => !(r.occupancy === 'child' && r.day_of_week === 'fri')), '2026-11-12', '2026-11-14', 4, 1)
+    expect(q.missing).toEqual(['2026-11-13'])
+  })
+
+  it('the child tier never widens the adult tiers', () => {
+    // 5 adults still have no tier; a child row does not count as one.
+    expect(resolveNightlyRate(R, '2026-11-12', occupancyForGuests(5))).toBeNull()
+  })
+
+  it('summarizeRates lists the child rate', () => {
+    expect(summarizeRates(R, (n) => `Q${n}`)).toContain('niño 6–12 años (c/u) Jue Q175 · Vie Q200')
+  })
+
+  it('parseRates accepts the child tier; parseMaxGuests validates capacity', () => {
+    expect(parseRates([{ day_of_week: 'mon', occupancy: 'child', price: 175 }]).ok).toBe(true)
+    expect(parseMaxGuests(5)).toEqual({ ok: true, value: 5 })
+    expect(parseMaxGuests(null)).toEqual({ ok: true, value: null })
+    expect(parseMaxGuests(undefined)).toEqual({ ok: true, value: undefined })
+    expect(parseMaxGuests(0).ok).toBe(false)
+    expect(parseMaxGuests(2.5).ok).toBe(false)
   })
 })

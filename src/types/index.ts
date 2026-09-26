@@ -485,6 +485,9 @@ export interface Product {
   /** Per-date room rates (migration 106) — only the `hotel` vertical
    *  populates these. Absent on fetches that don't join them. */
   rates?: ProductRateRow[];
+  /** Hotel rooms: most people (adults + children) the room takes
+   *  (migration 160). null/absent = no explicit cap. */
+  max_guests?: number | null;
 }
 
 /** A row of `product_rates` (migrations 106 + 108 + 111). */
@@ -494,8 +497,9 @@ export interface ProductRateRow {
   product_id: string;
   /** Which day of the week this price applies to (migration 111). */
   day_of_week: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
-  /** standard = 1 guest · couple = 2 · group = 3 · quad = 4 (migrations 108, 140). */
-  occupancy: 'standard' | 'couple' | 'group' | 'quad';
+  /** standard = 1 guest · couple = 2 · group = 3 · quad = 4 (migrations
+   *  108, 140) · child = price per child 6–12 (migration 160). */
+  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'child';
   price: number;
   date_from: string | null;
   date_to: string | null;

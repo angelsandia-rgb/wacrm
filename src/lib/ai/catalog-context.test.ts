@@ -5,7 +5,7 @@ import { loadCatalogContext } from './catalog-context'
 function makeDb(
   products: { id?: string; name: string; price: number; description: string | null }[],
   defaultCurrency: string | undefined = 'USD',
-  opts: { vertical?: string; rates?: unknown[] } = {},
+  opts: { vertical?: string; rates?: unknown[]; maxGuests?: Record<string, number> } = {},
 ) {
   const db = {
     from: (table: string) => {
@@ -15,6 +15,12 @@ function makeDb(
           eq: () => chain,
           order: () => chain,
           limit: () => Promise.resolve({ data: products, error: null }),
+          // capacity read (migration 160)
+          in: () =>
+            Promise.resolve({
+              data: Object.entries(opts.maxGuests ?? {}).map(([id, max_guests]) => ({ id, max_guests })),
+              error: null,
+            }),
         }
         return chain
       }
@@ -150,5 +156,21 @@ describe('loadCatalogContext', () => {
     expect(res).toHaveLength(1)
     expect(res![0]).toContain('- Widget (')
     expect(res![0]).toContain('10')
+  })
+})
+
+describe('loadCatalogContext — room capacity and child rate (migration 160)', () => {
+  it('shows the capacity and the child rate so the model asks adults/children', async () => {
+    const db = makeDb([{ id: 'p1', name: 'Junior Suite Familiar', price: 1160, description: null }], 'GTQ', {
+      vertical: 'hotel',
+      rates: [
+        { product_id: 'p1', day_of_week: 'thu', occupancy: 'quad', price: 1160, date_from: null, date_to: null },
+        { product_id: 'p1', day_of_week: 'thu', occupancy: 'child', price: 175, date_from: null, date_to: null },
+      ],
+      maxGuests: { p1: 5 },
+    })
+    const lines = await loadCatalogContext(db, 'acct')
+    expect(lines?.[0]).toContain('niño 6–12 años (c/u)')
+    expect(lines?.[0]).toContain('capacidad máx. 5 personas (adultos + niños)')
   })
 })
