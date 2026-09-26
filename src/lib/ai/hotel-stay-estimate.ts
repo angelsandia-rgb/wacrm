@@ -100,6 +100,9 @@ function partialBasisNote(p: Quoted): string {
   const bits: string[] = []
   if (p.partial.includes('adults_over_tier')) bits.push('calculado con la tarifa publicada de 4 personas')
   if (p.partial.includes('older_child')) bits.push('los mayores de 12 años se calcularon como adultos')
+  if (p.partial.includes('below_min_tier')) {
+    bits.push(`calculado con la tarifa mínima de la habitación (${OCCUPANCY_LABEL_ES[p.occupancy].trim() || p.occupancy})`)
+  }
   return bits.length ? ` (${bits.join('; ')})` : ''
 }
 

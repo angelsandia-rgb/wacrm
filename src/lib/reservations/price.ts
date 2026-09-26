@@ -107,6 +107,21 @@ export type PartialReason =
   | 'over_capacity'
   /** A 13+ "child" — priced as an adult; the hotel confirms the rate. */
   | 'older_child'
+  /** Fewer adults than the room's smallest adult tier (the Junior Suite
+   *  has no 1-person rate): priced at that smallest tier. */
+  | 'below_min_tier'
+
+const TIER_GUESTS: Record<Occupancy, number> = { standard: 1, couple: 2, group: 3, quad: 4 }
+
+/** The fewest adults the room has an always-on or seasonal rate for. */
+function minPricedTierGuests(rates: ProductRate[]): number {
+  let min = MAX_TIER_GUESTS
+  for (const r of rates) {
+    if (r.occupancy === 'child' || !(r.price > 0)) continue
+    min = Math.min(min, TIER_GUESTS[r.occupancy])
+  }
+  return min
+}
 
 /** Highest adult tier the calculator prices. */
 const MAX_TIER_GUESTS = 4
@@ -141,7 +156,9 @@ export function priceStay(rates: ProductRate[], stay: StayForPricing, maxGuests:
       const pricedAdults = stay.adults + split.older
       if (pricedAdults > MAX_TIER_GUESTS) partial.push('adults_over_tier')
       if (guests > (maxGuests ?? MAX_TIER_GUESTS)) partial.push('over_capacity')
-      const tierGuests = Math.min(pricedAdults, MAX_TIER_GUESTS)
+      const minTier = minPricedTierGuests(rates)
+      if (pricedAdults < minTier) partial.push('below_min_tier')
+      const tierGuests = Math.min(Math.max(pricedAdults, minTier), MAX_TIER_GUESTS)
       const occupancy = occupancyForGuests(tierGuests) ?? 'quad'
       const quote = quoteStayWithChildren(rates, stay.check_in, stay.check_out, tierGuests, split.charged)
       return {

@@ -191,6 +191,12 @@ describe('priceStay — children (migration 160)', () => {
     expect(p.kind === 'quoted' && p.partial).toEqual(['over_capacity'])
   })
 
+  it('1 adult + 4 children: the room has no 1-person rate, so its smallest tier (couple) is used, flagged', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 1, children_ages: [7, 9, 10, 12] }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(600 + 4 * 175 + 800 + 4 * 200)
+    expect(p.kind === 'quoted' && p.partial).toEqual(['below_min_tier'])
+  })
+
   it('within capacity it is a normal quote', () => {
     const p = priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8] }, 5)
     expect(p.kind === 'quoted' && p.partial).toEqual([])
