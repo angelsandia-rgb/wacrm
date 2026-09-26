@@ -35,7 +35,7 @@ export const DAY_LABEL_ES: Record<DayOfWeek, string> = {
  *  one falls back to the standard rate. 5+ guests has no tier at all
  *  (Angel, 2026-09-18: never estimate for a group that large — always
  *  forward the request to a person instead); see `occupancyForGuests`. */
-export type Occupancy = 'standard' | 'couple' | 'group' | 'quad'
+export type Occupancy = 'standard' | 'couple' | 'group' | 'quad' | 'quint'
 
 /** A `product_rates.occupancy` value: an adult tier, or `child` — the
  *  price per child (6–12) for that night (migration 160). A room with
@@ -44,7 +44,11 @@ export type Occupancy = 'standard' | 'couple' | 'group' | 'quad'
 export type RateTier = Occupancy | 'child'
 
 /** Display order for the occupancy tiers (used by every rate summary). */
-export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group', 'quad']
+export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group', 'quad', 'quint']
+
+/** Guests each adult tier stands for. `quint` (5, migration 161) exists
+ *  only on rooms that publish a 5-person rate (Junior Suite Familiar). */
+export const TIER_GUESTS: Record<Occupancy, number> = { standard: 1, couple: 2, group: 3, quad: 4, quint: 5 }
 
 /** A row of `product_rates`, request-body or DB shape (only the fields
  *  the resolver needs). */
@@ -58,7 +62,7 @@ export interface ProductRate {
   date_to: string | null
 }
 
-export const MAX_PRODUCT_RATES = 105 // 7 days × 5 tiers (4 adult + child) × up to 3 seasons
+export const MAX_PRODUCT_RATES = 126 // 7 days × 6 tiers (5 adult + child) × up to 3 seasons
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -189,7 +193,7 @@ export function resolveNightlyRate(
   const exact = tryOccupancy(occupancy)
   if (exact === 'ambiguous') return null
   if (exact !== null) return exact
-  if (occupancy === 'couple' || occupancy === 'group' || occupancy === 'quad') {
+  if (occupancy === 'couple' || occupancy === 'group' || occupancy === 'quad' || occupancy === 'quint') {
     const reference = seasonalForDay.length ? seasonalForDay : rates
     if (OCCUPANCY_ORDER.indexOf(occupancy) > OCCUPANCY_ORDER.indexOf(maxDefinedOccupancy(reference))) {
       return null
@@ -205,7 +209,8 @@ export function resolveNightlyRate(
  *  so a stay for that many guests is never auto-priced; the caller
  *  must forward the request to a person instead (Angel, 2026-09-18). */
 export function occupancyForGuests(guests: number): Occupancy | null {
-  if (guests >= 5) return null
+  if (guests >= 6) return null
+  if (guests === 5) return 'quint'
   if (guests === 4) return 'quad'
   if (guests === 3) return 'group'
   if (guests === 2) return 'couple'
@@ -327,6 +332,7 @@ export const OCCUPANCY_LABEL_ES: Record<Occupancy, string> = {
   couple: 'pareja ',
   group: 'grupo ',
   quad: '4 personas ',
+  quint: '5 personas ',
 }
 
 /** Collapse a run of consecutive same-priced days into "Lun–Jue Q800",
@@ -523,9 +529,10 @@ export function parseRates(raw: unknown): ParseRatesResult {
       occupancy !== 'couple' &&
       occupancy !== 'group' &&
       occupancy !== 'quad' &&
+      occupancy !== 'quint' &&
       occupancy !== 'child'
     ) {
-      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple', 'group', 'quad' or 'child'` }
+      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple', 'group', 'quad', 'quint' or 'child'` }
     }
     const price = Number(row.price)
     if (!Number.isFinite(price) || price < 0) {

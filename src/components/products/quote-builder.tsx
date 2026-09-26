@@ -102,7 +102,7 @@ export function QuoteBuilder({
   // Hotel vertical: a room line prices per night from product_rates.
   const [stayCheckIn, setStayCheckIn] = useState('');
   const [stayCheckOut, setStayCheckOut] = useState('');
-  const [stayOccupancy, setStayOccupancy] = useState<'standard' | 'couple' | 'group' | 'quad'>(
+  const [stayOccupancy, setStayOccupancy] = useState<'standard' | 'couple' | 'group' | 'quad' | 'quint'>(
     'standard',
   );
   const [freeDescription, setFreeDescription] = useState('');
@@ -213,13 +213,15 @@ export function QuoteBuilder({
             ? t('stayGroup')
             : stayOccupancy === 'quad'
               ? t('stayQuad')
-              : t('stayStandard');
+              : stayOccupancy === 'quint'
+                ? t('stayQuint')
+                : t('stayStandard');
       const catName =
         categories.find((c) => c.id === product.category_id)?.name ?? null;
       const reservationCategory =
         reservationSlugFromName(catName) ?? 'habitaciones';
       const reservationGuests =
-        stayOccupancy === 'quad' ? 4 : stayOccupancy === 'group' ? 3 : stayOccupancy === 'couple' ? 2 : 1;
+        stayOccupancy === 'quint' ? 5 : stayOccupancy === 'quad' ? 4 : stayOccupancy === 'group' ? 3 : stayOccupancy === 'couple' ? 2 : 1;
       setItems((prev) => [
         ...prev,
         {
@@ -569,7 +571,7 @@ export function QuoteBuilder({
                     onChange={(e) => {
                       const v = e.target.value;
                       setStayOccupancy(
-                        v === 'couple' || v === 'group' || v === 'quad' ? v : 'standard',
+                        v === 'couple' || v === 'group' || v === 'quad' || v === 'quint' ? v : 'standard',
                       );
                     }}
                     className="border-border bg-muted text-foreground h-9 w-full rounded-md border px-2 text-sm"
@@ -578,6 +580,7 @@ export function QuoteBuilder({
                     <option value="couple">{t('stayCouple')}</option>
                     <option value="group">{t('stayGroup')}</option>
                     <option value="quad">{t('stayQuad')}</option>
+                    <option value="quint">{t('stayQuint')}</option>
                   </select>
                 </div>
                 {stayCheckIn && stayCheckOut && nightsBetween(stayCheckIn, stayCheckOut).length > 0 && (

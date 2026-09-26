@@ -38,10 +38,15 @@ describe('occupancyForGuests', () => {
     expect(occupancyForGuests(0)).toBe('standard')
   })
 
-  it('5+ has no tier at all — never auto-priced, always forwarded to a person', () => {
-    expect(occupancyForGuests(5)).toBeNull()
-    expect(occupancyForGuests(9)).toBeNull()
+  it('5 maps to the quint tier (migration 161); 6+ has no tier at all', () => {
+    expect(occupancyForGuests(5)).toBe('quint')
+    expect(occupancyForGuests(6)).toBeNull()
     expect(occupancyForGuests(200)).toBeNull()
+  })
+
+  it('a room with no 5-person rate never prices 5 guests', () => {
+    const rates: ProductRate[] = [{ day_of_week: 'mon', occupancy: 'quad', price: 1160, date_from: null, date_to: null }]
+    expect(resolveNightlyRate(rates, '2026-03-02', 'quint')).toBeNull()
   })
 })
 

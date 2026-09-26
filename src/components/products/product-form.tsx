@@ -54,8 +54,8 @@ function emptyPriceOptionDraft(): PriceOptionDraft {
 // ------------------------------------------------------------
 
 // `child` = price per child 6–12 for the night (migration 160).
-type RateOccupancy = 'standard' | 'couple' | 'group' | 'quad' | 'child';
-const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group', 'quad', 'child'];
+type RateOccupancy = 'standard' | 'couple' | 'group' | 'quad' | 'quint' | 'child';
+const RATE_OCCUPANCIES: RateOccupancy[] = ['standard', 'couple', 'group', 'quad', 'quint', 'child'];
 
 type DayRates = Record<RateOccupancy, string>;
 type RateBlockDraft = Record<DayOfWeek, DayRates>;
@@ -66,7 +66,7 @@ interface SeasonDraft {
 }
 
 function emptyDayRates(): DayRates {
-  return { standard: '', couple: '', group: '', quad: '', child: '' };
+  return { standard: '', couple: '', group: '', quad: '', quint: '', child: '' };
 }
 function emptyRateBlock(): RateBlockDraft {
   return Object.fromEntries(
@@ -153,21 +153,23 @@ function RateGrid({
 
   return (
     <div className="space-y-1.5">
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-end gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr_1fr] items-end gap-1.5">
         <span />
         <Label className="text-muted-foreground text-[11px]">{t('rateCol1')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol2')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol3')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateCol4')}</Label>
+        <Label className="text-muted-foreground text-[11px]">{t('rateCol5')}</Label>
         <Label className="text-muted-foreground text-[11px]">{t('rateColChild')}</Label>
       </div>
 
-      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5">
+      <div className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5">
         <span className="text-muted-foreground text-[11px]">{t('rateAllDays')}</span>
         {cellInput(fill.standard, (v) => setFill((p) => ({ ...p, standard: v })))}
         {cellInput(fill.couple, (v) => setFill((p) => ({ ...p, couple: v })))}
         {cellInput(fill.group, (v) => setFill((p) => ({ ...p, group: v })))}
         {cellInput(fill.quad, (v) => setFill((p) => ({ ...p, quad: v })))}
+        {cellInput(fill.quint, (v) => setFill((p) => ({ ...p, quint: v })))}
         {cellInput(fill.child, (v) => setFill((p) => ({ ...p, child: v })))}
       </div>
       <Button
@@ -187,7 +189,7 @@ function RateGrid({
       {DAY_ORDER.map((day) => (
         <div
           key={day}
-          className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5"
+          className="grid grid-cols-[2.75rem_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-1.5"
         >
           <span className="text-muted-foreground text-xs">{DAY_LABEL_ES[day]}</span>
           {RATE_OCCUPANCIES.map((occ) =>
