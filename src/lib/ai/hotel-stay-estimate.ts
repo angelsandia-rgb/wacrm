@@ -94,15 +94,22 @@ function freeChildNote(p: Quoted): string {
   return p.children && p.children.free > 0 ? ' (los menores de 6 años no pagan)' : ''
 }
 
-/** How a partial estimate was built — " (calculado con la tarifa de 4
- *  personas; los mayores de 12 años como adultos)" — or ''. */
-function partialBasisNote(p: Quoted): string {
+/** How a partial estimate was built, as plain clauses (no parentheses —
+ *  callers wrap them once): "calculado con la tarifa publicada de 4
+ *  personas", … */
+function partialBasisBits(p: Quoted): string[] {
   const bits: string[] = []
   if (p.partial.includes('adults_over_tier')) bits.push('calculado con la tarifa publicada de 4 personas')
   if (p.partial.includes('older_child')) bits.push('los mayores de 12 años se calcularon como adultos')
   if (p.partial.includes('below_min_tier')) {
-    bits.push(`calculado con la tarifa mínima de la habitación (${OCCUPANCY_LABEL_ES[p.occupancy].trim() || p.occupancy})`)
+    bits.push(`calculado con la tarifa de ${OCCUPANCY_LABEL_ES[p.occupancy].trim() || p.occupancy}, la mínima de la habitación`)
   }
+  return bits
+}
+
+/** " (calculado con…; los mayores de 12…)" — or ''. */
+function partialBasisNote(p: Quoted): string {
+  const bits = partialBasisBits(p)
   return bits.length ? ` (${bits.join('; ')})` : ''
 }
 
@@ -294,10 +301,16 @@ export async function computeStayEstimateStatus(
   }
 
   const nightsPart = `${quote.nights.length} ${nightsWord}`
-  const peoplePart = rooms > 1 || quote.children ? `${headcountEs(quote)}${freeChildNote(quote)}` : null
+  // One parenthesis, clauses separated by "; " — never "(…) (…)" or
+  // "(… (…))" (owner, 2026-09-26).
+  const detailBits = [
+    ...(rooms > 1 || quote.children ? [headcountEs(quote)] : []),
+    ...(quote.children && quote.children.free > 0 ? ['los menores de 6 años no pagan'] : []),
+    ...partialBasisBits(quote),
+  ]
   const closingText =
     `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
-    `${peoplePart ? ` (${peoplePart})` : ''}${partialBasisNote(quote)}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
+    `${detailBits.length ? ` (${detailBits.join('; ')})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
     (quote.partial.length > 0 ? `Es un estimado: ${partialTeamLine(quote)} 😊` : CLOSE_AVAILABILITY_LINE)
 
   return { status: 'priced', reservationRequestId: rr.id, text, closingText, total }
