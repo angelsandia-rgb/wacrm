@@ -384,8 +384,46 @@ describe('partial estimate over capacity (owner, 2026-09-26)', () => {
     expect(res.status).toBe('priced')
     if (res.status !== 'priced') return
     expect(res.total).toBe(1160 + 175 + 1500 + 200)
-    expect(res.closingText).toContain('(4 adultos y 2 niños (los menores de 6 años no pagan))')
+    expect(res.closingText).toContain('(4 adultos y 2 niños; los menores de 6 años no pagan)')
+    expect(res.closingText).not.toMatch(/\([^)]*\(/) // never nested parentheses
+    expect(res.closingText).not.toMatch(/\) \(/) // never two in a row
     expect(res.closingText).toContain('Es un estimado: Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
     expect(res.text).toContain('Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
+  })
+})
+
+describe('partial estimate wording — one parenthesis (owner, 2026-09-26)', () => {
+  const RATES_J = [
+    { day_of_week: 'thu', occupancy: 'couple', price: 600, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'couple', price: 800, date_from: null, date_to: null },
+    { day_of_week: 'thu', occupancy: 'quad', price: 1160, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+    { day_of_week: 'thu', occupancy: 'child', price: 175, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'child', price: 200, date_from: null, date_to: null },
+  ]
+  const run = (party: Record<string, unknown>) =>
+    computeStayEstimateStatus(
+      makeDb({
+        reservation: { ...RESV, check_in: '2026-11-12', check_out: '2026-11-14', max_guests: 5, ...party },
+        rates: RATES_J,
+        products: [{ id: 'p1', name: 'Master Suite Deluxe' }],
+      }),
+      'acct-1', 'cv-1', 'GTQ',
+    )
+
+  it('5 adults', async () => {
+    const res = await run({ guests: 5, adults: 5, children_ages: [] })
+    expect(res.status === 'priced' && res.closingText).toContain(
+      'por 2 noches (5 adultos; calculado con la tarifa publicada de 4 personas), con un anticipo',
+    )
+  })
+
+  it('1 adult + 4 children', async () => {
+    const res = await run({ guests: 5, adults: 1, children_ages: [7, 9, 10, 12] })
+    expect(res.status === 'priced' && res.total).toBe(600 + 700 + 800 + 800)
+    expect(res.status === 'priced' && res.closingText).toContain(
+      '(1 adulto y 4 niños; calculado con la tarifa de pareja, la mínima de la habitación)',
+    )
+    expect(res.status === 'priced' && res.text).toContain('(calculado con la tarifa de pareja, la mínima de la habitación)')
   })
 })
