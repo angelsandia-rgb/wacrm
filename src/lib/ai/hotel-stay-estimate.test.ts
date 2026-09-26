@@ -360,3 +360,32 @@ describe('several rooms (B43)', () => {
     expect(res.status).toBe('uneven_rooms')
   })
 })
+
+describe('partial estimate over capacity (owner, 2026-09-26)', () => {
+  const JUNIOR_RATES = [
+    { day_of_week: 'thu', occupancy: 'quad', price: 1160, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+    { day_of_week: 'thu', occupancy: 'child', price: 175, date_from: null, date_to: null },
+    { day_of_week: 'fri', occupancy: 'child', price: 200, date_from: null, date_to: null },
+  ]
+  it('4 adults + a child + a baby in a 5-person room: quotes, and says the team validates', async () => {
+    const res = await computeStayEstimateStatus(
+      makeDb({
+        // `max_guests` rides on the same maybeSingle the mock returns for every table.
+        reservation: {
+          ...RESV, service_name: 'Master Suite Deluxe', guests: 6, adults: 4, children_ages: [8, 2],
+          check_in: '2026-11-12', check_out: '2026-11-14', max_guests: 5,
+        },
+        rates: JUNIOR_RATES,
+        products: [{ id: 'p1', name: 'Master Suite Deluxe' }],
+      }),
+      'acct-1', 'cv-1', 'GTQ',
+    )
+    expect(res.status).toBe('priced')
+    if (res.status !== 'priced') return
+    expect(res.total).toBe(1160 + 175 + 1500 + 200)
+    expect(res.closingText).toContain('(4 adultos y 2 niños (los menores de 6 años no pagan))')
+    expect(res.closingText).toContain('Es un estimado: Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
+    expect(res.text).toContain('Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
+  })
+})

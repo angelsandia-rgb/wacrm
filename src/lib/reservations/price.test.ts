@@ -164,14 +164,36 @@ describe('priceStay — children (migration 160)', () => {
     expect(priceStay(juniorRates(), { ...STAY, guests: 5 }, 5).kind).toBe('incomplete')
   })
 
-  it('over capacity, 5 adults, or a 13+ child are never auto-priced', () => {
-    expect(priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8, 9] }, 5).kind).toBe('too_large_group')
-    expect(priceStay(juniorRates(), { ...STAY, adults: 5 }, 6).kind).toBe('too_large_group')
-    expect(priceStay(juniorRates(), { ...STAY, adults: 2, children_ages: [14] }, 5)).toEqual({ kind: 'needs_person', reason: 'older_child' })
+  // Owner, 2026-09-26: never refuse for headcount — quote what the
+  // published rates cover and flag it so the team validates.
+  it('over capacity (a baby takes a place): prices adults + charged children, flagged', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8, 2] }, 5)
+    expect(p.kind).toBe('quoted')
+    if (p.kind !== 'quoted') return
+    expect(p.total).toBe(1160 + 175 + 1500 + 200) // the baby pays nothing
+    expect(p.partial).toEqual(['over_capacity'])
   })
 
-  it('without max_guests a room with child rates still stops at 4 people', () => {
-    expect(priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8] }, null).kind).toBe('too_large_group')
+  it('5 adults: priced at the 4-person rate, flagged', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 5 }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(1160 + 1500)
+    expect(p.kind === 'quoted' && p.partial).toEqual(['adults_over_tier'])
+  })
+
+  it('a 13+ child is priced as an adult, flagged', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 3, children_ages: [14] }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(1160 + 1500)
+    expect(p.kind === 'quoted' && p.partial).toEqual(['older_child'])
+  })
+
+  it('without max_guests the 4-person tier is the capacity: 5 people get a flagged estimate', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8] }, null)
+    expect(p.kind === 'quoted' && p.partial).toEqual(['over_capacity'])
+  })
+
+  it('within capacity it is a normal quote', () => {
+    const p = priceStay(juniorRates(), { ...STAY, adults: 4, children_ages: [8] }, 5)
+    expect(p.kind === 'quoted' && p.partial).toEqual([])
   })
 
   it('a room without child rates keeps pricing the whole headcount by tier', () => {
