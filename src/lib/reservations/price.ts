@@ -1,5 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { quoteStay, occupancyForGuests, type ProductRate } from '@/lib/products/rates'
+import {
+  hasChildRates,
+  occupancyForGuests,
+  quoteStay,
+  quoteStayWithChildren,
+  splitChildAges,
+  type ChildAgeSplit,
+  type DayOfWeek,
+  type Occupancy,
+  type ProductRate,
+} from '@/lib/products/rates'
 
 // ============================================================
 // Best-effort per-night total for a room / package stay, from the
@@ -18,6 +28,10 @@ export interface StayForPricing {
   rooms?: number | null
   check_in?: string | null
   check_out?: string | null
+  /** Adults in the request (migration 160); `guests` stays the total. */
+  adults?: number | null
+  /** Each child's age in years (migration 160). */
+  children_ages?: number[] | null
 }
 
 /** How many rooms a request covers — null/0/garbage count as one. */
@@ -38,9 +52,134 @@ export function guestsPerRoom(guests: number | null | undefined, rooms: number |
   return guests / n
 }
 
+/** The headcount a request covers: `guests` when set, else adults +
+ *  children when only the split was captured. `null` when neither is
+ *  usable. */
+export function totalGuests(stay: Pick<StayForPricing, 'guests' | 'adults' | 'children_ages'>): number | null {
+  if (stay.guests && Number.isInteger(stay.guests) && stay.guests >= 1) return stay.guests
+  if (stay.adults && Number.isInteger(stay.adults) && stay.adults >= 1) {
+    return stay.adults + (stay.children_ages?.length ?? 0)
+  }
+  return null
+}
+
+export interface PricedNight {
+  date: string
+  day_of_week: DayOfWeek
+  price: number | null
+}
+
+/** Why a stay isn't auto-priced — or its quote. Pure; see `priceStay`. */
+export type StayPricing =
+  /** Dates or headcount missing, or a room that prices children still
+   *  lacks the adults/children split — keep collecting. */
+  | { kind: 'incomplete' }
+  /** Several rooms whose headcount doesn't split evenly. */
+  | { kind: 'uneven_rooms' }
+  /** More people than the room takes (its `max_guests`, or 4 adults). */
+  | { kind: 'too_large_group' }
+  /** A shape the calculator doesn't price — a person does. */
+  | { kind: 'needs_person'; reason: 'older_child' | 'rooms_with_children' }
+  | {
+      kind: 'quoted'
+      nights: PricedNight[]
+      /** Per room. */
+      total: number
+      missing: string[]
+      rooms: number
+      guests: number
+      perRoom: number
+      /** Adult tier used (per room). */
+      occupancy: Occupancy
+      /** Present when the room prices children separately. */
+      children: (ChildAgeSplit & { adults: number }) | null
+    }
+
+/**
+ * How a stay prices against one product's rates. A room with `child`
+ * rates needs the adults/children split (Angel, 2026-09-25: "cuántos
+ * adultos y niños van") and prices adults by tier + each child 6–12 at
+ * the night's child rate; every other room keeps pricing the whole
+ * headcount by tier, as before.
+ */
+export function priceStay(rates: ProductRate[], stay: StayForPricing, maxGuests: number | null): StayPricing {
+  if (!stay.check_in || !stay.check_out) return { kind: 'incomplete' }
+  const guests = totalGuests(stay)
+  if (guests === null) return { kind: 'incomplete' }
+  const rooms = roomCount(stay.rooms)
+  if (maxGuests && guests > maxGuests * rooms) return { kind: 'too_large_group' }
+
+  if (hasChildRates(rates)) {
+    if (!stay.adults || !Number.isInteger(stay.adults) || stay.adults < 1) return { kind: 'incomplete' }
+    const ages = stay.children_ages ?? []
+    // "Somos 5: 2 adultos y 3 niños" with only two ages captured — keep
+    // collecting instead of pricing a party that isn't fully known.
+    if (stay.adults + ages.length !== guests) return { kind: 'incomplete' }
+    if (rooms > 1 && ages.length > 0) return { kind: 'needs_person', reason: 'rooms_with_children' }
+    if (rooms === 1) {
+      const occupancy = occupancyForGuests(stay.adults)
+      if (occupancy === null) return { kind: 'too_large_group' }
+      // No explicit cap: the adult tiers (up to 4) stay the only limit,
+      // and a child still takes a place.
+      if (!maxGuests && guests > 4) return { kind: 'too_large_group' }
+      const split = splitChildAges(ages)
+      if (split.older > 0) return { kind: 'needs_person', reason: 'older_child' }
+      const quote = quoteStayWithChildren(rates, stay.check_in, stay.check_out, stay.adults, split.charged)
+      return {
+        kind: 'quoted',
+        nights: quote.nights,
+        total: quote.total,
+        missing: quote.missing,
+        rooms,
+        guests,
+        perRoom: guests,
+        occupancy,
+        children: { ...split, adults: stay.adults },
+      }
+    }
+  }
+
+  const perRoom = guestsPerRoom(guests, stay.rooms)
+  if (perRoom === null) return { kind: 'uneven_rooms' }
+  const occupancy = occupancyForGuests(perRoom)
+  if (occupancy === null) return { kind: 'too_large_group' }
+  const quote = quoteStay(rates, stay.check_in, stay.check_out, occupancy)
+  return {
+    kind: 'quoted',
+    nights: quote.nights,
+    total: quote.total,
+    missing: quote.missing,
+    rooms,
+    guests,
+    perRoom,
+    occupancy,
+    children: null,
+  }
+}
+
+/** A product's rates and `max_guests` — the inputs `priceStay` needs.
+ *  `max_guests` reads as null when the column isn't there yet (code
+ *  deployed ahead of migration 160). */
+export async function loadStayPricingInputs(
+  db: SupabaseClient,
+  accountId: string,
+  productId: string,
+): Promise<{ rates: ProductRate[]; maxGuests: number | null }> {
+  const [{ data: rateRows }, { data: product, error: productErr }] = await Promise.all([
+    db
+      .from('product_rates')
+      .select('day_of_week, occupancy, price, date_from, date_to')
+      .eq('account_id', accountId)
+      .eq('product_id', productId),
+    db.from('products').select('max_guests').eq('account_id', accountId).eq('id', productId).maybeSingle(),
+  ])
+  const raw = productErr ? null : (product as { max_guests?: number | null } | null)?.max_guests
+  return { rates: (rateRows ?? []) as ProductRate[], maxGuests: raw && raw > 0 ? raw : null }
+}
+
 /**
  * The stay total (all rooms), or `null` — meaning "a human prices this"
- * — when the product can't be resolved, the guest count is unusable or
+ * — when the product can't be resolved, the headcount is unusable or
  * doesn't split evenly across the rooms, there are no rates, or any
  * night lacks a published rate.
  */
@@ -49,24 +188,18 @@ export async function estimateStayPrice(
   accountId: string,
   stay: StayForPricing,
 ): Promise<number | null> {
-  if (!stay.check_in || !stay.check_out) return null
-  const perRoom = guestsPerRoom(stay.guests, stay.rooms)
-  if (perRoom === null) return null
+  if (!stay.check_in || !stay.check_out || totalGuests(stay) === null) return null
 
   const productId = await resolveStayProductId(db, accountId, stay)
   if (!productId) return null
 
-  const { data: rateRows } = await db
-    .from('product_rates')
-    .select('day_of_week, occupancy, price, date_from, date_to')
-    .eq('account_id', accountId)
-    .eq('product_id', productId)
-  const rates = (rateRows ?? []) as ProductRate[]
+  const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, productId)
   if (rates.length === 0) return null
 
-  const quote = quoteStay(rates, stay.check_in, stay.check_out, occupancyForGuests(perRoom))
-  if (quote.nights.length === 0 || quote.missing.length > 0 || quote.total <= 0) return null
-  return quote.total * roomCount(stay.rooms)
+  const pricing = priceStay(rates, stay, maxGuests)
+  if (pricing.kind !== 'quoted') return null
+  if (pricing.nights.length === 0 || pricing.missing.length > 0 || pricing.total <= 0) return null
+  return pricing.total * pricing.rooms
 }
 
 /** The deposit ("anticipo") owed on a fully-priced stay total, rounded to

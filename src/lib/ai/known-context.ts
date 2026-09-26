@@ -30,6 +30,8 @@ interface ReservationSummaryRow {
   service_name: string | null
   guests: number | null
   rooms?: number | null
+  adults?: number | null
+  children_ages?: number[] | null
   check_in: string | null
   check_out: string | null
   use_date: string | null
@@ -81,7 +83,7 @@ export async function loadActiveReservationsSummary(
   const { data } = await db
     .from('reservation_requests')
     .select(
-      'category, service_name, guests, rooms, check_in, check_out, use_date, duration_minutes, hall, estimated_price, guest_confirmed_at, decoration, notes',
+      'category, service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, duration_minutes, hall, estimated_price, guest_confirmed_at, decoration, notes',
     )
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
@@ -100,6 +102,14 @@ export async function loadActiveReservationsSummary(
     else if (r.use_date) bits.push(formatDateEs(r.use_date))
     if (r.rooms && r.rooms > 1) bits.push(`${r.rooms} habitaciones`)
     if (r.guests) bits.push(`${r.guests} ${r.guests === 1 ? 'persona' : 'personas'}${r.rooms && r.rooms > 1 ? ' en total' : ''}`)
+    if (r.adults) {
+      const ages = r.children_ages ?? []
+      bits.push(
+        ages.length > 0
+          ? `${r.adults} ${r.adults === 1 ? 'adulto' : 'adultos'} + ${ages.length} ${ages.length === 1 ? 'niño' : 'niños'} (${ages.join(', ')} años)`
+          : `${r.adults} ${r.adults === 1 ? 'adulto' : 'adultos'}, sin niños`,
+      )
+    }
     if (r.duration_minutes) bits.push(`${r.duration_minutes} min`)
     if (r.hall) bits.push(r.hall)
     if (r.estimated_price != null && r.estimated_price > 0) {

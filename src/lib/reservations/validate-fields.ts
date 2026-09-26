@@ -18,6 +18,19 @@ export function reservationFieldError(input: object): string | null {
   if (rooms != null && (typeof rooms !== 'number' || !Number.isInteger(rooms) || rooms < 1 || rooms > 20)) {
     return 'Invalid reservation rooms'
   }
+  const adults = values.adults
+  if (adults != null && (typeof adults !== 'number' || !Number.isInteger(adults) || adults < 1 || adults > 100)) {
+    return 'Invalid reservation adults'
+  }
+  const ages = values.children_ages
+  if (
+    ages != null &&
+    (!Array.isArray(ages) ||
+      ages.length > 20 ||
+      ages.some((a) => typeof a !== 'number' || !Number.isInteger(a) || a < 0 || a > 17))
+  ) {
+    return 'Invalid reservation children ages'
+  }
   const price = values.estimated_price
   if (price != null && (typeof price !== 'number' || !Number.isFinite(price) || price < 0 || price > 9999999999.99)) {
     return 'Invalid reservation price'

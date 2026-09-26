@@ -25,7 +25,7 @@ interface CatalogProductRow {
 interface RateRow {
   product_id: string
   day_of_week: DayOfWeek
-  occupancy: 'standard' | 'couple' | 'group'
+  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'child'
   price: number
   date_from: string | null
   date_to: string | null
@@ -58,20 +58,34 @@ export async function loadCatalogContext(
   // 106) instead of just the base price, so the model can inform
   // tariffs and compute a stay correctly.
   let ratesByProduct = new Map<string, RateRow[]>()
+  const maxGuestsByProduct = new Map<string, number>()
   if (account?.industry_vertical === 'hotel') {
-    const { data: rates } = await db
-      .from('product_rates')
-      .select('product_id, day_of_week, occupancy, price, date_from, date_to')
-      .eq('account_id', accountId)
-      .in('product_id', typed.map((p) => p.id))
+    const ids = typed.map((p) => p.id)
+    const [{ data: rates }, { data: caps, error: capsError }] = await Promise.all([
+      db
+        .from('product_rates')
+        .select('product_id, day_of_week, occupancy, price, date_from, date_to')
+        .eq('account_id', accountId)
+        .in('product_id', ids),
+      // Separate read: a missing column (code ahead of migration 160) only
+      // drops the capacity note, never the catalog.
+      db.from('products').select('id, max_guests').eq('account_id', accountId).in('id', ids),
+    ])
     ratesByProduct = groupBy((rates as RateRow[] | null) ?? [], (r) => r.product_id)
+    if (!capsError) {
+      for (const c of (caps ?? []) as { id: string; max_guests: number | null }[]) {
+        if (c.max_guests && c.max_guests > 0) maxGuestsByProduct.set(c.id, c.max_guests)
+      }
+    }
   }
 
   return typed.map((p) => {
     const desc = p.description ? ` — ${truncate(p.description, MAX_DESCRIPTION_CHARS)}` : ''
     const rates = ratesByProduct.get(p.id) ?? []
     if (rates.length > 0) {
-      return `- ${p.name}: ${formatRateSummary(rates, currency)}${desc}`
+      const cap = maxGuestsByProduct.get(p.id)
+      const capNote = cap ? ` · capacidad máx. ${cap} personas (adultos + niños)` : ''
+      return `- ${p.name}: ${formatRateSummary(rates, currency)}${capNote}${desc}`
     }
     return `- ${p.name} (${formatCurrency(p.price, currency)})${desc}`
   })

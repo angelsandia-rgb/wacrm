@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { parsePriceOptions, parseInstallationCost, parseProductImages } from '@/lib/products/price-options'
-import { parseRates } from '@/lib/products/rates'
+import { parseMaxGuests, parseRates } from '@/lib/products/rates'
 import { parseDurationMinutes } from '@/lib/products/duration'
 import { resolveCategoryId } from '@/lib/products/categories'
 
@@ -65,6 +65,13 @@ export async function PATCH(
       return NextResponse.json({ error: duration.error }, { status: 400 })
     }
     update.duration_minutes = duration.value
+  }
+  if ('max_guests' in body) {
+    const maxGuests = parseMaxGuests(body.max_guests)
+    if (!maxGuests.ok) {
+      return NextResponse.json({ error: maxGuests.error }, { status: 400 })
+    }
+    update.max_guests = maxGuests.value ?? null
   }
 
   const admin = supabaseAdmin()

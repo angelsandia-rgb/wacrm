@@ -37,6 +37,12 @@ export const DAY_LABEL_ES: Record<DayOfWeek, string> = {
  *  forward the request to a person instead); see `occupancyForGuests`. */
 export type Occupancy = 'standard' | 'couple' | 'group' | 'quad'
 
+/** A `product_rates.occupancy` value: an adult tier, or `child` — the
+ *  price per child (6–12) for that night (migration 160). A room with
+ *  child rows prices children on top of the adults' tier; see
+ *  `quoteStayWithChildren`. */
+export type RateTier = Occupancy | 'child'
+
 /** Display order for the occupancy tiers (used by every rate summary). */
 export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group', 'quad']
 
@@ -44,7 +50,7 @@ export const OCCUPANCY_ORDER: Occupancy[] = ['standard', 'couple', 'group', 'qua
  *  the resolver needs). */
 export interface ProductRate {
   day_of_week: DayOfWeek
-  occupancy: Occupancy
+  occupancy: RateTier
   price: number
   /** ISO `YYYY-MM-DD`. Both null = the always-on rate; both set = a
    *  seasonal override for `[date_from, date_to]` inclusive. */
@@ -52,7 +58,7 @@ export interface ProductRate {
   date_to: string | null
 }
 
-export const MAX_PRODUCT_RATES = 84 // 7 days × 4 occupancies × up to 3 seasons
+export const MAX_PRODUCT_RATES = 105 // 7 days × 5 tiers (4 adult + child) × up to 3 seasons
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -124,7 +130,7 @@ function seasonContains(rate: ProductRate, nightISO: string): boolean {
 function maxDefinedOccupancy(rates: ProductRate[]): Occupancy {
   let max: Occupancy = 'standard'
   for (const r of rates) {
-    if (!Number.isFinite(r.price) || r.price <= 0) continue
+    if (!Number.isFinite(r.price) || r.price <= 0 || r.occupancy === 'child') continue
     if (OCCUPANCY_ORDER.indexOf(r.occupancy) > OCCUPANCY_ORDER.indexOf(max)) max = r.occupancy
   }
   return max
@@ -159,7 +165,7 @@ function maxDefinedOccupancy(rates: ProductRate[]): Occupancy {
 export function resolveNightlyRate(
   rates: ProductRate[],
   nightISO: string,
-  occupancy: Occupancy | null,
+  occupancy: RateTier | null,
 ): number | null {
   if (occupancy === null) return null
   const day = dayOfWeekOf(nightISO)
@@ -173,7 +179,7 @@ export function resolveNightlyRate(
   const pool = seasonalForDay.length
     ? seasonalForDay
     : rates.filter((r) => valid(r) && !r.date_from && !r.date_to)
-  const tryOccupancy = (occ: Occupancy): number | null | 'ambiguous' => {
+  const tryOccupancy = (occ: RateTier): number | null | 'ambiguous' => {
     const candidates = pool.filter((r) => r.occupancy === occ)
     const prices = new Set(candidates.map((r) => r.price))
     if (prices.size > 1) return 'ambiguous'
@@ -231,6 +237,81 @@ export function quoteStay(
   const nights = nightsBetween(checkInISO, checkOutISO).map((date): StayNight => {
     const price = resolveNightlyRate(rates, date, occupancy)
     return { date, day_of_week: dayOfWeekOf(date), price }
+  })
+  const total = nights.reduce((sum, n) => sum + (n.price ?? 0), 0)
+  const missing = nights.filter((n) => n.price === null).map((n) => n.date)
+  return { nights, total, missing }
+}
+
+// ------------------------------------------------------------
+// Children (migration 160). A room that has `child` rates prices the
+// adults at their tier and each child 6–12 at that night's child rate;
+// children under 6 stay free; a 13+ "child" is priced by a person (the
+// hotel's own rule: "para mayores de 12, el equipo confirma la tarifa").
+// ------------------------------------------------------------
+
+/** Children younger than this stay free. */
+export const CHILD_FREE_BELOW_AGE = 6
+/** Oldest age priced at the child rate; older is not auto-priced. */
+export const CHILD_MAX_AGE = 12
+
+/** True when the product has at least one priced `child` rate. */
+export function hasChildRates(rates: Pick<ProductRate, 'occupancy' | 'price'>[]): boolean {
+  return rates.some((r) => r.occupancy === 'child' && Number.isFinite(r.price) && r.price > 0)
+}
+
+export interface ChildAgeSplit {
+  /** Children 6–12, each charged the child rate. */
+  charged: number
+  /** Children under 6 — no charge. */
+  free: number
+  /** Children over 12 — a person prices them. */
+  older: number
+}
+
+export function splitChildAges(ages: readonly number[]): ChildAgeSplit {
+  const split: ChildAgeSplit = { charged: 0, free: 0, older: 0 }
+  for (const age of ages) {
+    if (age < CHILD_FREE_BELOW_AGE) split.free += 1
+    else if (age <= CHILD_MAX_AGE) split.charged += 1
+    else split.older += 1
+  }
+  return split
+}
+
+export interface ChildStayNight extends StayNight {
+  /** The adults' tier price for the night (null = no rate). */
+  adult_price: number | null
+  /** One child's price for the night; null when there is no child rate
+   *  (only a problem when `chargedChildren > 0`). */
+  child_price: number | null
+}
+
+export interface ChildStayQuote {
+  nights: ChildStayNight[]
+  total: number
+  missing: string[]
+}
+
+/**
+ * Price a stay for `adults` (at their occupancy tier) plus
+ * `chargedChildren` (6–12, at the child rate of each night — corporativa
+ * or recreativa by day of week, or the season's). A night missing either
+ * figure lands in `missing`, never priced at a guess.
+ */
+export function quoteStayWithChildren(
+  rates: ProductRate[],
+  checkInISO: string,
+  checkOutISO: string,
+  adults: number,
+  chargedChildren: number,
+): ChildStayQuote {
+  const adultTier = occupancyForGuests(adults)
+  const nights = nightsBetween(checkInISO, checkOutISO).map((date): ChildStayNight => {
+    const adultPrice = resolveNightlyRate(rates, date, adultTier)
+    const childPrice = chargedChildren > 0 ? resolveNightlyRate(rates, date, 'child') : 0
+    const price = adultPrice === null || childPrice === null ? null : adultPrice + chargedChildren * childPrice
+    return { date, day_of_week: dayOfWeekOf(date), price, adult_price: adultPrice, child_price: childPrice }
   })
   const total = nights.reduce((sum, n) => sum + (n.price ?? 0), 0)
   const missing = nights.filter((n) => n.price === null).map((n) => n.date)
@@ -323,14 +404,18 @@ export function summarizeRates(
   // A 0 / negative price is "no rate for that day/tier", not a free night.
   const always = rates.filter((r) => !r.date_from && !r.date_to && r.price > 0)
   if (always.length === 0) return ''
-  return OCCUPANCY_ORDER.flatMap((occ) => {
+  const adultParts = OCCUPANCY_ORDER.flatMap((occ) => {
     const forOcc = always
       .filter((r) => r.occupancy === occ)
       .map((r) => ({ day: r.day_of_week, price: r.price }))
     if (forOcc.length === 0) return []
     const body = collapseDayRuns(forOcc, fmt)
     return body ? [`${OCCUPANCY_LABEL_ES[occ]}${body}`] : []
-  }).join(' · ')
+  })
+  const childRows = always.filter((r) => r.occupancy === 'child').map((r) => ({ day: r.day_of_week, price: r.price }))
+  const childBody = childRows.length ? collapseDayRuns(childRows, fmt) : ''
+  if (childBody) adultParts.push(`niño ${CHILD_FREE_BELOW_AGE}–${CHILD_MAX_AGE} años (c/u) ${childBody}`)
+  return adultParts.join(' · ')
 }
 
 // ------------------------------------------------------------
@@ -400,7 +485,7 @@ export function parseRoomRatesCell(
 
 export interface ParsedRate {
   day_of_week: DayOfWeek
-  occupancy: Occupancy
+  occupancy: RateTier
   price: number
   date_from: string | null
   date_to: string | null
@@ -437,9 +522,10 @@ export function parseRates(raw: unknown): ParseRatesResult {
       occupancy !== 'standard' &&
       occupancy !== 'couple' &&
       occupancy !== 'group' &&
-      occupancy !== 'quad'
+      occupancy !== 'quad' &&
+      occupancy !== 'child'
     ) {
-      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple', 'group' or 'quad'` }
+      return { ok: false, error: `rates[${i}].occupancy must be 'standard', 'couple', 'group', 'quad' or 'child'` }
     }
     const price = Number(row.price)
     if (!Number.isFinite(price) || price < 0) {
@@ -493,4 +579,16 @@ export function parseRates(raw: unknown): ParseRatesResult {
   }
 
   return { ok: true, rates }
+}
+
+/** `products.max_guests` from a request body (migration 160): a whole
+ *  number 1–50, `null` to clear, `undefined` when the key is absent. */
+export function parseMaxGuests(
+  raw: unknown,
+): { ok: true; value: number | null | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined }
+  if (raw === null || raw === '') return { ok: true, value: null }
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 50) return { ok: false, error: 'max_guests must be a whole number between 1 and 50' }
+  return { ok: true, value: n }
 }

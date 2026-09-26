@@ -13,6 +13,12 @@ export interface ReservationFieldSnapshot {
   guests?: number | null
   /** Identical rooms (migration 159); null = 1. */
   rooms?: number | null
+  /** Adults / each child's age (migration 160). */
+  adults?: number | null
+  children_ages?: number[] | null
+  /** The room prices children separately (it has child rates), so the
+   *  adults/children split is required before the request is complete. */
+  needs_party_split?: boolean
   check_in?: string | null
   check_out?: string | null
   use_date?: string | null
@@ -41,7 +47,15 @@ export function missingReservationFields(row: ReservationFieldSnapshot): string[
   } else if (USE_DATE_CATEGORIES.has(row.category)) {
     if (!row.use_date) missing.push('la fecha')
   }
-  if (!row.guests) missing.push('el número de personas')
+  if (row.needs_party_split) {
+    // Junior Suite Familiar and the like (migration 160): the price
+    // depends on how many are adults and each child's age.
+    const ages = row.children_ages ?? []
+    if (!row.adults) missing.push('cuántos adultos y cuántos niños van (y la edad de cada niño)')
+    else if (row.guests && row.adults + ages.length !== row.guests) missing.push('la edad de cada niño')
+  } else if (!row.guests) {
+    missing.push('el número de personas')
+  }
   // No hall requirement: most hotels have one venue and the team picks it
   // anyway. Requiring it silently kept complete event requests from ever
   // reaching the team (test runs 2026-09-24, pruebas #9 and #25) — the

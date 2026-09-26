@@ -556,7 +556,7 @@ vi.mock('./admin-client', () => ({
   }),
 }))
 
-import { dispatchInboundToAiReply } from './auto-reply'
+import { dispatchInboundToAiReply, parseChildAges } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
 import { CLOSE_AVAILABILITY_AND_TOTAL_LINE, CLOSE_AVAILABILITY_LINE } from './hotel-stay-estimate'
 
@@ -3203,6 +3203,55 @@ describe('dispatchInboundToAiReply — hotel findings, 20-chat test run 2026-09-
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Es ideal para parejas, con 2 camas Queen.' }),
     )
+  })
+})
+
+describe('dispatchInboundToAiReply — adults/children split in the reservation marker (migration 160)', () => {
+  beforeEach(() => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+  })
+
+  it('adultos + edades_ninos (accented key too) reach the request, with the total headcount', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Perfecto, ¿para qué fechas?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { servicio: 'Junior Suite Familiar', adultos: '4', edades_ninos: '8' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ adults: 4, children_ages: [8], guests: 5 }),
+    )
+  })
+
+  it('ninos=0 records "no children"', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Perfecto, ¿para qué fechas?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      reservationProposals: [
+        { category: 'habitaciones', fields: { servicio: 'Junior Suite Familiar', adultos: '3', ninos: '0' }, confirmed: false },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ adults: 3, children_ages: [], guests: 3 }),
+    )
+  })
+
+  it('parseChildAges reads loose wording and drops adults-range numbers', () => {
+    expect(parseChildAges('8, 10')).toEqual([8, 10])
+    expect(parseChildAges('3 años y 7')).toEqual([3, 7])
+    expect(parseChildAges('ninguno')).toBeUndefined()
+    expect(parseChildAges('30')).toBeUndefined()
   })
 })
 

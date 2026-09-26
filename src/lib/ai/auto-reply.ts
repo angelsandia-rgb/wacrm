@@ -67,7 +67,7 @@ import {
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
 import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
-import { estimateDeposit } from '@/lib/reservations/price'
+import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -3020,6 +3020,35 @@ function normalizeReservationDate(v?: string): string | undefined {
  * because the rows themselves are only written after the send. Drives the
  * CLOSE enforcement right before `sendReplyWithRetry`.
  */
+/**
+ * The row with `needs_party_split` set when its room prices children
+ * separately (has `child` rates, migration 160) — such a request isn't
+ * complete until the adults/children split is known. Best-effort: any
+ * lookup failure leaves the row as it was (old behavior).
+ */
+async function withPartySplitRequirement<T extends ReservationFieldSnapshot>(
+  db: SupabaseClient,
+  accountId: string,
+  row: T,
+): Promise<T> {
+  if (!isStayCategoryName(row.category) || !row.service_name) return row
+  try {
+    const productId = await resolveStayProductId(db, accountId, { service_name: row.service_name })
+    if (!productId) return row
+    const { data, error } = await db
+      .from('product_rates')
+      .select('occupancy, price')
+      .eq('account_id', accountId)
+      .eq('product_id', productId)
+      .eq('occupancy', 'child')
+    if (error || !Array.isArray(data)) return row
+    const priced = (data as { occupancy: string; price: number }[]).some((r) => r.occupancy === 'child' && Number(r.price) > 0)
+    return priced ? { ...row, needs_party_split: true } : row
+  } catch {
+    return row
+  }
+}
+
 async function anyReservationCompleteAfterTurn(
   db: SupabaseClient,
   accountId: string,
@@ -3029,7 +3058,7 @@ async function anyReservationCompleteAfterTurn(
 ): Promise<boolean> {
   const { data } = await db
     .from('reservation_requests')
-    .select('category, service_name, guests, check_in, check_out, use_date, hall, guest_confirmed_at')
+    .select('category, service_name, guests, adults, children_ages, check_in, check_out, use_date, hall, guest_confirmed_at')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('is_active_build', true)
@@ -3041,15 +3070,19 @@ async function anyReservationCompleteAfterTurn(
     const base: ReservationFieldSnapshot = startNew || !row ? { category: p.category as ReservationCategory } : { ...row }
     const f = p.fields
     const guests = f.personas != null && Number.isFinite(Number(f.personas)) ? Math.round(Number(f.personas)) : undefined
-    const merged: ReservationFieldSnapshot = {
+    const adults = f.adultos != null && Number.isFinite(Number(f.adultos)) ? Math.round(Number(f.adultos)) : undefined
+    const ages = parseChildAges(f.edades_ninos) ?? (f.ninos != null && Number(f.ninos) === 0 ? [] : undefined)
+    const merged = await withPartySplitRequirement(db, accountId, {
       ...base,
       service_name: f.servicio ?? base.service_name,
-      guests: guests ?? base.guests,
+      guests: guests ?? base.guests ?? (adults && ages ? adults + ages.length : undefined),
+      adults: adults ?? base.adults,
+      children_ages: ages ?? base.children_ages,
       check_in: normalizeReservationDate(f.entrada) ?? base.check_in,
       check_out: normalizeReservationDate(f.salida) ?? base.check_out,
       use_date: normalizeReservationDate(f.fecha) ?? base.use_date,
       hall: f.salon ?? base.hall,
-    }
+    } as ReservationFieldSnapshot)
     if (missingReservationFields(merged).length > 0) continue
     if (isPastDate(merged.check_in ?? merged.use_date ?? null, todayISO)) continue
     return true
@@ -3058,6 +3091,14 @@ async function anyReservationCompleteAfterTurn(
 }
 
 const isStayCategoryName = (category: string) => category === 'habitaciones' || category === 'paquetes'
+
+/** "8,10" / "8 y 10" / "3 años, 7" → [8, 10] — each child's age from a
+ *  marker's `edades_ninos`. `undefined` when nothing usable is there. */
+export function parseChildAges(raw: string | undefined): number[] | undefined {
+  if (!raw) return undefined
+  const ages = (raw.match(/\d+/g) ?? []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 17)
+  return ages.length > 0 ? ages.slice(0, 20) : undefined
+}
 
 async function autoRecordReservation(args: {
   db: SupabaseClient
@@ -3100,6 +3141,20 @@ async function autoRecordReservation(args: {
   // personas=4). Rooms/packages only; the upsert validates 1–20 (B43).
   const rooms = toInt(f.habitaciones)
   if (rooms !== undefined && rooms >= 1 && rooms <= 20 && isStayCategoryName(proposal.category)) input.rooms = rooms
+  // Adults / children split for a room that prices children (migration
+  // 160, Junior Suite Familiar): adultos=4;edades_ninos=8 — or ninos=0
+  // for "no children". `personas` stays the total; filled in from the
+  // split when the marker leaves it out.
+  if (isStayCategoryName(proposal.category)) {
+    const adults = toInt(f.adultos)
+    if (adults !== undefined && adults >= 1 && adults <= 100) input.adults = adults
+    const ages = parseChildAges(f.edades_ninos)
+    if (ages) input.children_ages = ages
+    else if (toInt(f.ninos) === 0) input.children_ages = []
+    if (input.guests === undefined && input.adults != null && input.children_ages != null) {
+      input.guests = input.adults + input.children_ages.length
+    }
+  }
   const checkIn = toDate(f.entrada)
   if (checkIn) input.check_in = checkIn
   const checkOut = toDate(f.salida)
@@ -3139,7 +3194,7 @@ async function autoRecordReservation(args: {
   // old dates and nobody was notified.
   const { data: before } = await db
     .from('reservation_requests')
-    .select('service_name, guests, rooms, check_in, check_out, use_date, guest_confirmed_at')
+    .select('service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, guest_confirmed_at')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', proposal.category)
@@ -3152,12 +3207,16 @@ async function autoRecordReservation(args: {
   const prior = before as {
     service_name: string | null; guests: number | null; rooms: number | null; check_in: string | null
     check_out: string | null; use_date: string | null; guest_confirmed_at: string | null
+    adults?: number | null; children_ages?: number[] | null
   } | null
   if (prior?.guest_confirmed_at && !startNew) {
     const changed =
       (input.service_name !== undefined && input.service_name !== prior.service_name) ||
       (input.guests !== undefined && input.guests !== prior.guests) ||
       (input.rooms !== undefined && input.rooms !== (prior.rooms ?? 1)) ||
+      (input.adults !== undefined && input.adults !== (prior.adults ?? null)) ||
+      (input.children_ages !== undefined &&
+        JSON.stringify(input.children_ages) !== JSON.stringify(prior.children_ages ?? [])) ||
       (input.check_in !== undefined && input.check_in !== prior.check_in) ||
       (input.check_out !== undefined && input.check_out !== prior.check_out) ||
       (input.use_date !== undefined && input.use_date !== prior.use_date)
@@ -3876,15 +3935,16 @@ async function handOffIfReservationComplete(args: {
 }): Promise<boolean> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
 
-  const { data: row } = await db
+  const { data: rawRow } = await db
     .from('reservation_requests')
-    .select('id, category, service_name, guests, check_in, check_out, use_date, hall, estimated_price, guest_confirmed_at')
+    .select('id, category, service_name, guests, adults, children_ages, check_in, check_out, use_date, hall, estimated_price, guest_confirmed_at')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', category)
     .eq('is_active_build', true)
     .maybeSingle()
-  if (!row) return false
+  if (!rawRow) return false
+  const row = await withPartySplitRequirement(db, accountId, rawRow as ReservationFieldSnapshot)
   // Already sent to the team on an earlier turn — the bot keeps chatting
   // after the close (see below), and a re-emitted confirm marker on a
   // follow-up question must not notify the team a second time.
@@ -3945,7 +4005,7 @@ async function handOffIfReservationComplete(args: {
   const { error: confirmMarkError } = await db
     .from('reservation_requests')
     .update({ guest_confirmed_at: new Date().toISOString() })
-    .eq('id', (row as { id: string }).id)
+    .eq('id', (rawRow as { id: string }).id)
   if (confirmMarkError) {
     console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
   }
@@ -4075,7 +4135,7 @@ async function sendHotelBookingNudge(args: {
   const [{ data: row }, { data: account }] = await Promise.all([
     db
       .from('reservation_requests')
-      .select('category, service_name, guests, rooms, check_in, check_out, use_date, hall, estimated_price')
+      .select('category, service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, hall, estimated_price')
       .eq('account_id', accountId)
       .eq('conversation_id', conversationId)
       .eq('category', slug)
@@ -4092,7 +4152,7 @@ async function sendHotelBookingNudge(args: {
   // the same turn also sent an item photo (test run 2026-09-24, prueba #1:
   // close + estimate + that recap/permission question = the exact
   // duplicate the owner asked to remove).
-  if (row && missingReservationFields(row as ReservationFieldSnapshot).length === 0) return
+  if (row && missingReservationFields(await withPartySplitRequirement(db, accountId, row as ReservationFieldSnapshot)).length === 0) return
 
   const snapshot: Row = (row as Row | null) ?? {
     category: slug,

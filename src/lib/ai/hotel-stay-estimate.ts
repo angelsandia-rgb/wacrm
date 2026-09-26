@@ -1,14 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
+import { DAY_LABEL_ES, OCCUPANCY_LABEL_ES, formatDateEs } from '@/lib/products/rates'
 import {
-  quoteStay,
-  occupancyForGuests,
-  DAY_LABEL_ES,
-  OCCUPANCY_LABEL_ES,
-  formatDateEs,
-  type ProductRate,
-} from '@/lib/products/rates'
-import { resolveStayProductId, estimateDeposit, guestsPerRoom, roomCount } from '@/lib/reservations/price'
+  estimateDeposit,
+  loadStayPricingInputs,
+  priceStay,
+  resolveStayProductId,
+  type StayPricing,
+} from '@/lib/reservations/price'
 
 // ============================================================
 // Pre-computed stay total for the auto-reply hotel bot.
@@ -37,13 +36,62 @@ interface ReservationRow {
   check_in: string | null
   check_out: string | null
   estimated_price: number | null
+  /** Adults / children split (migration 160). */
+  adults?: number | null
+  children_ages?: number[] | null
 }
 
-/** "2 habitaciones × 2 personas" / "2 personas" — the headcount as the
- *  guest said it. */
-function headcountEs(guests: number, rooms: number, perRoom: number): string {
-  const people = (n: number) => `${n} ${n === 1 ? 'persona' : 'personas'}`
-  return rooms > 1 ? `${rooms} habitaciones × ${people(perRoom)}` : people(guests)
+const RESERVATION_COLS =
+  'id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price, adults, children_ages'
+/** Before migration 160 is applied the two new columns don't exist —
+ *  read without them rather than losing every estimate. */
+const RESERVATION_COLS_LEGACY =
+  'id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price'
+
+async function loadPendingStay(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+): Promise<ReservationRow | null> {
+  const query = (cols: string) =>
+    db
+      .from('reservation_requests')
+      .select(cols)
+      .eq('account_id', accountId)
+      .eq('conversation_id', conversationId)
+      .eq('status', 'pending')
+      .in('category', ['habitaciones', 'paquetes'])
+      .not('check_in', 'is', null)
+      .not('check_out', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle<ReservationRow>()
+  const first = await query(RESERVATION_COLS)
+  if (!first.error) return first.data ?? null
+  const legacy = await query(RESERVATION_COLS_LEGACY)
+  return legacy.data ?? null
+}
+
+type Quoted = Extract<StayPricing, { kind: 'quoted' }>
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** "2 habitaciones × 2 personas" / "2 personas" / "4 adultos y 1 niño" —
+ *  the headcount as the guest said it. */
+function headcountEs(p: Quoted): string {
+  if (p.children) {
+    const kids = p.children.charged + p.children.free
+    const adults = plural(p.children.adults, 'adulto', 'adultos')
+    return kids > 0 ? `${adults} y ${plural(kids, 'niño', 'niños')}` : adults
+  }
+  const people = (n: number) => plural(n, 'persona', 'personas')
+  return p.rooms > 1 ? `${p.rooms} habitaciones × ${people(p.perRoom)}` : people(p.guests)
+}
+
+/** " (niños menores de 6 años sin costo)" when a free child is in the
+ *  party — the guest sees why the total is lower than the headcount. */
+function freeChildNote(p: Quoted): string {
+  return p.children && p.children.free > 0 ? ' (los menores de 6 años no pagan)' : ''
 }
 
 /**
@@ -59,51 +107,29 @@ export async function loadHotelStayEstimate(
   currency: string,
   depositPercent = 50,
 ): Promise<string | null> {
-  const { data: rr } = await db
-    .from('reservation_requests')
-    .select('id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price')
-    .eq('account_id', accountId)
-    .eq('conversation_id', conversationId)
-    .eq('status', 'pending')
-    .in('category', ['habitaciones', 'paquetes'])
-    .not('check_in', 'is', null)
-    .not('check_out', 'is', null)
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle<ReservationRow>()
+  const rr = await loadPendingStay(db, accountId, conversationId)
   if (!rr || !rr.check_in || !rr.check_out) return null
 
   const productId = await resolveStayProductId(db, accountId, rr)
   if (!productId) return null
 
-  const { data: rateRows } = await db
-    .from('product_rates')
-    .select('day_of_week, occupancy, price, date_from, date_to')
-    .eq('account_id', accountId)
-    .eq('product_id', productId)
-  const rates = (rateRows ?? []) as ProductRate[]
+  const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, productId)
   if (rates.length === 0) return null
 
   // Never invent an occupancy: it determines the tariff. Several rooms
   // price each at its per-room occupancy — only when the total splits
-  // evenly (B43); otherwise a person prices it.
-  if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return null
-  const guests = rr.guests
-  const rooms = roomCount(rr.rooms)
-  const perRoom = guestsPerRoom(guests, rr.rooms)
-  if (perRoom === null) return null
-  const occupancy = occupancyForGuests(perRoom)
-  // 5+ guests has no tier at all, by design (Angel, 2026-09-18): never
-  // auto-estimate that large a group — the bot's existing "no estimate
-  // calculated" fallback ("un compañero prepara la cotización") already
-  // does exactly what's wanted here, so this is a plain bail-out rather
-  // than building a text that would show a misleading Q0 subtotal.
-  if (occupancy === null) return null
-  const quote = quoteStay(rates, rr.check_in, rr.check_out, occupancy)
-  if (quote.nights.length === 0) return null
+  // evenly (B43); a room that prices children needs the adults/children
+  // split first; 5+ adults or more people than the room takes are never
+  // auto-estimated (Angel, 2026-09-18) — the bot's existing "no estimate
+  // calculated" fallback already does what's wanted for all of these.
+  const quote = priceStay(rates, rr, maxGuests)
+  if (quote.kind !== 'quoted' || quote.nights.length === 0) return null
+  const { rooms, occupancy } = quote
 
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
-  const occLabel = OCCUPANCY_LABEL_ES[occupancy].trim() || 'individual'
+  const occLabel = quote.children
+    ? `adultos: ${OCCUPANCY_LABEL_ES[occupancy].trim() || 'individual'}; niños 6–12 a tarifa de niño`
+    : OCCUPANCY_LABEL_ES[occupancy].trim() || 'individual'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
   const breakdown = quote.nights
     .map((n) => `${formatDateEs(n.date)} ${DAY_LABEL_ES[n.day_of_week].toLowerCase()} ${n.price == null ? '(sin tarifa)' : formatCurrency(n.price, currency)}`)
@@ -111,7 +137,7 @@ export async function loadHotelStayEstimate(
 
   const total = quote.total * rooms
   let text =
-    `${label} · ${headcountEs(guests, rooms, perRoom)} (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
+    `${label} · ${headcountEs(quote)}${freeChildNote(quote)} (${occLabel}) · ${quote.nights.length} ${nightsWord} ` +
     `(${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}): ${breakdown}${rooms > 1 ? ' por habitación' : ''}. ` +
     `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}${rooms > 1 ? ` (${rooms} habitaciones)` : ''}: ${formatCurrency(total, currency)}.`
   if (quote.missing.length > 0) {
@@ -168,6 +194,7 @@ export type StayEstimateStatus =
   | { status: 'incomplete' }
   | { status: 'too_large_group' } // 5+ guests — never auto-priced, by design
   | { status: 'uneven_rooms' } // several rooms, headcount doesn't split evenly — a person prices it
+  | { status: 'needs_person' } // a child over 12, or several rooms with children — a person prices it
   | { status: 'unpriceable'; reason: 'no_product_match' | 'no_rates' | 'bad_dates' | 'missing_night_rate' }
   | {
       status: 'priced'
@@ -203,42 +230,25 @@ export async function computeStayEstimateStatus(
    *  (test run 2026-09-24 — past dates were quoted and sent). */
   todayISO?: string,
 ): Promise<StayEstimateStatus> {
-  const { data: rr } = await db
-    .from('reservation_requests')
-    .select('id, category, service_name, product_id, guests, rooms, check_in, check_out, estimated_price')
-    .eq('account_id', accountId)
-    .eq('conversation_id', conversationId)
-    .eq('status', 'pending')
-    .in('category', ['habitaciones', 'paquetes'])
-    .not('check_in', 'is', null)
-    .not('check_out', 'is', null)
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle<ReservationRow>()
+  const rr = await loadPendingStay(db, accountId, conversationId)
   if (!rr || !rr.check_in || !rr.check_out) return { status: 'incomplete' }
-  if (!rr.guests || !Number.isInteger(rr.guests) || rr.guests < 1) return { status: 'incomplete' }
+  if (!rr.guests && !rr.adults) return { status: 'incomplete' }
   if (todayISO && rr.check_in < todayISO) return { status: 'incomplete' }
-
-  const rooms = roomCount(rr.rooms)
-  const perRoom = guestsPerRoom(rr.guests, rr.rooms)
-  if (perRoom === null) return { status: 'uneven_rooms' }
-  const occupancy = occupancyForGuests(perRoom)
-  if (occupancy === null) return { status: 'too_large_group' }
 
   const productId = await resolveStayProductId(db, accountId, rr)
   if (!productId) return { status: 'unpriceable', reason: 'no_product_match' }
 
-  const { data: rateRows } = await db
-    .from('product_rates')
-    .select('day_of_week, occupancy, price, date_from, date_to')
-    .eq('account_id', accountId)
-    .eq('product_id', productId)
-  const rates = (rateRows ?? []) as ProductRate[]
+  const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, productId)
   if (rates.length === 0) return { status: 'unpriceable', reason: 'no_rates' }
 
-  const quote = quoteStay(rates, rr.check_in, rr.check_out, occupancy)
+  const quote = priceStay(rates, rr, maxGuests)
+  if (quote.kind === 'incomplete') return { status: 'incomplete' }
+  if (quote.kind === 'uneven_rooms') return { status: 'uneven_rooms' }
+  if (quote.kind === 'too_large_group') return { status: 'too_large_group' }
+  if (quote.kind === 'needs_person') return { status: 'needs_person' }
   if (quote.nights.length === 0) return { status: 'unpriceable', reason: 'bad_dates' }
   if (quote.missing.length > 0) return { status: 'unpriceable', reason: 'missing_night_rate' }
+  const { rooms } = quote
 
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
@@ -249,7 +259,7 @@ export async function computeStayEstimateStatus(
   // message read as duplicated noise (test run 2026-09-22).
   const text =
     `El total estimado sería de ${formatCurrency(total, currency)} por ${quote.nights.length} ${nightsWord} ` +
-    `para ${headcountEs(rr.guests, rooms, perRoom)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
+    `para ${headcountEs(quote)}${freeChildNote(quote)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}. ` +
     `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.`
 
   // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
@@ -260,7 +270,7 @@ export async function computeStayEstimateStatus(
   }
 
   const nightsPart = `${quote.nights.length} ${nightsWord}`
-  const peoplePart = rooms > 1 ? headcountEs(rr.guests, rooms, perRoom) : null
+  const peoplePart = rooms > 1 || quote.children ? `${headcountEs(quote)}${freeChildNote(quote)}` : null
   const closingText =
     `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
     `${peoplePart ? ` (${peoplePart})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
