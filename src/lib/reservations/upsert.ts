@@ -431,6 +431,7 @@ const OCCUPANCY_LABEL_ES: Record<NonNullable<ReturnType<typeof occupancyForGuest
   couple: 'Pareja',
   group: 'Grupo (3)',
   quad: 'Grupo (4)',
+  quint: 'Grupo (5)',
 }
 
 /**

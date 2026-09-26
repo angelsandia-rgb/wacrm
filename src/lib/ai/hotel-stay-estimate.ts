@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
-import { DAY_LABEL_ES, OCCUPANCY_LABEL_ES, formatDateEs } from '@/lib/products/rates'
+import { DAY_LABEL_ES, OCCUPANCY_LABEL_ES, TIER_GUESTS, formatDateEs } from '@/lib/products/rates'
 import {
   estimateDeposit,
   loadStayPricingInputs,
@@ -99,7 +99,9 @@ function freeChildNote(p: Quoted): string {
  *  personas", … */
 function partialBasisBits(p: Quoted): string[] {
   const bits: string[] = []
-  if (p.partial.includes('adults_over_tier')) bits.push('calculado con la tarifa publicada de 4 personas')
+  if (p.partial.includes('adults_over_tier')) {
+    bits.push(`calculado con la tarifa publicada de ${TIER_GUESTS[p.occupancy]} personas`)
+  }
   if (p.partial.includes('older_child')) bits.push('los mayores de 12 años se calcularon como adultos')
   if (p.partial.includes('below_min_tier')) {
     bits.push(`calculado con la tarifa de ${OCCUPANCY_LABEL_ES[p.occupancy].trim() || p.occupancy}, la mínima de la habitación`)

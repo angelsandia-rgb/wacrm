@@ -5,6 +5,7 @@ import {
   quoteStay,
   quoteStayWithChildren,
   splitChildAges,
+  TIER_GUESTS,
   type ChildAgeSplit,
   type DayOfWeek,
   type Occupancy,
@@ -101,7 +102,7 @@ export type StayPricing =
     }
 
 export type PartialReason =
-  /** More adults than the highest tier (4): priced at the 4-person rate. */
+  /** More adults than the room's highest tier: priced at that tier. */
   | 'adults_over_tier'
   /** More people than the room's capacity (a baby under 6 takes a place). */
   | 'over_capacity'
@@ -110,8 +111,6 @@ export type PartialReason =
   /** Fewer adults than the room's smallest adult tier (the Junior Suite
    *  has no 1-person rate): priced at that smallest tier. */
   | 'below_min_tier'
-
-const TIER_GUESTS: Record<Occupancy, number> = { standard: 1, couple: 2, group: 3, quad: 4 }
 
 /** The fewest adults the room has an always-on or seasonal rate for. */
 function minPricedTierGuests(rates: ProductRate[]): number {
@@ -123,8 +122,19 @@ function minPricedTierGuests(rates: ProductRate[]): number {
   return min
 }
 
-/** Highest adult tier the calculator prices. */
-const MAX_TIER_GUESTS = 4
+/** Highest adult tier the calculator prices (5 = `quint`, migration 161). */
+const MAX_TIER_GUESTS = 5
+
+/** The most adults the room has a published rate for (e.g. 5 on the
+ *  Junior Suite Familiar, 4 or fewer elsewhere). */
+function maxPricedTierGuests(rates: ProductRate[]): number {
+  let max = 1
+  for (const r of rates) {
+    if (r.occupancy === 'child' || !(r.price > 0)) continue
+    max = Math.max(max, TIER_GUESTS[r.occupancy])
+  }
+  return Math.min(max, MAX_TIER_GUESTS)
+}
 
 /**
  * How a stay prices against one product's rates. A room with `child`
@@ -154,11 +164,12 @@ export function priceStay(rates: ProductRate[], stay: StayForPricing, maxGuests:
       // A 13+ "child" is priced as an adult; the hotel confirms the rate.
       if (split.older > 0) partial.push('older_child')
       const pricedAdults = stay.adults + split.older
-      if (pricedAdults > MAX_TIER_GUESTS) partial.push('adults_over_tier')
-      if (guests > (maxGuests ?? MAX_TIER_GUESTS)) partial.push('over_capacity')
+      const maxTier = maxPricedTierGuests(rates)
+      if (pricedAdults > maxTier) partial.push('adults_over_tier')
+      if (guests > (maxGuests ?? maxTier)) partial.push('over_capacity')
       const minTier = minPricedTierGuests(rates)
       if (pricedAdults < minTier) partial.push('below_min_tier')
-      const tierGuests = Math.min(Math.max(pricedAdults, minTier), MAX_TIER_GUESTS)
+      const tierGuests = Math.min(Math.max(pricedAdults, minTier), maxTier)
       const occupancy = occupancyForGuests(tierGuests) ?? 'quad'
       const quote = quoteStayWithChildren(rates, stay.check_in, stay.check_out, tierGuests, split.charged)
       return {
@@ -182,6 +193,9 @@ export function priceStay(rates: ProductRate[], stay: StayForPricing, maxGuests:
   if (perRoom === null) return { kind: 'uneven_rooms' }
   const occupancy = occupancyForGuests(perRoom)
   if (occupancy === null) return { kind: 'too_large_group' }
+  // 5 guests price only where the room publishes a 5-person rate; any
+  // other room keeps treating 5 as too large (no unpriceable alert).
+  if (occupancy === 'quint' && maxPricedTierGuests(rates) < 5) return { kind: 'too_large_group' }
   const quote = quoteStay(rates, stay.check_in, stay.check_out, occupancy)
   return {
     kind: 'quoted',

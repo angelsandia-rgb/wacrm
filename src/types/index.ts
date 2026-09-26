@@ -499,7 +499,7 @@ export interface ProductRateRow {
   day_of_week: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
   /** standard = 1 guest · couple = 2 · group = 3 · quad = 4 (migrations
    *  108, 140) · child = price per child 6–12 (migration 160). */
-  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'child';
+  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'quint' | 'child';
   price: number;
   date_from: string | null;
   date_to: string | null;

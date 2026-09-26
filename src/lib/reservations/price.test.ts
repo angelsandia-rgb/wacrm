@@ -230,3 +230,30 @@ describe('estimateStayPrice — children', () => {
     ).toBe(1160 + 175 + 1500 + 200)
   })
 })
+
+describe('priceStay — 5-person rate (migration 161)', () => {
+  // Junior Suite Familiar publishes 5 personas: Q1,500 corporativa / Q1,800 recreativa.
+  const withQuint = (): ProductRate[] => [
+    ...juniorRates(),
+    ...(['sun', 'mon', 'tue', 'wed', 'thu'] as const).map((d) => ({ day_of_week: d, occupancy: 'quint' as const, price: 1500, date_from: null, date_to: null })),
+    ...(['fri', 'sat'] as const).map((d) => ({ day_of_week: d, occupancy: 'quint' as const, price: 1800, date_from: null, date_to: null })),
+  ]
+  const STAY = { check_in: '2026-11-12', check_out: '2026-11-14' } // Thu + Fri
+
+  it('5 adults use the published 5-person rate — a normal quote', () => {
+    const p = priceStay(withQuint(), { ...STAY, guests: 5, adults: 5, children_ages: [] }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(1500 + 1800)
+    expect(p.kind === 'quoted' && p.partial).toEqual([])
+  })
+
+  it('6 adults: priced at the 5-person rate, flagged', () => {
+    const p = priceStay(withQuint(), { ...STAY, adults: 6, children_ages: [] }, 5)
+    expect(p.kind === 'quoted' && p.total).toBe(1500 + 1800)
+    expect(p.kind === 'quoted' && p.partial).toEqual(['adults_over_tier', 'over_capacity'])
+  })
+
+  it('a room without a 5-person rate still treats 5 guests as too large (no alert)', () => {
+    const couple: ProductRate[] = [{ day_of_week: 'thu', occupancy: 'couple', price: 700, date_from: null, date_to: null }]
+    expect(priceStay(couple, { ...STAY, guests: 5 }, null).kind).toBe('too_large_group')
+  })
+})

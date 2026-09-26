@@ -25,7 +25,7 @@ interface CatalogProductRow {
 interface RateRow {
   product_id: string
   day_of_week: DayOfWeek
-  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'child'
+  occupancy: 'standard' | 'couple' | 'group' | 'quad' | 'quint' | 'child'
   price: number
   date_from: string | null
   date_to: string | null
