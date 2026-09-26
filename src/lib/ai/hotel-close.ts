@@ -112,9 +112,23 @@ export function mentionedAmounts(text: string): number[] {
   return out
 }
 
-/** Some amount in `text` that is neither the real total nor its deposit. */
+/** A sentence about an add-on's own price (extra bed, child rate, spa,
+ *  activities…), not the stay's total. */
+const ADD_ON_PRICE_RE =
+  /\b(?:cama\s+(?:adicional|extra)|persona\s+adicional|ni[ñn]os?|ni[ñn]as?|menores|spa|masajes?|cuatrimotos?|bicicletas?|tours?|actividad(?:es)?|mascotas?|decoraci[oó]n|catering|men[uú])\b/i
+
+/**
+ * Some amount in `text` that is neither the real total nor its deposit.
+ * Amounts in a sentence about an add-on's own price are skipped (live
+ * test 2026-09-26: "la cama adicional… Q300 en temporada normal y Q400 en
+ * temporada alta" drew a "corrección importante sobre el monto" for 5
+ * adults whose total the bot never stated).
+ */
 export function hasConflictingAmount(text: string, total: number, deposit: number): boolean {
-  return mentionedAmounts(text).some((n) => n !== Math.round(total) && n !== Math.round(deposit))
+  return text
+    .split(/[!?\n]+|\.(?=\s|$)/)
+    .filter((sentence) => !ADD_ON_PRICE_RE.test(sentence))
+    .some((sentence) => mentionedAmounts(sentence).some((n) => n !== Math.round(total) && n !== Math.round(deposit)))
 }
 
 /** A YYYY-MM-DD date strictly before today's YYYY-MM-DD (string compare). */

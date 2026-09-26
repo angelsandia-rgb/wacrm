@@ -55,6 +55,18 @@ describe('mentionedAmounts / hasConflictingAmount', () => {
     expect(hasConflictingAmount('el total estimado sería GTQ 1,500 con anticipo de Q750', 1500, 750)).toBe(false)
     expect(hasConflictingAmount('queda anotado para el 07/11/2026', 1500, 750)).toBe(false)
   })
+
+  it('skips add-on prices (extra bed, children, spa) — they are not the stay total', () => {
+    const reply =
+      'Para 5 adultos, la habitación ya se cotiza con su tarifa de 5 personas; la cama adicional solo aplica cuando se solicita aparte y su referencia es de Q300 en temporada normal y Q400 en temporada alta.\n\nQueda registrada su solicitud.'
+    expect(hasConflictingAmount(reply, 3300, 1650)).toBe(false)
+    expect(hasConflictingAmount('Los niños de 6 a 12 años pagan Q175 por noche.', 3035, 1518)).toBe(false)
+    expect(hasConflictingAmount('El masaje cuesta Q.300 por persona.', 3035, 1518)).toBe(false)
+  })
+
+  it('still flags a room price stated next to an add-on sentence', () => {
+    expect(hasConflictingAmount('La Junior Suite sale en Q1,160 por noche. La cama adicional es Q300.', 3300, 1650)).toBe(true)
+  })
 })
 
 describe('isPastDate', () => {
