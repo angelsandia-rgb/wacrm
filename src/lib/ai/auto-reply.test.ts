@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   sendQuoteByAccountPreference: vi.fn(),
   sendMessageToConversation: vi.fn(),
   upsertReservationRequest: vi.fn(),
+  loadTrailingOutbound: vi.fn(),
+  countHumanRepliesAfter: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     claim: true as boolean,
@@ -123,6 +125,16 @@ vi.mock('@/lib/google-calendar/api', () => ({
 // exercises the real eligibility/send logic unchanged — the handful of
 // debounce-specific tests override this per-case.
 vi.mock('./debounce', () => ({ waitForQuietPeriod: h.waitForQuietPeriod }))
+// Only the DB loaders are stubbed — the classification/parsing helpers
+// keep their real implementation.
+vi.mock('./human-reply', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./human-reply')>()
+  return {
+    ...actual,
+    loadTrailingOutbound: h.loadTrailingOutbound,
+    countHumanRepliesAfter: h.countHumanRepliesAfter,
+  }
+})
 vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
 vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
@@ -634,6 +646,8 @@ beforeEach(() => {
   h.checkFreeBusy.mockReset().mockResolvedValue([])
   h.createEvent.mockReset().mockResolvedValue({ eventId: 'evt-1', htmlLink: 'https://calendar.google.com/evt-1', meetLink: 'https://meet.google.com/abc' })
   h.waitForQuietPeriod.mockReset().mockResolvedValue(true)
+  h.loadTrailingOutbound.mockReset().mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
+  h.countHumanRepliesAfter.mockReset().mockResolvedValue(0)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -696,7 +710,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.state.rpcCalls).toEqual([
       {
         name: 'claim_ai_reply_slot',
-        args: { conversation_id: 'conv-1', max_replies: 3 },
+        args: { conversation_id: 'conv-1', max_replies: 2147483647 },
       },
     ])
     expect(h.engineSendText).toHaveBeenCalledWith(
@@ -748,14 +762,14 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when a human agent is assigned', async () => {
+  it('keeps replying when a human agent is assigned — only a person switching it off stops the bot (owner, 2026-09-26)', async () => {
     h.state.conv = {
       assigned_agent_id: 'agent-9',
       ai_autoreply_disabled: false,
       ai_reply_count: 0,
     }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello!' }))
   })
 
   it('skips when auto-reply was disabled on this conversation', async () => {
@@ -768,27 +782,42 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('hands off instead of going silent when the per-conversation cap is reached', async () => {
+  it('keeps replying at the per-conversation reply budget and flags the thread to the team once', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: false,
       ai_reply_count: 3,
     }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.generateReply).not.toHaveBeenCalled()
-    expect(h.engineSendText).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
-    )
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
-    expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de')
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello!' }))
+    expect(h.state.messageInserts).toEqual([
+      expect.objectContaining({
+        content_type: 'internal_note',
+        content_text: expect.stringContaining('Sigue respondiendo'),
+      }),
+    ])
+    // Never pauses itself.
+    expect(h.state.updatePayload?.ai_autoreply_disabled).not.toBe(true)
   })
 
-  it('alerts (critical) when even the continuity fallback message itself fails to send', async () => {
+  it('does not re-flag the thread past the budget — the note fires exactly once', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: false,
-      ai_reply_count: 3,
+      ai_reply_count: 4,
     }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello!' }))
+    expect(h.state.messageInserts).toEqual([])
+  })
+
+  it('alerts (critical) when even the continuity fallback message itself fails to send', async () => {
+    vi.mocked(checkSharedRateLimit).mockResolvedValueOnce({
+      success: false,
+      remaining: 0,
+      reset: Date.now() + 60_000,
+      limit: 30,
+    })
     h.engineSendText.mockRejectedValueOnce(new Error('channel down'))
 
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
@@ -802,7 +831,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     )
     // The handoff itself must still happen — the fallback failing to
     // send is not a reason to leave the bot stuck replying forever.
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
   })
 
   it('sends a deterministic fallback when the account-wide AI limit is reached', async () => {
@@ -820,7 +849,6 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       ai_handoff_transient: true,
     })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de generación')
@@ -847,6 +875,93 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.updatePayload).toBeNull()
+  })
+})
+
+describe('dispatchInboundToAiReply — a teammate already answered (owner, 2026-09-26)', () => {
+  const HUMAN_ROW = {
+    sender_type: 'agent',
+    content_type: 'text',
+    content_text: 'Sí, tenemos parqueo gratis.',
+    created_at: '2026-09-26T10:00:30.000Z',
+  }
+  const reply = (text: string) => ({ text, handoff: false, markDealWon: false, moveToStageName: null })
+
+  beforeEach(() => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: '¿Tienen parqueo?' },
+      { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
+    ])
+    h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
+  })
+
+  it('stays quiet when the human reply already covers the question', async () => {
+    h.generateReply.mockResolvedValueOnce(reply('CUBIERTO'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(1) // only the check
+    const checkInput = h.generateReply.mock.calls[0][0].messages[0].content as string
+    expect(checkInput).toContain('¿Tienen parqueo?')
+    expect(checkInput).toContain('Sí, tenemos parqueo gratis.')
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('answers only what is still missing when the human reply left something open', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: '¿Tienen parqueo? ¿A qué hora es el check-in?' },
+      { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
+    ])
+    h.generateReply
+      .mockResolvedValueOnce(reply('PENDIENTE: la hora del check-in'))
+      .mockResolvedValueOnce(reply('El check-in es a partir de las 3:00 pm.'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    const main = h.generateReply.mock.calls[1][0]
+    expect(main.systemPrompt).toContain('UN ASESOR HUMANO YA RESPONDIÓ')
+    expect(main.systemPrompt).toContain('la hora del check-in')
+    // The transcript ends on the customer's turn again (the human's reply
+    // lives in the prompt note, not as a trailing assistant turn).
+    expect(main.messages.at(-1)).toEqual({ role: 'user', content: '¿Tienen parqueo? ¿A qué hora es el check-in?' })
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'El check-in es a partir de las 3:00 pm.' }),
+    )
+  })
+
+  it('stays quiet when the check itself fails — never talks over a teammate blind', async () => {
+    h.generateReply.mockRejectedValueOnce(new AiError('bad key', { code: 'invalid_key' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('still stands down when the bot itself already answered (duplicate guard unchanged)', async () => {
+    h.loadTrailingOutbound.mockResolvedValue({
+      lastCustomerAt: '2026-09-26T10:00:00.000Z',
+      rows: [{ ...HUMAN_ROW, sender_type: 'bot' }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('re-checks instead of sending when a teammate replies while the reply is being generated', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Tienen parqueo?' }])
+    // First pass: nobody had answered yet. Re-run: the teammate's reply is there.
+    h.loadTrailingOutbound
+      .mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
+      .mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
+    h.countHumanRepliesAfter.mockResolvedValueOnce(1)
+    h.generateReply
+      .mockResolvedValueOnce(reply('Sí, hay parqueo.')) // first pass, never sent
+      .mockResolvedValueOnce(reply('CUBIERTO')) // re-run's check
+    // The re-run reads the thread again — now ending on the human's reply.
+    h.buildConversationContext
+      .mockResolvedValueOnce([{ role: 'user', content: '¿Tienen parqueo?' }])
+      .mockResolvedValueOnce([
+        { role: 'user', content: '¿Tienen parqueo?' },
+        { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
+      ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -888,7 +1003,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.rpcCalls).toHaveLength(0)
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain(
       'La IA transfirió la conversación',
     )
@@ -934,7 +1049,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     h.sendMessageToConversation.mockRejectedValue(new Error('network blip'))
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
   })
 
   it('routes to the configured handoff agent on handoff', async () => {
@@ -942,7 +1057,6 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
     // Assigning fires the existing on_conversation_assigned trigger —
@@ -996,13 +1110,21 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updatePayload?.ai_handoff_transient).toBeNull()
   })
 
-  it('the reply-cap handoff IS marked transient', async () => {
-    h.state.conv = { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }
+  it('never pauses the bot on handoff — only a person can switch it off (owner, 2026-09-26)', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
-      ai_handoff_transient: true,
-    })
+    expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
+    expect(h.state.updatePayload?.ai_handoff_at).toEqual(expect.any(String))
+  })
+
+  it('marks the handoff notice itself as platform-sent (bot), so it is never read as a teammate reply', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ senderType: 'bot' }),
+    )
   })
 })
 
@@ -1140,7 +1262,7 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
     expect(h.state.rpcCalls).toHaveLength(0) // never claimed a reply slot
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('error temporal')
     // …and leaves the matching internal note in the thread.
     expect(h.state.messageInserts).toEqual([
@@ -1158,7 +1280,6 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
     await dispatchInboundToAiReply(ARGS)
 
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
   })
@@ -1173,7 +1294,6 @@ describe('dispatchInboundToAiReply — provider failure handling', () => {
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       ai_handoff_transient: true,
     })
   })
@@ -1241,7 +1361,7 @@ describe('dispatchInboundToAiReply — marker-only reply (no customer-facing tex
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_transient: true })
   })
 
   it('does not retry when handoff is true, even with blank text — that shape is expected', async () => {
@@ -1265,7 +1385,7 @@ describe('dispatchInboundToAiReply — marker-only reply (no customer-facing tex
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
   })
 })
 
@@ -1331,7 +1451,7 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
     // One failed attempt at the real reply, then one holding-message
     // attempt — never a second try at the same doomed config error.
     expect(h.engineSendText).toHaveBeenCalledTimes(2)
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
   })
 
   it('alerts critical, sends a holding message, and hands off once the retry also fails', async () => {
@@ -1360,7 +1480,6 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       ai_handoff_transient: true,
     })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('el envío falló')
@@ -1384,7 +1503,7 @@ describe('dispatchInboundToAiReply — reply SEND failure hands off (non-clinic)
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'critical', dedupKey: 'ai_fallback_send_failed:acct-1' }),
     )
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
   })
 })
 
@@ -1489,7 +1608,6 @@ describe('dispatchInboundToAiReply — purchase confirmation hands off to close'
       expect.objectContaining({ text: 'All set, thanks!' }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
     expect(h.moveDeal).not.toHaveBeenCalled()
@@ -2142,7 +2260,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
       sendCatalog: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
   })
 
   it('does not send the catalog when the model does not ask for it', async () => {
@@ -2163,7 +2281,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_marker_missed_send_catalog:acct-1' }),
     )
@@ -4195,7 +4313,7 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
       sendRestaurantMenu: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
   })
 
   it('does not send the menu when no menu URL is configured, even if the model asks', async () => {
@@ -4231,7 +4349,7 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1')
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_marker_missed_send_restaurant_menu:acct-1' }),
     )
@@ -4375,6 +4493,7 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
       'conv-1',
       true, // proposal.format === 'text' forces a text quote
       true, // askFollowUp — this path bypasses the AI's own text generation entirely
+      'bot', // platform-sent, never mistaken for a teammate's reply
     )
     // A successful quote must never also trip the silent-failure handoff.
     expect(h.state.updatePayload).toBeNull()
@@ -4386,7 +4505,7 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
     await dispatchInboundToAiReply(ARGS)
 
     expect(h.createQuote).not.toHaveBeenCalled()
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('Montessori Oslo Imperial')
   })
 
@@ -4398,7 +4517,7 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
     await dispatchInboundToAiReply(ARGS)
 
     expect(h.sendQuoteByAccountPreference).not.toHaveBeenCalled()
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('no se pudo crear la cotización')
   })
 
@@ -4410,7 +4529,7 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).toMatchObject({ ai_handoff_at: expect.any(String) })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('se creó pero no se pudo enviar')
   })
 
@@ -4490,7 +4609,6 @@ describe('dispatchInboundToAiReply - clinic appointment safety', () => {
       }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       ai_handoff_transient: true,
     })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('no se pudo enviar el mensaje')
@@ -4512,7 +4630,6 @@ describe('dispatchInboundToAiReply - clinic appointment safety', () => {
       expect.objectContaining({ text: 'Tu cita quedó confirmada. Te esperamos.' }),
     )
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       ai_handoff_transient: true,
     })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('base de datos rechazó')

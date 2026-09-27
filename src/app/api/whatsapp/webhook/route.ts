@@ -817,7 +817,7 @@ async function processMessage(
       .eq('auto_send_pending', true)
       .is('sent_at', null)
     for (const pending of pendingQuotes ?? []) {
-      await sendQuoteByAccountPreference(supabaseAdmin(), accountId, pending.id as string, conversation.id)
+      await sendQuoteByAccountPreference(supabaseAdmin(), accountId, pending.id as string, conversation.id, false, false, 'bot')
     }
   } catch (err) {
     console.error('[webhook] auto-send pending quote failed:', err)

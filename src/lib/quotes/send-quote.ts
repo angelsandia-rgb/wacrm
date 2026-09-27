@@ -81,6 +81,7 @@ async function sendQuoteFollowUp(
       conversationId,
       messageType: 'text',
       contentText,
+      senderType: 'bot',
     })
   } catch (err) {
     console.error('[quotes/send-quote] follow-up send failed:', err)
@@ -123,16 +124,20 @@ export async function sendQuoteByAccountPreference(
   forceMessage = false,
   /** See `sendQuoteToConversation`'s doc comment — same reasoning. */
   askFollowUp = false,
+  /** 'bot' for every automated path (AI, catalog checkout, webhook
+   *  auto-send); 'agent' only when a teammate sends it from the dashboard.
+   *  Keeps platform sends apart from human replies (src/lib/ai/human-reply.ts). */
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<{ mode: QuoteDeliveryMode; pdfUrl: string | null }> {
   const mode: QuoteDeliveryMode =
     forceMessage || (await resolveQuoteDeliveryMode(db, accountId)) === 'message'
       ? 'message'
       : 'pdf'
   if (mode === 'message') {
-    await sendQuoteAsText(db, accountId, quoteId, conversationId, askFollowUp)
+    await sendQuoteAsText(db, accountId, quoteId, conversationId, askFollowUp, senderType)
     return { mode, pdfUrl: null }
   }
-  const { pdfUrl } = await sendQuoteToConversation(db, accountId, quoteId, conversationId, askFollowUp)
+  const { pdfUrl } = await sendQuoteToConversation(db, accountId, quoteId, conversationId, askFollowUp, senderType)
   return { mode, pdfUrl }
 }
 
@@ -179,6 +184,8 @@ export async function sendQuoteToConversation(
    *  Off by default — a human agent sending a quote from the dashboard
    *  is already in the conversation and can decide for themselves. */
   askFollowUp = false,
+  /** See `sendQuoteByAccountPreference`. */
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<{ pdfUrl: string }> {
   const { data: quote, error: quoteError } = await db
     .from('quotes')
@@ -211,6 +218,7 @@ export async function sendQuoteToConversation(
       mediaUrl: pdfUrl,
       filename: `cotizacion-${quoteId}.pdf`,
       contentText: 'Cotización',
+      senderType,
     })
   } catch (err) {
     if (err instanceof SendMessageError) throw new SendQuoteError(err.message, err.status)
@@ -245,6 +253,8 @@ export async function sendQuoteAsText(
   conversationId: string,
   /** See `sendQuoteToConversation`'s doc comment — same reasoning. */
   askFollowUp = false,
+  /** See `sendQuoteByAccountPreference`. */
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<void> {
   const { data: quote, error: quoteError } = await db
     .from('quotes')
@@ -274,6 +284,7 @@ export async function sendQuoteAsText(
       conversationId,
       messageType: 'text',
       contentText: summary,
+      senderType,
     })
   } catch (err) {
     if (err instanceof SendMessageError) throw new SendQuoteError(err.message, err.status)

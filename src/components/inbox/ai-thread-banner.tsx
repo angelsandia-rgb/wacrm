@@ -52,9 +52,6 @@ interface AiThreadBannerProps {
   disabled: boolean;
   /** `conversations.ai_handoff_summary` — note the bot left on handoff. */
   handoffSummary?: string | null;
-  /** Current assignee; when a human owns the thread the bot won't run,
-   *  so the "AI active" banner is suppressed. */
-  assignedAgentId?: string | null;
   /** The acting agent — "Take over" assigns the thread to them. */
   currentUserId?: string | null;
   /** Called after a successful toggle so the parent can patch its local
@@ -70,15 +67,13 @@ interface AiThreadBannerProps {
  * Inbox banner that surfaces + controls the AI auto-reply bot per
  * conversation:
  *   - bot active here → "AI is replying automatically" + [Take over]
- *   - bot paused here → the handoff note (if any) + [Resume AI]
- * Renders nothing when the account has no auto-reply configured, or when
- * the bot is active but a human already owns the thread (nothing to do).
+ *   - bot paused here (only ever by a person) → the note (if any) + [Resume AI]
+ * Renders nothing when the account has no auto-reply configured.
  */
 export function AiThreadBanner({
   conversationId,
   disabled,
   handoffSummary,
-  assignedAgentId,
   currentUserId,
   onChange,
 }: AiThreadBannerProps) {
@@ -165,10 +160,8 @@ export function AiThreadBanner({
     );
   }
 
-  // Active, but a human already owns it → the bot won't fire; no banner.
-  if (assignedAgentId) return null;
-
-  // Active on this thread.
+  // Active on this thread — even when a teammate is assigned: the bot
+  // keeps answering until a person switches it off here (2026-09-26).
   return (
     <Banner tone="primary">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">

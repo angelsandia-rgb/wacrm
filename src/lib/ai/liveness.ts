@@ -54,15 +54,14 @@ export async function checkAiLiveness(db: SupabaseClient): Promise<AiLivenessRes
     .in('account_id', accountIds)
   const calledAccounts = new Set((usageRows ?? []).map((r) => r.account_id as string))
 
-  // AI-eligible inbound in the window: a customer message on an
-  // unassigned, non-paused conversation. (An approximation of the real
+  // AI-eligible inbound in the window: a customer message on a
+  // non-paused conversation (an assigned teammate no longer mutes the bot). (An approximation of the real
   // eligibility gates in dispatchInboundToAiReply, deliberately loose —
   // the point is "was there traffic the bot should have answered".)
   const { data: eligConvs } = await db
     .from('conversations')
     .select('id, account_id')
     .in('account_id', accountIds)
-    .is('assigned_agent_id', null)
     .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
     .gte('last_message_at', sinceIso)
   const convByAccount = new Map<string, string[]>()

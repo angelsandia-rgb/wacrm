@@ -80,6 +80,7 @@ describe('sendCatalogToConversation — digital mode (default)', () => {
       contentText: expect.stringContaining(
         `https://crm.example.com/catalog/acct-1?c=${cParam('conv-1')}`,
       ),
+      senderType: 'agent',
     })
   })
 
@@ -150,6 +151,7 @@ describe('sendCatalogToConversation — pdf mode', () => {
       messageType: 'document',
       mediaUrl: 'https://storage.example.com/catalogo.pdf',
       filename: 'Catalogo.pdf',
+      senderType: 'agent',
     })
   })
 
@@ -177,11 +179,13 @@ describe('sendCatalogToConversation — photos mode', () => {
       conversationId: 'conv-1',
       messageType: 'image',
       mediaUrl: 'https://storage.example.com/1.jpg',
+      senderType: 'agent',
     })
     expect(h.sendMessageToConversation).toHaveBeenNthCalledWith(2, db, 'acct-1', {
       conversationId: 'conv-1',
       messageType: 'image',
       mediaUrl: 'https://storage.example.com/2.jpg',
+      senderType: 'agent',
     })
   })
 
