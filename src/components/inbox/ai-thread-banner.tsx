@@ -52,6 +52,9 @@ interface AiThreadBannerProps {
   disabled: boolean;
   /** `conversations.ai_handoff_summary` — note the bot left on handoff. */
   handoffSummary?: string | null;
+  /** Current assignee; when a human owns the thread the bot won't run,
+   *  so the "AI active" banner is suppressed. */
+  assignedAgentId?: string | null;
   /** The acting agent — "Take over" assigns the thread to them. */
   currentUserId?: string | null;
   /** Called after a successful toggle so the parent can patch its local
@@ -67,18 +70,24 @@ interface AiThreadBannerProps {
  * Inbox banner that surfaces + controls the AI auto-reply bot per
  * conversation:
  *   - bot active here → "AI is replying automatically" + [Take over]
- *   - bot paused here (only ever by a person) → the note (if any) + [Resume AI]
- * Renders nothing when the account has no auto-reply configured.
+ *   - bot paused here → the handoff note (if any) + [Resume AI]
+ * Renders nothing when the account has no auto-reply configured, or when
+ * the bot is active but a human already owns the thread (nothing to do).
  */
 export function AiThreadBanner({
   conversationId,
   disabled,
   handoffSummary,
+  assignedAgentId,
   currentUserId,
   onChange,
 }: AiThreadBannerProps) {
   const t = useTranslations('Inbox.aiBanner');
-  const { accountId } = useAuth();
+  const { accountId, account } = useAuth();
+  // Hotel vertical only (owner, 2026-09-26): the bot keeps answering even
+  // with a teammate assigned — only this toggle switches it off — so the
+  // "Take over" banner must stay visible there.
+  const botIgnoresAssignment = account?.industry_vertical === 'hotel';
   const [autoReplyOn, setAutoReplyOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   // Optimistic local mirror of the pause flag so the banner flips
@@ -160,8 +169,11 @@ export function AiThreadBanner({
     );
   }
 
-  // Active on this thread — even when a teammate is assigned: the bot
-  // keeps answering until a person switches it off here (2026-09-26).
+  // Active, but a human already owns it → the bot won't fire; no banner.
+  // (Not in the hotel vertical, where the bot answers regardless.)
+  if (assignedAgentId && !botIgnoresAssignment) return null;
+
+  // Active on this thread.
   return (
     <Banner tone="primary">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">

@@ -231,7 +231,6 @@ export async function POST(
           conversation.id,
           false,
           true,
-          'bot',
         )
         deliveryMode = sent.mode
         delivered = true

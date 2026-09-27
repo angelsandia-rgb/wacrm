@@ -172,7 +172,7 @@ describe('sendQuoteToConversation', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Hay algo más en lo que le pueda ayudar?',
-      senderType: 'bot',
+      senderType: 'agent',
     })
   })
 
@@ -194,7 +194,7 @@ describe('sendQuoteToConversation', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito el número de personas. 😊',
-      senderType: 'bot',
+      senderType: 'agent',
     })
   })
 
@@ -271,7 +271,7 @@ describe('sendQuoteAsText', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Hay algo más en lo que le pueda ayudar?',
-      senderType: 'bot',
+      senderType: 'agent',
     })
   })
 })

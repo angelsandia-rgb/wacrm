@@ -89,6 +89,24 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const UNBOUNDED_REPLY_SLOTS = 2147483647
 
 /**
+ * Hotel vertical only (owner, 2026-09-26 — Villa San Ricardo): the bot
+ * never pauses itself (handoffs, an assigned teammate or the reply budget
+ * no longer mute it — only a person's "Take over" does), and it reads a
+ * teammate's reply before answering (human-reply.ts). Every other
+ * vertical keeps the long-standing behavior. A failed read → false (the
+ * long-standing behavior).
+ */
+async function botNeverSelfPauses(db: SupabaseClient, accountId: string): Promise<boolean> {
+  const { data, error } = await db
+    .from('accounts')
+    .select('industry_vertical')
+    .eq('id', accountId)
+    .maybeSingle()
+  if (error) return false
+  return (data as { industry_vertical?: string | null } | null)?.industry_vertical === 'hotel'
+}
+
+/**
  * Phrase-shaped half of the fabricated-appointment-confirmation check
  * below — kept as a first, narrower pass, but a fixed phrase list alone
  * chases the model's wording forever (real incidents, 2026-08-26: first
@@ -460,11 +478,13 @@ export async function dispatchInboundToAiReply(
 
     const conv = await loadConvEligibility(db, accountId, conversationId)
     if (!conv) return
-    // Owner's rule (2026-09-26): the bot never goes quiet on its own. An
-    // assigned teammate no longer silences it — only a person switching
-    // it off (`ai_autoreply_disabled`, the inbox "Take over" toggle)
-    // does. When a teammate already answered, the human-reply check
-    // below decides whether the bot still has anything to add.
+    // Hotel vertical (owner's rule, 2026-09-26): the bot never goes quiet
+    // on its own — an assigned teammate doesn't silence it, only a person
+    // switching it off (`ai_autoreply_disabled`, the inbox "Take over"
+    // toggle) does, and the human-reply check below decides whether it
+    // still has anything to add. Other verticals: a human owns the thread.
+    const neverSelfPause = await botNeverSelfPauses(db, accountId)
+    if (conv.assigned_agent_id && !neverSelfPause) return
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
       // (migration 115) and a grace period has passed with no human
@@ -488,18 +508,39 @@ export async function dispatchInboundToAiReply(
         return // explicit handoff / manual pause — leave it to a human.
       }
     }
-    // The per-conversation reply budget is now a "long thread" signal to
-    // the team, not a stop: the bot never goes quiet on its own (owner's
-    // rule, 2026-09-26). `ai_reply_count` still increments on every
-    // reply (claim_ai_reply_slot with an unbounded max), so this fires
-    // exactly once — on the inbound that arrives right at the budget.
-    if ((conv.ai_reply_count ?? 0) === config.autoReplyMaxPerConversation) {
-      await notifyTeamRequestReady(
+    // Hotel vertical: the per-conversation reply budget is a "long
+    // thread" signal to the team, not a stop (owner's rule, 2026-09-26).
+    // `ai_reply_count` still increments on every reply (claim with an
+    // unbounded max), so the note fires exactly once, at the budget.
+    //
+    // Other verticals — cheap early-out; the authoritative cap check is
+    // the atomic claim below (this read can race a concurrent inbound).
+    // Reaching the cap used to just go silent forever on this thread —
+    // the customer got no reply and no human was ever notified, which is
+    // exactly the "AI never handed off" symptom this fixes: treat running
+    // out of auto-reply budget the same as the bot being unable to help,
+    // and hand off instead of going quiet.
+    if (neverSelfPause) {
+      if ((conv.ai_reply_count ?? 0) === config.autoReplyMaxPerConversation) {
+        await notifyTeamRequestReady(
+          db,
+          accountId,
+          conversationId,
+          `🤖 La IA ya lleva ${config.autoReplyMaxPerConversation} respuestas automáticas en esta conversación. Sigue respondiendo, pero conviene que alguien del equipo la revise.`,
+        )
+      }
+    } else if ((conv.ai_reply_count ?? 0) >= config.autoReplyMaxPerConversation) {
+      await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
+      await handOffToHuman({
         db,
         accountId,
         conversationId,
-        `🤖 La IA ya lleva ${config.autoReplyMaxPerConversation} respuestas automáticas en esta conversación. Sigue respondiendo, pero conviene que alguien del equipo la revise.`,
-      )
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: `🤖 La IA alcanzó su límite de ${config.autoReplyMaxPerConversation} respuestas automáticas en esta conversación y se pausó — necesita seguimiento de un humano.`,
+        transient: true,
+      })
+      return
     }
 
     // Let the model see photos the customer sent (auto-reply only) when
@@ -587,14 +628,15 @@ export async function dispatchInboundToAiReply(
     // would risk the opposite, previously-fixed bug — a duplicate
     // reply to the same customer message; see debounce.ts.)
     //
-    // Exception (owner's rule, 2026-09-26): when ONLY a teammate answered
-    // the customer's latest message (no bot/platform row after it), the
-    // bot reads that human reply first — covered → stay quiet; something
-    // left unanswered → reply with just that (humanReplyNote below).
+    // Exception, hotel vertical only (owner's rule, 2026-09-26): when ONLY
+    // a teammate answered the customer's latest message (no bot/platform
+    // row after it), the bot reads that human reply first — covered → stay
+    // quiet; something left unanswered → reply with just that
+    // (humanReplyNote below).
     let humanReplyNote: string | undefined
     let lastCustomerAt: string | null = null
     let knownHumanReplies = 0
-    try {
+    if (neverSelfPause) try {
       const trailing = await loadTrailingOutbound(db, conversationId, conv.ai_context_reset_at)
       lastCustomerAt = trailing.lastCustomerAt
       const state = classifyTrailingOutbound(trailing.rows)
@@ -1206,7 +1248,7 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       )
       const { data: claimed, error: claimErr } = await db.rpc('claim_ai_reply_slot', {
         conversation_id: conversationId,
-        max_replies: UNBOUNDED_REPLY_SLOTS,
+        max_replies: neverSelfPause ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
       })
       // A real RPC error (not "lost the cap race") is a deploy problem —
       // fail OPEN so the customer still gets the safe holding message
@@ -1269,8 +1311,9 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       // it (the two-step protocol taught in `buildSystemPrompt` — the
       // model only ever emits this sentinel on that confirming turn,
       // never on the same turn as the initial request). Hand it to one:
-      // (a) the bot is NOT paused — only a person can switch it off
-      // (owner's rule, 2026-09-26) — (b) route the conversation to the
+      // (a) pause the bot here (sticky until re-enabled; in the hotel
+      // vertical it is NOT paused — only a person can switch it off,
+      // owner's rule 2026-09-26), (b) route the conversation to the
       // configured handoff agent — null leaves it in the shared queue —
       // and (c) leave a short internal note so whoever picks it up has
       // context. Assigning fires the `on_conversation_assigned` trigger,
@@ -1288,8 +1331,8 @@ ${MISSING_RECORD_MARKER_NOTE}`,
           messageType: 'text',
           // An explicit ask skips the model's own (usually "¿le conecto?") text.
           contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
-          // Platform-sent, not a teammate — the human-reply check keys on this.
-          senderType: 'bot',
+          // Platform-sent, not a teammate — the hotel human-reply check keys on this.
+          ...(neverSelfPause ? { senderType: 'bot' as const } : {}),
         })
       } catch (err) {
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
@@ -1320,7 +1363,7 @@ ${MISSING_RECORD_MARKER_NOTE}`,
       'claim_ai_reply_slot',
       {
         conversation_id: conversationId,
-        max_replies: UNBOUNDED_REPLY_SLOTS,
+        max_replies: neverSelfPause ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
       },
     )
     if (claimErr) {
@@ -1596,7 +1639,7 @@ ${PAYMENT_HANDOFF_OFFER}`
     // seeing theirs: re-run once, which reads the human reply and decides
     // whether anything is still missing (the actions above are
     // idempotent upserts, safe to repeat).
-    if (lastCustomerAt && !args.humanRaceRetry) {
+    if (neverSelfPause && lastCustomerAt && !args.humanRaceRetry) {
       const humanNow = await countHumanRepliesAfter(db, conversationId, lastCustomerAt).catch(() => knownHumanReplies)
       if (humanNow > knownHumanReplies) {
         console.warn(`[ai auto-reply] conversation ${conversationId}: a teammate replied mid-generation — re-checking before sending`)
@@ -1787,7 +1830,7 @@ ${PAYMENT_HANDOFF_OFFER}`
 
     if (sendCatalog) {
       try {
-        await sendCatalogToConversation(db, accountId, conversationId, 'bot')
+        await sendCatalogToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
       } catch (err) {
         // Never rethrow: the customer already got their text reply above,
         // this is a "bonus" delivery on top of it, and every other
@@ -1856,7 +1899,7 @@ ${PAYMENT_HANDOFF_OFFER}`
     // a hallucination or an injection attempt must not fire a send.
     if (sendRestaurantMenu && hasRestaurantMenu) {
       try {
-        await sendRestaurantMenuToConversation(db, accountId, conversationId, 'bot')
+        await sendRestaurantMenuToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
       } catch (err) {
         // Same reasoning as send_catalog above: never rethrow (it would
         // skip every autonomous action still queued after this one), and
@@ -1930,6 +1973,7 @@ ${PAYMENT_HANDOFF_OFFER}`
           db, accountId, contactId, configOwnerUserId, conversationId, proposal: quoteProposal,
           handoffAgentId: config.handoffAgentId,
           alreadyAssigned: Boolean(conv.assigned_agent_id),
+          senderType: neverSelfPause ? 'bot' : 'agent',
         })
       } catch (err) {
         console.error('[ai auto-reply] autonomous create_quote_chat failed:', err)
@@ -2423,7 +2467,8 @@ async function notifyAiKeyInvalid(db: SupabaseClient, accountId: string): Promis
 
 /**
  * Shared conversation-update for every way the bot hands a conversation
- * off to a human: does NOT pause the bot (only a person can), records
+ * off to a human: pauses the bot (sticky until re-enabled) — except in
+ * the hotel vertical, where only a person can switch it off — records
  * when it happened (drives the dashboard's "average human wait time"
  * card — migration 070), leaves an internal note — both on
  * `conversations.ai_handoff_summary` (the thread banner) and as an
@@ -2451,11 +2496,13 @@ async function handOffToHuman(args: {
 }): Promise<void> {
   const { db, accountId, conversationId, handoffAgentId, alreadyAssigned, summary, transient = false } = args
   const fullSummary = await appendActiveReservationsRecap(db, accountId, conversationId, summary)
-  // No `ai_autoreply_disabled` here any more (owner's rule, 2026-09-26):
-  // a handoff routes + notifies the team, but the bot keeps answering
-  // until a PERSON switches it off. A teammate's own replies are read
-  // by the human-reply check before the bot says anything.
+  // Hotel vertical (owner's rule, 2026-09-26): a handoff routes +
+  // notifies the team but does NOT pause the bot — only a PERSON switches
+  // it off, and a teammate's own replies are read by the human-reply
+  // check before the bot says anything. Other verticals: sticky pause.
+  const neverSelfPause = await botNeverSelfPauses(db, accountId)
   const update: Record<string, unknown> = {
+    ...(neverSelfPause ? {} : { ai_autoreply_disabled: true }),
     ai_handoff_summary: fullSummary,
     ai_handoff_at: new Date().toISOString(),
     ai_handoff_transient: transient ? true : null,
@@ -2466,9 +2513,9 @@ async function handOffToHuman(args: {
   }
   const { error: updError } = await db.from('conversations').update(update).eq('id', conversationId)
   if (updError) {
-    // The one thing this function MUST do is record the reason + route
-    // the thread. If even that failed, nobody may learn a person is
-    // needed — make it loud.
+    // The one thing this function MUST do is pause the bot (non-hotel) +
+    // record the reason. If even that failed, the bot may keep replying
+    // into a thread a human was supposed to take — make it loud.
     console.error('[ai auto-reply] handoff conversations.update failed:', updError)
     void dispatchSystemAlert({
       severity: 'warning',
@@ -4557,8 +4604,10 @@ async function autoCreateQuoteFromChat(args: {
   proposal: NonNullable<GenerateResult['quoteProposal']>
   handoffAgentId: string | null
   alreadyAssigned: boolean
+  /** 'bot' in the hotel vertical (see `botNeverSelfPauses`). */
+  senderType?: 'agent' | 'bot'
 }): Promise<void> {
-  const { db, accountId, contactId, configOwnerUserId, conversationId, proposal, handoffAgentId, alreadyAssigned } = args
+  const { db, accountId, contactId, configOwnerUserId, conversationId, proposal, handoffAgentId, alreadyAssigned, senderType = 'agent' } = args
 
   const handoff = (reason: string) =>
     handOffToHuman({
@@ -4637,7 +4686,7 @@ async function autoCreateQuoteFromChat(args: {
       conversationId,
       proposal.format === 'text',
       true,
-      'bot',
+      senderType,
     )
   } catch (err) {
     if (err instanceof SendQuoteError) {

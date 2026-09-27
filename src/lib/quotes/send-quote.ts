@@ -45,6 +45,7 @@ async function sendQuoteFollowUp(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<void> {
   try {
     const [{ data: row }, { data: account }] = await Promise.all([
@@ -81,7 +82,7 @@ async function sendQuoteFollowUp(
       conversationId,
       messageType: 'text',
       contentText,
-      senderType: 'bot',
+      senderType,
     })
   } catch (err) {
     console.error('[quotes/send-quote] follow-up send failed:', err)
@@ -124,9 +125,9 @@ export async function sendQuoteByAccountPreference(
   forceMessage = false,
   /** See `sendQuoteToConversation`'s doc comment — same reasoning. */
   askFollowUp = false,
-  /** 'bot' for every automated path (AI, catalog checkout, webhook
-   *  auto-send); 'agent' only when a teammate sends it from the dashboard.
-   *  Keeps platform sends apart from human replies (src/lib/ai/human-reply.ts). */
+  /** 'bot' when the hotel-vertical AI sends it, so the human-reply check
+   *  (src/lib/ai/human-reply.ts) never mistakes it for a teammate's reply.
+   *  Every other path keeps the long-standing 'agent'. */
   senderType: 'agent' | 'bot' = 'agent',
 ): Promise<{ mode: QuoteDeliveryMode; pdfUrl: string | null }> {
   const mode: QuoteDeliveryMode =
@@ -231,7 +232,7 @@ export async function sendQuoteToConversation(
     .eq('id', quoteId)
     .eq('account_id', accountId)
 
-  if (askFollowUp) await sendQuoteFollowUp(db, accountId, conversationId)
+  if (askFollowUp) await sendQuoteFollowUp(db, accountId, conversationId, senderType)
 
   return { pdfUrl }
 }
@@ -297,5 +298,5 @@ export async function sendQuoteAsText(
     .eq('id', quoteId)
     .eq('account_id', accountId)
 
-  if (askFollowUp) await sendQuoteFollowUp(db, accountId, conversationId)
+  if (askFollowUp) await sendQuoteFollowUp(db, accountId, conversationId, senderType)
 }
