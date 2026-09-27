@@ -46,6 +46,7 @@ describe('sendRestaurantMenuToConversation', () => {
       messageType: 'document',
       mediaUrl: 'https://storage.example.com/menu.pdf',
       filename: 'Menu.pdf',
+      senderType: 'agent',
     })
   })
 

@@ -27,6 +27,8 @@ export async function sendRestaurantMenuToConversation(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
+  /** 'bot' when the AI sends it on its own (see src/lib/ai/human-reply.ts). */
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<void> {
   const { data: account, error } = await db
     .from('accounts')
@@ -48,6 +50,7 @@ export async function sendRestaurantMenuToConversation(
       messageType: 'document',
       mediaUrl: url,
       filename: 'Menu.pdf',
+      senderType,
     })
   } catch (err) {
     if (err instanceof SendMessageError) {

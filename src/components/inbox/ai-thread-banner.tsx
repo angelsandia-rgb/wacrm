@@ -83,7 +83,11 @@ export function AiThreadBanner({
   onChange,
 }: AiThreadBannerProps) {
   const t = useTranslations('Inbox.aiBanner');
-  const { accountId } = useAuth();
+  const { accountId, account } = useAuth();
+  // Hotel vertical only (owner, 2026-09-26): the bot keeps answering even
+  // with a teammate assigned — only this toggle switches it off — so the
+  // "Take over" banner must stay visible there.
+  const botIgnoresAssignment = account?.industry_vertical === 'hotel';
   const [autoReplyOn, setAutoReplyOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   // Optimistic local mirror of the pause flag so the banner flips
@@ -166,7 +170,8 @@ export function AiThreadBanner({
   }
 
   // Active, but a human already owns it → the bot won't fire; no banner.
-  if (assignedAgentId) return null;
+  // (Not in the hotel vertical, where the bot answers regardless.)
+  if (assignedAgentId && !botIgnoresAssignment) return null;
 
   // Active on this thread.
   return (

@@ -73,6 +73,9 @@ export async function sendCatalogToConversation(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
+  /** 'bot' when the AI sends it on its own — keeps it apart from a
+   *  teammate's message (see src/lib/ai/human-reply.ts). */
+  senderType: 'agent' | 'bot' = 'agent',
 ): Promise<{ catalogUrl: string | null }> {
   const { data: account, error: accountError } = await db
     .from('accounts')
@@ -95,6 +98,7 @@ export async function sendCatalogToConversation(
         messageType: 'document',
         mediaUrl: pdfUrl,
         filename: 'Catalogo.pdf',
+        senderType,
       })
     } catch (err) {
       if (err instanceof SendMessageError) throw new SendCatalogError(err.message, err.status)
@@ -116,6 +120,7 @@ export async function sendCatalogToConversation(
           conversationId,
           messageType: 'image',
           mediaUrl: photoUrl,
+          senderType,
         })
       }
     } catch (err) {
@@ -158,6 +163,7 @@ export async function sendCatalogToConversation(
       conversationId,
       messageType: 'text',
       contentText: `Puedes ver nuestro catálogo completo aquí: ${catalogUrl}`,
+      senderType,
     })
   } catch (err) {
     if (err instanceof SendMessageError) throw new SendCatalogError(err.message, err.status)

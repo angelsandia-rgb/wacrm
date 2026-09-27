@@ -13,8 +13,9 @@
 // minutes — long past any legitimate in-flight reply (debounce + a
 // provider call + one retry is ~2 minutes) — and re-runs the normal AI
 // dispatch once per message. The dispatch re-checks every eligibility
-// rule itself (auto-reply off, assigned to a human, handed off, reply
-// cap), so a conversation the bot should stay out of stays silent.
+// rule itself (auto-reply off for the account, or switched off on the
+// thread by a person), so a conversation the bot should stay out of stays
+// silent. An assigned teammate no longer mutes the bot (2026-09-26).
 // Each message is attempted at most once (ai_action_log claim).
 // ============================================================
 
@@ -53,7 +54,7 @@ export async function recoverUnansweredInbound(
     .from('conversations')
     .select('id, account_id, contact_id, last_message_at')
     .eq('status', 'open')
-    .is('assigned_agent_id', null)
+    .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
     .gte('last_message_at', new Date(now - MAX_AGE_MS).toISOString())
     .lte('last_message_at', new Date(now - MIN_AGE_MS).toISOString())
     .order('last_message_at', { ascending: true })

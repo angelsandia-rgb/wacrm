@@ -135,6 +135,7 @@ describe('sendQuoteToConversation', () => {
       mediaUrl: 'https://existing.example.com/q.pdf',
       filename: 'cotizacion-q1.pdf',
       contentText: 'Cotización',
+      senderType: 'agent',
     })
     const sentUpdate = updates.find((u) => 'sent_at' in u.payload)
     expect(sentUpdate?.payload).toMatchObject({ status: 'sent', auto_send_pending: false })
@@ -171,6 +172,7 @@ describe('sendQuoteToConversation', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Hay algo más en lo que le pueda ayudar?',
+      senderType: 'agent',
     })
   })
 
@@ -192,6 +194,7 @@ describe('sendQuoteToConversation', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito el número de personas. 😊',
+      senderType: 'agent',
     })
   })
 
@@ -268,6 +271,7 @@ describe('sendQuoteAsText', () => {
       conversationId: 'conv-1',
       messageType: 'text',
       contentText: '¿Hay algo más en lo que le pueda ayudar?',
+      senderType: 'agent',
     })
   })
 })
