@@ -3959,6 +3959,74 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
   })
 
+  it('still closes a request completed AFTER the guest asked for a person (QA 2026-09-27, 2nd Romántico)', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 5,
+      ai_handoff_transient: null,
+      ai_handoff_at: '2026-08-31T10:00:00.000Z',
+    }
+    h.state.reservationRow = {
+      id: 'rr-2',
+      category: 'paquetes',
+      service_name: 'Paquete Romántico',
+      guests: 2,
+      check_in: '2026-10-31',
+      check_out: '2026-11-01',
+      use_date: null,
+      hall: null,
+      guest_confirmed_at: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Queda solicitada su segunda reserva del Paquete Romántico del 31/10/2026 al 01/11/2026.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [
+        { category: 'paquetes', fields: { personas: '2', entrada: '2026-10-31', salida: '2026-11-01', nueva: '1' }, confirmed: true },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
+    expect(h.state.messageInserts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content_type: 'internal_note', content_text: expect.stringContaining('completó y confirmó') }),
+      ]),
+    )
+  })
+
+  it('does not re-notify a request already sent to the team, handoff or not', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 5,
+      ai_handoff_transient: null,
+      ai_handoff_at: '2026-08-31T10:00:00.000Z',
+    }
+    h.state.reservationRow = {
+      id: 'rr-2',
+      category: 'paquetes',
+      guests: 2,
+      check_in: '2026-10-31',
+      check_out: '2026-11-01',
+      use_date: null,
+      hall: null,
+      guest_confirmed_at: '2026-08-31T11:00:00.000Z',
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto, el desayuno está incluido.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'paquetes', fields: { personas: '2' }, confirmed: true }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
+  })
+
   it('never closes a request dated in the past (test run 2026-09-24, prueba #16)', async () => {
     h.state.reservationRow = {
       id: 'rr-1',
