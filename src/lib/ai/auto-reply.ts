@@ -1998,21 +1998,26 @@ ${PAYMENT_HANDOFF_OFFER}`
         } catch (err) {
           console.error('[ai auto-reply] autonomous record_reservation failed:', err)
         }
-        if (!conv.ai_handoff_at) {
-          try {
-            const closed = await handOffIfReservationComplete({
-              db, accountId, contactId, conversationId, configOwnerUserId,
-              category: proposal.category as ReservationCategory,
-              confirmed: proposal.confirmed,
-              stillAsking: isStillAsking(textBeforePaymentOffer),
-              currency: hotelCurrency,
-              sinceISO: conv.ai_context_reset_at,
-              todayISO: dateKeyInZone(new Date(), businessTimeZone),
-            })
-            if (closed && (proposal.category === 'habitaciones' || proposal.category === 'paquetes')) closedStayThisTurn = true
-          } catch (err) {
-            console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
-          }
+        // Runs even after an earlier handoff (`ai_handoff_at` set). The old
+        // `!conv.ai_handoff_at` gate dates from when closing a request also
+        // paused the bot (#156); closing no longer pauses, and the hotel bot
+        // keeps answering after a handoff (#224) — so a request completed
+        // after the guest asked for a person got no guest_confirmed_at, no
+        // team note and no pipeline move (QA 2026-09-27, 2nd Romántico).
+        // Double-notifying is prevented inside by `guest_confirmed_at`.
+        try {
+          const closed = await handOffIfReservationComplete({
+            db, accountId, contactId, conversationId, configOwnerUserId,
+            category: proposal.category as ReservationCategory,
+            confirmed: proposal.confirmed,
+            stillAsking: isStillAsking(textBeforePaymentOffer),
+            currency: hotelCurrency,
+            sinceISO: conv.ai_context_reset_at,
+            todayISO: dateKeyInZone(new Date(), businessTimeZone),
+          })
+          if (closed && (proposal.category === 'habitaciones' || proposal.category === 'paquetes')) closedStayThisTurn = true
+        } catch (err) {
+          console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
         }
       }
 
