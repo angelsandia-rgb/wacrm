@@ -690,6 +690,12 @@ describe('dispatchInboundToAiReply — debounce', () => {
     expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1')
   })
 
+  it('gives hotel staff 30 seconds of customer silence before generating', async () => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1', 30_000)
+  })
+
   it('never calls stopTyping for a call superseded before the quiet period elapses — the winner still needs the loop running', async () => {
     h.waitForQuietPeriod.mockResolvedValue(false)
     const stopTyping = vi.fn()
@@ -3309,7 +3315,7 @@ describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" withou
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_noted_without_marker:acct-1' }),
     )
-    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: NOTED.text }))
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No pude guardar') }))
   })
 
   it('does not retry when the reply already carries the marker', async () => {
@@ -3319,6 +3325,29 @@ describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" withou
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).toHaveBeenCalledTimes(1)
+  })
+
+  it('captures an airport request even when the draft only offers to note it', async () => {
+    h.state.reservationRow = { notes: 'cumpleaños' }
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'para el 14 pueden recogernos en el aeropuerto?' }])
+    h.generateReply.mockResolvedValueOnce({ ...NOTED, text: 'Si desea, lo dejo anotado.' })
+      .mockResolvedValueOnce({ ...NOTED, text: 'Queda anotado el traslado, pendiente de confirmación.', reservationProposals: [
+        { category: 'paquetes', fields: { nota: 'traslado desde aeropuerto pendiente de confirmación' }, confirmed: false },
+      ] })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({
+      notes: 'cumpleaños; traslado desde aeropuerto pendiente de confirmación',
+    }))
+    expect(h.upsertReservationRequest.mock.invocationCallOrder[0]).toBeLessThan(h.engineSendText.mock.invocationCallOrder[0])
+  })
+
+  it('does not claim success when saving fails', async () => {
+    h.generateReply.mockResolvedValue({ ...NOTED, reservationProposals: [
+      { category: 'paquetes', fields: { nota: 'traslado desde aeropuerto pendiente' }, confirmed: false },
+    ] })
+    h.upsertReservationRequest.mockResolvedValue(null)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No pude guardar') }))
   })
 })
 

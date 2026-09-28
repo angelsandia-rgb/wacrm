@@ -434,8 +434,18 @@ export async function dispatchInboundToAiReply(
   // drop the customer's message (worst case a duplicate, far better
   // than silence).
   let isLatest: boolean
+  // Hotels allow 30s for native-app staff intervention (owner, 2026-09-28).
+  // Other verticals retain the global debounce; race retries skip either wait.
+  let neverSelfPause = false
   try {
-    isLatest = args.skipDebounce ? true : await waitForQuietPeriod(conversationId)
+    neverSelfPause = await botNeverSelfPauses(supabaseAdmin(), accountId)
+  } catch (err) {
+    console.error('[ai auto-reply] hotel debounce lookup failed:', err)
+  }
+  try {
+    isLatest = args.skipDebounce ? true : neverSelfPause
+      ? await waitForQuietPeriod(conversationId, 30_000)
+      : await waitForQuietPeriod(conversationId)
   } catch (err) {
     console.error('[ai auto-reply] debounce check failed, proceeding without it:', err)
     isLatest = true
@@ -483,7 +493,6 @@ export async function dispatchInboundToAiReply(
     // switching it off (`ai_autoreply_disabled`, the inbox "Take over"
     // toggle) does, and the human-reply check below decides whether it
     // still has anything to add. Other verticals: a human owns the thread.
-    const neverSelfPause = await botNeverSelfPauses(db, accountId)
     if (conv.assigned_agent_id && !neverSelfPause) return
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
@@ -996,11 +1005,14 @@ export async function dispatchInboundToAiReply(
     // old request and the guest never gets the new total (live test
     // 2026-09-24, gpt-5.4-mini, twice in a row after a post-close change).
     // Retry once with an explicit note; alert if it still comes back empty.
+    const airportRequest = /aeropuerto/i.test(latestUserMessage(messages)) &&
+      /recog|traslado|transport/i.test(latestUserMessage(messages))
+    const hasAirportNote = (result: GenerateResult) =>
+      (result.reservationProposals ?? []).some((p) => /aeropuerto/i.test(p.fields.nota ?? ''))
     if (
       isHotel &&
-      !generation.handoff &&
-      (generation.reservationProposals ?? []).length === 0 &&
-      claimsRequestNoted(generation.text)
+      (((generation.reservationProposals ?? []).length === 0 && claimsRequestNoted(generation.text)) ||
+        (airportRequest && !hasAirportNote(generation)))
     ) {
       console.warn(
         `[ai auto-reply] conversation ${conversationId}: reply claims the request was noted but has no record_reservation marker — retrying once`,
@@ -1010,10 +1022,11 @@ export async function dispatchInboundToAiReply(
           config,
           systemPrompt: `${systemPrompt}
 
-${MISSING_RECORD_MARKER_NOTE}`,
+${MISSING_RECORD_MARKER_NOTE}
+For airport transport, record the guest's request in nota on the relevant existing stay, pending hotel confirmation, preserving the occasion and other notes. Do not ask permission to record a request they already made. A status question or cancellation must be represented accurately, never turned into a confirmed transfer.`,
           messages,
         })
-        if ((retry.reservationProposals ?? []).length > 0 && (retry.text.trim() || retry.handoff)) {
+        if ((retry.reservationProposals ?? []).length > 0 && (!airportRequest || hasAirportNote(retry)) && (retry.text.trim() || retry.handoff)) {
           generation = retry
         } else {
           void dispatchSystemAlert({
@@ -1030,6 +1043,9 @@ ${MISSING_RECORD_MARKER_NOTE}`,
         // Keep the first reply: a failed retry must not cost the guest
         // their answer.
         console.error('[ai auto-reply] missing-record-marker retry failed:', describeError(err))
+      }
+      if ((generation.reservationProposals ?? []).length === 0 || (airportRequest && !hasAirportNote(generation))) {
+        generation = { ...generation, text: 'No pude guardar esta petición en su solicitud. Por favor, coordínela con el equipo del hotel por este chat; sigue pendiente de confirmación.' }
       }
     }
 
@@ -1648,6 +1664,21 @@ ${PAYMENT_HANDOFF_OFFER}`
       }
     }
 
+    // Persist before telling the guest anything was recorded. Failed proposals
+    // must not reach the closing/notification path below.
+    const savedReservationProposals: typeof reservationProposals = []
+    if (isHotel) {
+      for (const proposal of reservationProposals) {
+        try {
+          await autoRecordReservation({ db, accountId, contactId, conversationId, configOwnerUserId, proposal })
+          savedReservationProposals.push(proposal)
+        } catch (err) {
+          console.error('[ai auto-reply] record_reservation before send failed:', err)
+          outboundText = 'No pude guardar todos los cambios de su solicitud. Por favor, coordínelos con el equipo del hotel por este chat; siguen pendientes de confirmación.'
+        }
+      }
+    }
+
     try {
       await sendReplyWithRetry({
         accountId,
@@ -1990,14 +2021,7 @@ ${PAYMENT_HANDOFF_OFFER}`
     // `handOffIfReservationComplete`'s hand-off twice in the same turn.
     if (isHotel) {
       let closedStayThisTurn = false
-      for (const proposal of reservationProposals) {
-        try {
-          await autoRecordReservation({
-            db, accountId, contactId, conversationId, configOwnerUserId, proposal,
-          })
-        } catch (err) {
-          console.error('[ai auto-reply] autonomous record_reservation failed:', err)
-        }
+      for (const proposal of savedReservationProposals) {
         // Runs even after an earlier handoff (`ai_handoff_at` set). The old
         // `!conv.ai_handoff_at` gate dates from when closing a request also
         // paused the bot (#156); closing no longer pauses, and the hotel bot
@@ -2024,7 +2048,7 @@ ${PAYMENT_HANDOFF_OFFER}`
       // Only worth checking when this turn actually touched a
       // stay category — computeStayEstimateStatus queries regardless of
       // WHICH category's proposal fired, so one call covers the turn.
-      if (reservationProposals.some((p) => p.category === 'habitaciones' || p.category === 'paquetes')) {
+      if (savedReservationProposals.some((p) => p.category === 'habitaciones' || p.category === 'paquetes')) {
         try {
           await sendStayEstimateFollowUpIfDue({
             db, accountId, configOwnerUserId, conversationId,
@@ -3323,22 +3347,29 @@ async function autoRecordReservation(args: {
   // test run 2026-09-24, prueba #18: "me cambiaron el viaje, del 20 al
   // 21" after the close stayed only in the chat, the request kept the
   // old dates and nobody was notified.
-  const { data: before } = await db
+  const { data: before, error: beforeError } = await db
     .from('reservation_requests')
-    .select('service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, guest_confirmed_at')
+    .select('service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, guest_confirmed_at, notes')
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
     .eq('category', proposal.category)
     .eq('is_active_build', true)
     .maybeSingle()
 
+  // Adding airport details must not erase an occasion already captured.
+  if (beforeError) throw beforeError
+  const previousNotes = (before as { notes?: string | null } | null)?.notes
+  if (!startNew && input.notes && /aeropuerto/i.test(input.notes) && previousNotes &&
+    !/aeropuerto/i.test(previousNotes) && !input.notes.includes(previousNotes)) {
+    input.notes = `${previousNotes}; ${input.notes}`
+  }
   const id = await upsertReservationRequest(db, accountId, input)
-  if (!id) return
+  if (!id) throw new Error('Reservation request was not saved')
 
   const prior = before as {
     service_name: string | null; guests: number | null; rooms: number | null; check_in: string | null
     check_out: string | null; use_date: string | null; guest_confirmed_at: string | null
-    adults?: number | null; children_ages?: number[] | null
+    adults?: number | null; children_ages?: number[] | null; notes?: string | null
   } | null
   if (prior?.guest_confirmed_at && !startNew) {
     const changed =
@@ -3350,7 +3381,8 @@ async function autoRecordReservation(args: {
         JSON.stringify(input.children_ages) !== JSON.stringify(prior.children_ages ?? [])) ||
       (input.check_in !== undefined && input.check_in !== prior.check_in) ||
       (input.check_out !== undefined && input.check_out !== prior.check_out) ||
-      (input.use_date !== undefined && input.use_date !== prior.use_date)
+      (input.use_date !== undefined && input.use_date !== prior.use_date) ||
+      (input.notes !== undefined && input.notes !== prior.notes)
     if (changed) {
       await notifyTeamRequestReady(
         db,
