@@ -136,7 +136,10 @@ vi.mock('./human-reply', async (importOriginal) => {
   }
 })
 vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
-vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
+vi.mock('./context', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./context')>(),
+  buildConversationContext: h.buildConversationContext,
+}))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./catalog-context', () => ({ loadCatalogContext: h.loadCatalogContext }))
 vi.mock('./quick-reply-context', () => ({ loadQuickReplyContext: h.loadQuickReplyContext }))
@@ -694,6 +697,22 @@ describe('dispatchInboundToAiReply — debounce', () => {
     h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
     await dispatchInboundToAiReply(ARGS)
     expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1', 30_000)
+  })
+
+  it('passes the recent staff exchange to the hotel generation prompt', async () => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'El traslado del aeropuerto está pendiente.' },
+      { role: 'user', content: '¿A qué hora es el check-in?' },
+      { role: 'assistant', content: 'El check-in es a las 3 pm.' },
+      { role: 'user', content: '¿Por qué?' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    const prompt = h.generateReply.mock.calls[0][0].systemPrompt
+    const grounding = prompt.slice(prompt.indexOf('RECENT CONVERSATION GROUNDING'))
+    expect(grounding).toContain('El check-in es a las 3 pm.')
+    expect(grounding).toContain('¿Por qué?')
+    expect(grounding).not.toContain('El traslado del aeropuerto está pendiente.')
   })
 
   it('never calls stopTyping for a call superseded before the quiet period elapses — the winner still needs the loop running', async () => {
