@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { waitForQuietPeriod } from './debounce'
 import { loadAiConfig } from './config'
-import { buildConversationContext } from './context'
+import { buildConversationContext, recentExchangeNote } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
@@ -921,7 +921,7 @@ export async function dispatchInboundToAiReply(
       activeReservations,
       staleReservations,
     })
-    const systemPrompt = humanReplyNote ? `${baseSystemPrompt}\n\n${humanReplyNote}` : baseSystemPrompt
+    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', humanReplyNote].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {
