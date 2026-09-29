@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildConversationContext } from './context'
+import { buildConversationContext, recentExchangeNote } from './context'
 
 /** The columns that actually exist on `public.messages` (verified
  *  against information_schema — NOT the `realtime.messages` table that
@@ -57,6 +57,19 @@ function fakeDb(
 }
 
 describe('buildConversationContext', () => {
+  it('anchors why to the latest human reply about check-in, not the older airport topic', async () => {
+    const messages = await buildConversationContext(fakeDb([
+      { sender_type: 'customer', content_text: 'Por que?' },
+      { sender_type: 'agent', content_text: 'Check-in 3 pm, check-out 12 del mediodía' },
+      { sender_type: 'customer', content_text: 'A qué hora es el check-in?' },
+      { sender_type: 'bot', content_text: 'El traslado del aeropuerto está pendiente' },
+    ]), 'conv-1')
+    const note = recentExchangeNote(messages)
+    expect(note).toContain('Check-in 3 pm')
+    expect(note).toContain('Por que?')
+    expect(note).not.toContain('aeropuerto')
+    expect(note).toContain('Do not invent a reason')
+  })
   it('only SELECTs columns that exist on the messages table', async () => {
     // Regression guard: `media_type` was added to this select and the
     // column does not exist → every call threw PostgREST 42703 and AI
