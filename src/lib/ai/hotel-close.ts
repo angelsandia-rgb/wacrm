@@ -58,10 +58,11 @@ export function stripTrailingPermissionQuestion(text: string): string | null {
 }
 
 /** The last two sentences ask the guest for something ("por favor
- *  compárteme el NIT", "indíqueme la fecha") without a "?" — still asking,
- *  so never an implicit close (re-test 2026-09-24, prueba #36). */
+ *  compárteme el NIT", "indíqueme la fecha", "solo me hace falta saber
+ *  cuántos adultos serían") without a "?" — still asking, so never an
+ *  implicit close (re-test 2026-09-24, prueba #36; live chat 2026-09-29). */
 const IMPERATIVE_ASK_RE =
-  /\b(?:comp[aá]rt[ae]me|comp[aá]rtame|ind[ií]qu[ea]me|ind[ií]queme|d[ií]game|dime|env[ií][ea]me|conf[ií]rme(?:me)?|conf[ií]rmeme|p[aá]seme|me\s+(?:comparte|indica|confirma|dice|env[ií]a|ayuda\s+con)|por\s+favor\s+(?:me\s+)?(?:comp|ind|env|conf|dig))/i
+  /\b(?:comp[aá]rt[ae]me|comp[aá]rtame|ind[ií]qu[ea]me|ind[ií]queme|d[ií]game|dime|env[ií][ea]me|conf[ií]rme(?:me)?|conf[ií]rmeme|p[aá]seme|me\s+(?:comparte|indica|confirma|dice|env[ií]a|ayuda\s+con)|por\s+favor\s+(?:me\s+)?(?:comp|ind|env|conf|dig)|(?:me\s+)?(?:hace|har[ií]a)\s+falta\s+(?:saber|conocer|confirmar)|(?:solo\s+)?me\s+falta(?:r[ií]a)?\s+(?:saber|conocer|confirmar|el|la|los|las|su|cu[aá]nt|qu[eé])|necesito\s+(?:saber|conocer|confirmar)|me\s+gustar[ií]a\s+saber)/i
 
 /** True when the reply still asks the guest something — a "?" at the end
  *  or an imperative request in its last two sentences. */
@@ -70,6 +71,35 @@ export function isStillAsking(text: string): boolean {
   if (trimmed.endsWith('?')) return true
   const sentences = trimmed.split(/(?<=[.!?\n])\s+/).filter(Boolean)
   return IMPERATIVE_ASK_RE.test(sentences.slice(-2).join(' '))
+}
+
+/** The bot's reply asked who the guest is / who the booking is for. */
+const ASKED_NAME_RE =
+  /con\s+qui[eé]n\s+tengo\s+el\s+gusto|a\s+nombre\s+de\s+qui[eé]n|(?:su|tu)\s+nombre(?:\s+completo)?\b|c[oó]mo\s+se\s+llama|nombre\s+(?:completo\s+)?(?:para|de)\s+la\s+(?:reserva|solicitud)/i
+
+const NAME_LEAD_IN_RE = /^(?:(?:hola|buenas|buenos\s+d[ií]as|buenas\s+(?:tardes|noches))[,!.\s]+)?(?:con|soy|habla|me\s+llamo|mi\s+nombre\s+es|a\s+nombre\s+de|ser[ií]a\s+a\s+nombre\s+de|ser[ií]a|es)\s+/i
+const NAME_TRAILER_RE = /[\s,.!]+(?:por\s+favor|porfa|gracias|muchas\s+gracias)[\s.!]*$/i
+/** Words that make the answer something other than a bare name. */
+const NOT_A_NAME_RE =
+  /(?<!\p{L})(?:no|s[ií]|ok|okay|gracias|habitaci[oó]n|suite|reserv\p{L}*|fecha|personas?|adultos?|ni[ñn]os?|precio|cu[aá]nto|quiero|necesito|para|del?|al|octubre|noviembre|diciembre|enero|hola|buenas)(?!\p{L})|\d|[?@]/iu
+
+/**
+ * The guest's name, when the bot's previous reply asked for it and the
+ * guest's answer is just a name ("Mercedes Marroquí por favor", "Con
+ * Juan", "Soy Ana López"). A code-side fallback for the set_contact_name
+ * marker, which the model sometimes skips (live chat 2026-09-29) — the
+ * close now waits for the name, so a missed marker must not strand a
+ * complete request. Returns null for anything that isn't clearly a name.
+ */
+export function nameFromAnswer(previousBotReply: string, answer: string): string | null {
+  if (!ASKED_NAME_RE.test(previousBotReply)) return null
+  let name = answer.trim().split('\n')[0].trim()
+  name = name.replace(NAME_TRAILER_RE, '').replace(NAME_LEAD_IN_RE, '').replace(/[.!,\s]+$/, '').trim()
+  const words = name.split(/\s+/).filter(Boolean)
+  if (words.length === 0 || words.length > 5) return null
+  if (NOT_A_NAME_RE.test(name)) return null
+  if (!words.every((w) => /^[\p{L}][\p{L}'’.-]*$/u.test(w))) return null
+  return words.map((w) => w.charAt(0).toLocaleUpperCase('es') + w.slice(1)).join(' ')
 }
 
 /** A trailing "si gusta, (también) le comparto el menú/catálogo…" when the

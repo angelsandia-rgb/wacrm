@@ -25,6 +25,13 @@ export interface ReservationFieldSnapshot {
   hall?: string | null
   service_name?: string | null
   estimated_price?: number | null
+  /** Set only by the hand-off / close checks: the request can only reach
+   *  the team once the guest chose the room/package and gave a name
+   *  (live chat 2026-09-29: "habitación para 2, 16 y 17 de octubre" was
+   *  closed with no room and no name). `nameKnown` = the guest stated
+   *  their name in the chat. Left unset, neither is required (photo /
+   *  quote nudges). */
+  closing?: { nameKnown: boolean }
 }
 
 const DATE_RANGE_CATEGORIES = new Set<ReservationCategory>(['habitaciones', 'paquetes'])
@@ -42,6 +49,9 @@ const USE_DATE_CATEGORIES = new Set<ReservationCategory>(['spa', 'actividades', 
  */
 export function missingReservationFields(row: ReservationFieldSnapshot): string[] {
   const missing: string[] = []
+  if (row.closing && DATE_RANGE_CATEGORIES.has(row.category) && !row.service_name?.trim()) {
+    missing.push(row.category === 'paquetes' ? 'el paquete que desea' : 'la habitación que desea')
+  }
   if (DATE_RANGE_CATEGORIES.has(row.category)) {
     if (!row.check_in || !row.check_out) missing.push('las fechas de entrada y salida')
   } else if (USE_DATE_CATEGORIES.has(row.category)) {
@@ -56,6 +66,7 @@ export function missingReservationFields(row: ReservationFieldSnapshot): string[
   } else if (!row.guests) {
     missing.push('el número de personas')
   }
+  if (row.closing && !row.closing.nameKnown) missing.push('a nombre de quién sería la reservación')
   // No hall requirement: most hotels have one venue and the team picks it
   // anyway. Requiring it silently kept complete event requests from ever
   // reaching the team (test runs 2026-09-24, pruebas #9 and #25) — the

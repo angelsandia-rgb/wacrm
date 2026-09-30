@@ -30,6 +30,20 @@ describe('missingReservationFields', () => {
     ).toEqual([])
   })
 
+  it('closing a room also needs the room itself and the guest’s name (live chat 2026-09-29)', () => {
+    const base = { category: 'habitaciones' as const, check_in: '2026-10-16', check_out: '2026-10-17', guests: 2 }
+    expect(missingReservationFields({ ...base, closing: { nameKnown: false } })).toEqual([
+      'la habitación que desea',
+      'a nombre de quién sería la reservación',
+    ])
+    expect(missingReservationFields({ ...base, service_name: 'Suite Premium', closing: { nameKnown: true } })).toEqual([])
+    expect(missingReservationFields({ category: 'paquetes', check_in: '2026-10-16', check_out: '2026-10-17', guests: 2, closing: { nameKnown: true } })).toEqual(['el paquete que desea'])
+    // spa / eventos: no room to choose, only the name
+    expect(missingReservationFields({ category: 'spa', use_date: '2026-10-16', guests: 2, closing: { nameKnown: false } })).toEqual([
+      'a nombre de quién sería la reservación',
+    ])
+  })
+
   it('a room with only one side of the date range still needs dates', () => {
     expect(
       missingReservationFields({ category: 'habitaciones', check_in: '2026-10-01', guests: 2 }),

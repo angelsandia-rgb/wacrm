@@ -3,6 +3,7 @@ import {
   claimsRequestNoted,
   closeLine,
   isStillAsking,
+  nameFromAnswer,
   stripTrailingAttachmentOffer,
   hasConflictingAmount,
   isPastDate,
@@ -101,6 +102,12 @@ describe('statement-form offers, imperative asks and attachment offers (re-tests
     expect(isStillAsking('Indíqueme la fecha, por favor.')).toBe(true)
     expect(isStillAsking('¿Para cuántas personas?')).toBe(true)
     expect(isStillAsking('Queda registrada su solicitud; en breve le escribimos.')).toBe(false)
+    // live chat 2026-09-29: asked adults/children with no "?" and was closed anyway
+    expect(
+      isStillAsking('Para dejarle la solicitud lista, solo me hace falta saber cuántos adultos serían y si viajan con niños.'),
+    ).toBe(true)
+    expect(isStillAsking('Solo me falta el nombre para la reservación.')).toBe(true)
+    expect(isStillAsking('Necesito saber qué habitación prefiere.')).toBe(true)
   })
 
   it('drops "si gusta, le comparto el menú" when the menu is being sent (pruebas #3/#44)', () => {
@@ -121,5 +128,20 @@ describe('claimsRequestNoted', () => {
     for (const m of ['¿Para qué fechas la desea?', 'La Suite Premium tiene 2 camas Queen.', 'El registro de entrada es a las 15:00.']) {
       expect(claimsRequestNoted(m), m).toBe(false)
     }
+  })
+})
+
+describe('nameFromAnswer', () => {
+  const asked = 'Solo me indica por favor a nombre de quién sería la reservación.'
+  it('reads a bare name answer to the bot’s name question (live chat 2026-09-29)', () => {
+    expect(nameFromAnswer(asked, 'Mercedes Marroquí por favor')).toBe('Mercedes Marroquí')
+    expect(nameFromAnswer('¿Con quién tengo el gusto?', 'con juan')).toBe('Juan')
+    expect(nameFromAnswer('¿Con quién tengo el gusto?', 'Soy Ana López.')).toBe('Ana López')
+  })
+  it('ignores answers that are not a name, or when the name was not asked', () => {
+    expect(nameFromAnswer(asked, 'Sí gracias')).toBeNull()
+    expect(nameFromAnswer(asked, 'Habitación para 2 personas')).toBeNull()
+    expect(nameFromAnswer(asked, '¿Cuánto cuesta?')).toBeNull()
+    expect(nameFromAnswer('¿Qué fechas le interesan?', 'Mercedes Marroquí')).toBeNull()
   })
 })
