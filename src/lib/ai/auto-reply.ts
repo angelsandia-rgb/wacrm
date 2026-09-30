@@ -66,7 +66,7 @@ import {
   productForPhotoRequest,
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
-import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import {
@@ -1050,7 +1050,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -1149,6 +1149,10 @@ For airport transport, record the guest's request in nota on the relevant existi
     // name the item ("y como es?"), the item comes from the bot's previous
     // reply or the guest's recent messages (productForPhotoRequest).
     const previousBotReply = previousAssistantMessage(messages)
+    // The model sometimes answers "¡Con mucho gusto, Mercedes!" without the
+    // set_contact_name marker; the hotel close waits for the name, so read
+    // it off the guest's answer to the bot's own name question.
+    const contactName = modelContactName ?? (isHotel ? nameFromAnswer(previousBotReply, latestInbound) ?? undefined : undefined)
     const photoRequested = guestAskedForPhotos(latestInbound) || acceptsPhotoOffer(latestInbound, previousBotReply)
     if (!resolvedSendPhotoProductName && !quickReplyId && isHotel && photoRequested) {
       const asked = productForPhotoRequest(
@@ -1627,7 +1631,11 @@ For airport transport, record the guest's request in nota on the relevant existi
     if (isHotel && reservationProposals.length > 0) {
       try {
         const todayISO = dateKeyInZone(new Date(), businessTimeZone)
-        if (await anyReservationCompleteAfterTurn(db, accountId, conversationId, reservationProposals, todayISO)) {
+        if (await anyReservationCompleteAfterTurn(db, accountId, conversationId, reservationProposals, todayISO, {
+          contactId,
+          sinceISO: conv.ai_context_reset_at,
+          nameStatedThisTurn: Boolean(contactName),
+        })) {
           const stripped = stripTrailingPermissionQuestion(outboundText)
           if (stripped !== null) {
             outboundText = [stripped, closeLine(conv.ai_reply_count ?? 0)].filter(Boolean).join('\n\n')
@@ -3210,7 +3218,9 @@ async function anyReservationCompleteAfterTurn(
   conversationId: string,
   proposals: GenerateResult['reservationProposals'],
   todayISO: string,
+  guest: { contactId: string; sinceISO: string | null; nameStatedThisTurn: boolean },
 ): Promise<boolean> {
+  const nameKnown = guest.nameStatedThisTurn || (await guestNameKnown(db, accountId, guest.contactId, guest.sinceISO))
   const { data } = await db
     .from('reservation_requests')
     .select('category, service_name, guests, adults, children_ages, check_in, check_out, use_date, hall, guest_confirmed_at')
@@ -3237,6 +3247,7 @@ async function anyReservationCompleteAfterTurn(
       check_out: normalizeReservationDate(f.salida) ?? base.check_out,
       use_date: normalizeReservationDate(f.fecha) ?? base.use_date,
       hall: f.salon ?? base.hall,
+      closing: { nameKnown },
     } as ReservationFieldSnapshot)
     if (missingReservationFields(merged).length > 0) continue
     if (isPastDate(merged.check_in ?? merged.use_date ?? null, todayISO)) continue
@@ -3246,6 +3257,29 @@ async function anyReservationCompleteAfterTurn(
 }
 
 const isStayCategoryName = (category: string) => category === 'habitaciones' || category === 'paquetes'
+
+/** Did the guest state their name in this chat (a `set_contact_name` since
+ *  the last AI-memory reset)? The contact's WhatsApp profile name doesn't
+ *  count — it's often a nickname, and the team needs who the booking is
+ *  for. A lookup error counts as known, so a DB hiccup never blocks a
+ *  complete request from reaching the team. */
+async function guestNameKnown(
+  db: SupabaseClient,
+  accountId: string,
+  contactId: string,
+  sinceISO: string | null,
+): Promise<boolean> {
+  let query = db
+    .from('ai_action_log')
+    .select('id')
+    .eq('account_id', accountId)
+    .eq('action', 'set_contact_name')
+    .eq('target_id', contactId)
+  if (sinceISO) query = query.gte('created_at', sinceISO)
+  const { data, error } = await query.limit(1)
+  if (error) return true
+  return (data ?? []).length > 0
+}
 
 /** "8,10" / "8 y 10" / "3 años, 7" → [8, 10] — each child's age from a
  *  marker's `edades_ninos`. `undefined` when nothing usable is there. */
@@ -3487,7 +3521,20 @@ async function autoSetContactName(args: {
 
   const digits = (s: string) => s.replace(/\D/g, '')
   if (contact.phone && digits(clean) && digits(clean) === digits(contact.phone)) return
-  if ((contact.name ?? '').trim().toLowerCase() === clean.toLowerCase()) return
+  if ((contact.name ?? '').trim().toLowerCase() === clean.toLowerCase()) {
+    // Already the contact's name (e.g. their WhatsApp profile name) —
+    // still log it: `guestNameKnown` reads this log to know the guest
+    // actually told us who the booking is for.
+    await db.from('ai_action_log').insert({
+      account_id: accountId,
+      actor_user_id: configOwnerUserId,
+      action: 'set_contact_name',
+      target_id: contactId,
+      input: { name: clean, previous: contact.name ?? null, source: 'auto_reply_autonomous' },
+      result: { contact_id: contactId, name: clean, unchanged: true },
+    })
+    return
+  }
 
   const { error } = await db
     .from('contacts')
@@ -4107,7 +4154,10 @@ async function handOffIfReservationComplete(args: {
     .eq('is_active_build', true)
     .maybeSingle()
   if (!rawRow) return false
-  const row = await withPartySplitRequirement(db, accountId, rawRow as ReservationFieldSnapshot)
+  const row = await withPartySplitRequirement(db, accountId, {
+    ...(rawRow as ReservationFieldSnapshot),
+    closing: { nameKnown: await guestNameKnown(db, accountId, contactId, sinceISO) },
+  })
   // Already sent to the team on an earlier turn — the bot keeps chatting
   // after the close (see below), and a re-emitted confirm marker on a
   // follow-up question must not notify the team a second time.

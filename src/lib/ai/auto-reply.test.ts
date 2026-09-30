@@ -44,6 +44,8 @@ const h = vi.hoisted(() => ({
     openDealsByPipeline: null as Record<string, { id: string; pipeline_id: string; stage_id: string } | null> | null,
     stages: [] as { id: string; name: string; is_won?: boolean }[],
     aiActionLogInserts: [] as Record<string, unknown>[],
+    /** A `set_contact_name` is on file — the guest stated their name (hotel close requires it). */
+    guestNameLogged: true,
     /** Prior successful `schedule_appointment` rows the idempotency guard
      *  reads back — shared with `sendHotelBookingNudge`'s own dedup guard,
      *  since the mock's `ai_action_log` chain's `.limit()` doesn't
@@ -333,12 +335,24 @@ vi.mock('./admin-client', () => ({
         //    send_photo rows. The mock doesn't filter by `action` (the
         //    real query does), so both guards read the same
         //    `dedupeActionLogRows` bucket.
+        //  - guestNameKnown: .eq('action', 'set_contact_name')…limit(1)
+        //    → `guestNameLogged` (the only read that filters by action).
+        let action: unknown = null
         const readChain: Record<string, unknown> = {
           select: () => readChain,
-          eq: () => readChain,
+          eq: (col: string, val: unknown) => {
+            if (col === 'action') action = val
+            return readChain
+          },
+          gte: () => readChain,
           order: () => readChain,
           limit: () =>
-            Promise.resolve({ data: h.state.priorScheduleBookings ?? [], error: null }),
+            Promise.resolve({
+              data: action === 'set_contact_name'
+                ? (h.state.guestNameLogged ? [{ id: 'log-name' }] : [])
+                : h.state.priorScheduleBookings ?? [],
+              error: null,
+            }),
           then: (onFulfilled: (v: unknown) => unknown) =>
             Promise.resolve({ data: h.state.dedupeActionLogRows ?? [], error: null }).then(onFulfilled),
         }
@@ -617,6 +631,7 @@ beforeEach(() => {
   h.state.openDealsByPipeline = null
   h.state.stages = []
   h.state.aiActionLogInserts = []
+  h.state.guestNameLogged = true
   h.state.pipeline = null
   h.state.pipelines = []
   h.state.contact = { lead_temperature: null, name: 'Juan Pérez', phone: '50255551234', email: null }
@@ -3985,6 +4000,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 1,
       check_in: '2026-10-13',
       check_out: '2026-10-14',
@@ -3997,7 +4013,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       markDealWon: false,
       moveToStageName: null,
       sendCatalog: false,
-      reservationProposals: [{ category: 'habitaciones', fields: { personas: '1', entrada: '2026-10-13', salida: '2026-10-14' }, confirmed: false }],
+      reservationProposals: [{ category: 'habitaciones', fields: { servicio: 'Suite Deluxe', personas: '1', entrada: '2026-10-13', salida: '2026-10-14' }, confirmed: false }],
     })
     await dispatchInboundToAiReply(ARGS)
     const sent = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join(' ')
@@ -4005,6 +4021,31 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(sent).not.toContain('¿Desea que le deje registrada')
     expect(sent).toMatch(/equipo/)
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
+  })
+
+  it('never closes a stay with no room chosen and no guest name, even with dates and guests (live chat 2026-09-29)', async () => {
+    h.state.guestNameLogged = false
+    h.state.reservationRow = {
+      id: 'rr-3',
+      category: 'habitaciones',
+      guests: 2,
+      check_in: '2026-10-16',
+      check_out: '2026-10-17',
+      use_date: null,
+      hall: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: 'Las opciones que se ajustan para ustedes son: Suite Master Deluxe, Suite Premium y Junior Suite Familiar. Para dejarle la solicitud lista, solo me hace falta saber cuántos adultos serían y si viajan con niños.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      reservationProposals: [{ category: 'habitaciones', fields: { personas: '2', entrada: '2026-10-16', salida: '2026-10-17' }, confirmed: false }],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const sent = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join(' ')
+    expect(sent).not.toMatch(/compañero|equipo le/)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
   })
 
   it('still closes a request completed AFTER the guest asked for a person (QA 2026-09-27, 2nd Romántico)', async () => {
@@ -4056,6 +4097,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-2',
       category: 'paquetes',
+      service_name: 'Suite Deluxe',
       guests: 2,
       check_in: '2026-10-31',
       check_out: '2026-11-01',
@@ -4079,6 +4121,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 2,
       check_in: '2026-08-10',
       check_out: '2026-08-12',
@@ -4107,6 +4150,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 2,
       check_in: '2026-10-15',
       check_out: '2026-10-16',
@@ -4131,6 +4175,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 4,
       check_in: '2026-09-18',
       check_out: '2026-09-19',
@@ -4173,6 +4218,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 4,
       check_in: '2026-09-18',
       check_out: '2026-09-19',
@@ -4208,6 +4254,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     h.state.reservationRow = {
       id: 'rr-1',
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 4,
       check_in: '2026-09-18',
       check_out: '2026-09-19',
@@ -4231,6 +4278,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
   it('does not hand off (and sends no closing message) when every field is known but the guest has not explicitly confirmed', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 4,
       check_in: '2026-09-18',
       check_out: '2026-09-19',
@@ -4278,7 +4326,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
       expect.objectContaining({
         messageType: 'text',
         contentText:
-          '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito las fechas de entrada y salida y el número de personas. 😊',
+          '¿Le gustaría reservarla? Con mucho gusto se la dejo lista; solo necesito la habitación que desea, las fechas de entrada y salida y el número de personas. 😊',
       }),
     )
     expect(h.state.updatePayload).toBeNull()
@@ -4287,6 +4335,7 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
   it('two complete proposals in one turn (multi-intent) both close — the second no longer needs its own marker (test run 2026-09-24, prueba #13)', async () => {
     h.state.reservationRow = {
       category: 'habitaciones',
+      service_name: 'Suite Deluxe',
       guests: 4,
       check_in: '2026-09-18',
       check_out: '2026-09-19',
