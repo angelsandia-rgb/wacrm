@@ -25,6 +25,31 @@ function makeDb(tables: Record<string, TableConfig>) {
 }
 
 describe('loadActiveReservationsSummary', () => {
+  it('includeRetired drops the is_active_build filter and tags retired rows (handoff recap)', async () => {
+    const eqCalls: [string, unknown][] = []
+    const rows = [
+      { category: 'paquetes', service_name: 'Paquete Romántico', guests: 2, check_in: '2026-12-20', check_out: '2026-12-21', use_date: null, duration_minutes: null, hall: null, estimated_price: null, is_active_build: false },
+      { category: 'paquetes', service_name: 'Paquete Romántico', guests: 2, check_in: '2026-10-10', check_out: '2026-10-11', use_date: null, duration_minutes: null, hall: null, estimated_price: null, is_active_build: true },
+    ]
+    const chain: Record<string, unknown> = {
+      select: () => chain,
+      eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return chain },
+      order: () => chain,
+      then: (resolve: (r: unknown) => unknown) => resolve({ data: rows, error: null }),
+    }
+    const db = { from: () => chain } as unknown as SupabaseClient
+    const res = await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ', undefined, { includeRetired: true })
+    expect(eqCalls.map(([c]) => c)).not.toContain('is_active_build')
+    expect(res.current).toBe(
+      '- Paquete: Paquete Romántico · 20/12/2026 → 21/12/2026 · 2 personas · solicitud anterior, sigue pendiente\n' +
+        '- Paquete: Paquete Romántico · 10/10/2026 → 11/10/2026 · 2 personas',
+    )
+
+    eqCalls.length = 0
+    await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')
+    expect(eqCalls).toContainEqual(['is_active_build', true])
+  })
+
   it('returns null in both buckets when there are no active requests', async () => {
     const db = makeDb({ reservation_requests: { rows: [] } })
     expect(await loadActiveReservationsSummary(db, 'acct-1', 'cv-1', 'GTQ')).toEqual({

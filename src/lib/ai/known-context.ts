@@ -41,6 +41,7 @@ interface ReservationSummaryRow {
   guest_confirmed_at?: string | null
   decoration?: string | null
   notes?: string | null
+  is_active_build?: boolean | null
 }
 
 /**
@@ -71,6 +72,13 @@ interface ReservationSummaryRow {
  * pending row comes back in `current`, `stale` is always null, matching
  * this function's original behavior exactly.
  *
+ * `includeRetired` (the handoff recap only) also lists still-pending
+ * rows a newer request in the same category retired (`is_active_build
+ * = false`, `nueva=1`), tagged "solicitud anterior". The bot must not
+ * repeat them, but the team still has to confirm them — drip test
+ * 2026-09-26: an October package retired by a December one was missing
+ * from the team summary.
+ *
  * Both fields are null when there's nothing in that bucket to recap.
  */
 export async function loadActiveReservationsSummary(
@@ -79,17 +87,20 @@ export async function loadActiveReservationsSummary(
   conversationId: string,
   currency: string,
   todayISO?: string,
+  opts: { includeRetired?: boolean } = {},
 ): Promise<{ current: string | null; stale: string | null }> {
-  const { data } = await db
+  let query = db
     .from('reservation_requests')
     .select(
-      'category, service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, duration_minutes, hall, estimated_price, guest_confirmed_at, decoration, notes',
+      'category, service_name, guests, rooms, adults, children_ages, check_in, check_out, use_date, duration_minutes, hall, estimated_price, guest_confirmed_at, decoration, notes, is_active_build',
     )
     .eq('account_id', accountId)
     .eq('conversation_id', conversationId)
-    .eq('is_active_build', true)
     .eq('status', 'pending')
+  if (!opts.includeRetired) query = query.eq('is_active_build', true)
+  const { data } = await query
     .order('category', { ascending: true })
+    .order('created_at', { ascending: true })
 
   const rows = (data ?? []) as ReservationSummaryRow[]
   if (rows.length === 0) return { current: null, stale: null }
@@ -120,6 +131,7 @@ export async function loadActiveReservationsSummary(
     if (r.decoration?.trim()) bits.push(`decoración: ${r.decoration.trim()}`)
     if (r.notes?.trim()) bits.push(`nota: ${r.notes.trim()}`)
     if (r.guest_confirmed_at) bits.push('YA ENVIADA AL EQUIPO')
+    if (r.is_active_build === false) bits.push('solicitud anterior, sigue pendiente')
     return `- ${bits.join(' · ')}`
   }
 

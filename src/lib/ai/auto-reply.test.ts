@@ -931,6 +931,19 @@ describe('dispatchInboundToAiReply — handoff', () => {
     ])
   })
 
+  it('lists an earlier still-pending request a newer one retired in the handoff recap (drip test 2026-09-26)', async () => {
+    h.state.activeReservationRows = [
+      { category: 'paquetes', service_name: 'Paquete Romántico', guests: 2, check_in: '2026-10-10', check_out: '2026-10-11', use_date: null, duration_minutes: null, hall: null, estimated_price: null, is_active_build: false },
+      { category: 'paquetes', service_name: 'Paquete Romántico', guests: 2, check_in: '2026-12-20', check_out: '2026-12-21', use_date: null, duration_minutes: null, hall: null, estimated_price: null, is_active_build: true },
+    ]
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload?.ai_handoff_summary).toEqual(
+      expect.stringContaining('10/10/2026 → 11/10/2026 · 2 personas · solicitud anterior, sigue pendiente'),
+    )
+    expect(h.state.updatePayload?.ai_handoff_summary).toEqual(expect.stringContaining('20/12/2026 → 21/12/2026'))
+  })
+
   it('leaves the handoff summary untouched when there is nothing active to recap (non-hotel, or nothing captured yet)', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
     await dispatchInboundToAiReply(ARGS)
