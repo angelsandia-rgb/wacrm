@@ -4048,6 +4048,39 @@ describe('dispatchInboundToAiReply — reservation-complete handoff', () => {
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(0)
   })
 
+  it('closes when the guest states their name this turn even if no set_contact_name log row exists (live QA 2026-09-30)', async () => {
+    // Prod: the log insert failed the ai_action_log CHECK, so the reply
+    // said "le dejo solicitada" while the hand-off nudged for the name.
+    h.state.guestNameLogged = false
+    h.state.reservationRow = {
+      id: 'rr-4',
+      category: 'habitaciones',
+      service_name: 'Suite Premium',
+      guests: 2,
+      adults: 2,
+      children_ages: [],
+      check_in: '2026-10-16',
+      check_out: '2026-10-17',
+      use_date: null,
+      hall: null,
+      guest_confirmed_at: null,
+    }
+    h.generateReply.mockResolvedValue({
+      text: '¡Mucho gusto, Diego! Le dejo solicitada su Suite Premium para 2 adultos del 16/10/2026 al 17/10/2026.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      contactName: 'Diego Ramírez',
+      reservationProposals: [
+        { category: 'habitaciones', fields: { servicio: 'Suite Premium', personas: '2', adultos: '2', ninos: '0', entrada: '2026-10-16', salida: '2026-10-17' }, confirmed: true },
+      ],
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'auto_handoff_reservation_complete')).toHaveLength(1)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'reservation_nudge')).toHaveLength(0)
+  })
+
   it('still closes a request completed AFTER the guest asked for a person (QA 2026-09-27, 2nd Romántico)', async () => {
     h.state.conv = {
       assigned_agent_id: null,
