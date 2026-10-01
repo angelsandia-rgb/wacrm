@@ -2649,9 +2649,12 @@ async function appendActiveReservationsRecap(
       .maybeSingle()
     const currency = (account as { default_currency: string | null } | null)?.default_currency ?? 'USD'
     // No `todayISO` here — a human reads this recap, not the model, so
-    // every pending row is worth showing regardless of date (see
+    // every pending row is worth showing regardless of date, including
+    // earlier requests a newer one retired (see
     // `loadActiveReservationsSummary`'s doc comment).
-    const { current: recap } = await loadActiveReservationsSummary(db, accountId, conversationId, currency)
+    const { current: recap } = await loadActiveReservationsSummary(db, accountId, conversationId, currency, undefined, {
+      includeRetired: true,
+    })
     if (!recap) return summary
     return `${summary}\n\nSolicitudes activas de este cliente:\n${recap}`
   } catch (err) {
