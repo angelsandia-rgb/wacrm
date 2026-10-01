@@ -3378,7 +3378,7 @@ describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" withou
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_noted_without_marker:acct-1' }),
     )
-    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No pude guardar') }))
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Entendido.\n\nEl equipo del hotel se lo confirma por este chat en breve.' }))
   })
 
   it('does not retry when the reply already carries the marker', async () => {

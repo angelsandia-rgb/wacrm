@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   claimsRequestNoted,
+  replyWithoutNotedClaim,
   closeLine,
   isStillAsking,
   nameFromAnswer,
@@ -143,5 +144,15 @@ describe('nameFromAnswer', () => {
     expect(nameFromAnswer(asked, 'Habitación para 2 personas')).toBeNull()
     expect(nameFromAnswer(asked, '¿Cuánto cuesta?')).toBeNull()
     expect(nameFromAnswer('¿Qué fechas le interesan?', 'Mercedes Marroquí')).toBeNull()
+  })
+})
+
+describe('replyWithoutNotedClaim', () => {
+  it('keeps the answer and drops only the false "noted" claim', () => {
+    expect(replyWithoutNotedClaim('Estamos en el Km 82.5, a unas 2 horas. Sobre el transporte, le dejo anotada su consulta.\nhttps://maps.app.goo.gl/x'))
+      .toBe('Estamos en el Km 82.5, a unas 2 horas.\n\nhttps://maps.app.goo.gl/x\n\nEl equipo del hotel se lo confirma por este chat en breve.')
+  })
+  it('falls back to a team line when nothing is left', () => {
+    expect(replyWithoutNotedClaim('Queda anotada su solicitud.')).toBe('El equipo del hotel le confirma esta petición por este chat en breve.')
   })
 })

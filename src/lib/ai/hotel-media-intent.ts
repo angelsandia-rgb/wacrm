@@ -129,6 +129,19 @@ export function isLocationQuestion(message: string | null | undefined): boolean 
   return LOCATION_RE.test(normalizeForMatch(message ?? ''))
 }
 
+/**
+ * Whether the bot's reply names this catalog item. A one-word name (the
+ * "Romántico" / "Relajante" left after stripping "Paquete" / "Masaje")
+ * doubles as an ordinary adjective, so it only counts written as a proper
+ * noun — QA 2026-10-01: "más especial y romántico" sent the Paquetes
+ * banner to a guest choosing between two suites.
+ */
+export function replyNamesProduct(reply: string, name: string): boolean {
+  if (/\s/.test(name.trim())) return reply.toLowerCase().includes(name.toLowerCase())
+  const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^\\p{L}])${escaped}(?![\\p{L}])`, 'u').test(reply)
+}
+
 const MAPS_URL_RE = /https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|(?:www\.)?google\.[a-z.]+\/maps|waze\.com)\/?[^\s)"'<>]*/i
 
 /** The first Google Maps / Waze link in `text` (the account's own
@@ -171,6 +184,8 @@ export function isPaymentRequest(message: string | null | undefined): boolean {
 /** Step 1 of the two-step handoff protocol, worded for a payment ask. */
 export const PAYMENT_HANDOFF_OFFER =
   '¿Desea que le comunique con un asesor de nuestro equipo para coordinar el pago? 😊'
+export const PAYMENT_HANDOFF_OFFER_EN =
+  'Would you like me to connect you with a team member to arrange the payment? 😊'
 
 /** "¿tiene fotos?", "mándeme imágenes", "¿cómo es la suite?", "quiero
  *  verla", "pics / photos / pictures" (accents already stripped). */
@@ -275,6 +290,18 @@ const POLICY_QUESTION_RE =
  */
 export function isPolicyQuestion(message: string | null | undefined): boolean {
   return POLICY_QUESTION_RE.test(normalizeForMatch(message ?? ''))
+}
+
+const ARRIVAL_TIME_RE =
+  /\b(a que hora|llego|llegar|llegamos|llegaria|llegariamos|llegada|entrar|ingresar|check\s*(?:in|out)|early check|late check|arrive|arrival)\b/
+
+/**
+ * True when the guest asks about arrival / check-in timing. "¿Puedo
+ * entrar a la habitación a las 10?" names the category but isn't browsing
+ * it — QA 2026-10-01 sent the Habitaciones banner to it.
+ */
+export function isArrivalTimeQuestion(message: string | null | undefined): boolean {
+  return ARRIVAL_TIME_RE.test(normalizeForMatch(message ?? ''))
 }
 
 /** A sentence that mentions a photo… */
