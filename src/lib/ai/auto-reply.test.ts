@@ -1570,6 +1570,22 @@ describe('dispatchInboundToAiReply — purchase confirmation hands off to close'
     expect(h.state.aiActionLogInserts).toHaveLength(1)
   })
 
+  it('hotel: only logs flag_deal_closing — no hand-off, no assignment, no second team note (live QA 2026-09-30)', async () => {
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    h.generateReply.mockResolvedValue({
+      text: '¡Perfecto, Diego! Queda solicitada su Suite Premium.',
+      handoff: false,
+      markDealWon: true,
+      moveToStageName: null,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload ?? {}).not.toHaveProperty('assigned_agent_id')
+    expect(h.state.updatePayload ?? {}).not.toHaveProperty('ai_handoff_at')
+    expect(h.state.messageInserts.filter((m) => String(m.content_text ?? '').includes('confirmó explícitamente la compra'))).toHaveLength(0)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'flag_deal_closing')).toHaveLength(1)
+  })
+
   it('does not touch any deal when the model does not signal confirmation', async () => {
     h.state.openDeal = { id: 'deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' }
     await dispatchInboundToAiReply(ARGS) // default mock: markDealWon: false

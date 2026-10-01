@@ -1855,7 +1855,7 @@ ${PAYMENT_HANDOFF_OFFER}`
     // so either can fire alongside any of the above.
     if (markDealWon) {
       try {
-        await flagDealClosing({ db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId, alreadyAssigned: Boolean(conv.assigned_agent_id) })
+        await flagDealClosing({ db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId, alreadyAssigned: Boolean(conv.assigned_agent_id), isHotel })
       } catch (err) {
         console.error('[ai auto-reply] flagDealClosing failed:', err)
       }
@@ -2922,6 +2922,12 @@ async function loadPreSaleStages(
  * does (pauses the bot, routes to the configured teammate, leaves a
  * summary) and logs the event to `ai_action_log` so it can be counted
  * on the AI results dashboard. Never touches `deals` at all.
+ *
+ * Hotel: only the log. The reservation close (`handOffIfReservationComplete`)
+ * is the single team note, and only once the request is complete — this
+ * hand-off used to add a second, near-identical note on the same turn
+ * (live QA 2026-09-30), could fire on an incomplete request, and assigning
+ * `handoffAgentId` would silence the bot, which the hotel close avoids.
  */
 async function flagDealClosing(args: {
   db: SupabaseClient
@@ -2930,18 +2936,21 @@ async function flagDealClosing(args: {
   configOwnerUserId: string
   handoffAgentId: string | null
   alreadyAssigned: boolean
+  isHotel?: boolean
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned } = args
+  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned, isHotel = false } = args
 
-  await handOffToHuman({
-    db,
-    accountId,
-    conversationId,
-    handoffAgentId,
-    alreadyAssigned,
-    summary:
-      '🤖 El cliente confirmó explícitamente la compra. La IA transfirió esta conversación para que un compañero cierre la venta.',
-  })
+  if (!isHotel) {
+    await handOffToHuman({
+      db,
+      accountId,
+      conversationId,
+      handoffAgentId,
+      alreadyAssigned,
+      summary:
+        '🤖 El cliente confirmó explícitamente la compra. La IA transfirió esta conversación para que un compañero cierre la venta.',
+    })
+  }
 
   await db.from('ai_action_log').insert({
     account_id: accountId,
@@ -2949,7 +2958,7 @@ async function flagDealClosing(args: {
     action: 'flag_deal_closing',
     target_id: conversationId,
     input: { source: 'auto_reply_autonomous' },
-    result: { conversation_id: conversationId, handed_off_to: handoffAgentId },
+    result: { conversation_id: conversationId, handed_off_to: isHotel ? null : handoffAgentId },
   })
 }
 
