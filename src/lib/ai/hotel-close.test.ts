@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   claimsRequestNoted,
   replyWithoutNotedClaim,
+  replyWithoutCloseClaim,
   closeLine,
   isStillAsking,
   nameFromAnswer,
@@ -154,5 +155,22 @@ describe('replyWithoutNotedClaim', () => {
   })
   it('falls back to a team line when nothing is left', () => {
     expect(replyWithoutNotedClaim('Queda anotada su solicitud.')).toBe('El equipo del hotel le confirma esta petición por este chat en breve.')
+  })
+})
+
+describe('replyWithoutCloseClaim', () => {
+  it('drops the "queda solicitado" sentence the bot said before the name was known (QA 2026-10-01)', () => {
+    expect(
+      replyWithoutCloseClaim(
+        'Qué gusto acompañarle en esta celebración. Ya queda solicitado su Paquete Romántico para 2 personas, del 13/11/2026 al 14/11/2026, por su aniversario; el check-in es a partir de las 3:00 pm y el check-out a las 12:00 pm.',
+      ),
+    ).toBe('Qué gusto acompañarle en esta celebración.')
+    expect(replyWithoutCloseClaim('Wonderful choice, Mark. I’ve noted your Junior Suite.')).toBe('Wonderful choice, Mark.')
+    expect(replyWithoutCloseClaim('Queda solicitado su masaje.')).toBe('')
+  })
+
+  it('returns null when nothing claims the request is closed', () => {
+    expect(replyWithoutCloseClaim('Ya tengo su entrada para el 13/11/2026. ¿Cuál sería la fecha de salida?')).toBeNull()
+    expect(replyWithoutCloseClaim('Queda anotada su mascota.')).toBeNull()
   })
 })

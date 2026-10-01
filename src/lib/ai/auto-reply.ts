@@ -72,7 +72,7 @@ import {
   replyNamesProduct,
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
-import { claimsRequestNoted, closeLine, replyWithoutNotedClaim, hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import {
@@ -1634,17 +1634,31 @@ For airport transport, record the guest's request in nota on the relevant existi
 📍 ${mapsLink}`
     }
 
+    // Set when the reply claimed a close the request can't make yet; the
+    // hand-off below then treats it as a confirm attempt, so the guest
+    // always hears what's still missing.
+    let closeClaimStripped = false
     if (isHotel && reservationProposals.length > 0) {
       try {
         const todayISO = dateKeyInZone(new Date(), businessTimeZone)
-        if (await anyReservationCompleteAfterTurn(db, accountId, conversationId, reservationProposals, todayISO, {
+        const closeState = await anyReservationCompleteAfterTurn(db, accountId, conversationId, reservationProposals, todayISO, {
           contactId,
           sinceISO: conv.ai_context_reset_at,
           nameStatedThisTurn: Boolean(contactName),
-        })) {
+        })
+        if (closeState === 'complete') {
           const stripped = stripTrailingPermissionQuestion(outboundText)
           if (stripped !== null) {
             outboundText = [stripped, closeLine(conv.ai_reply_count ?? 0)].filter(Boolean).join('\n\n')
+          }
+        } else if (closeState === 'incomplete') {
+          // QA 2026-10-01: "Ya queda solicitado su Paquete Romántico…"
+          // before the guest's name was known, then the system's "¿a
+          // nombre de quién…?" right after it.
+          const withoutClaim = replyWithoutCloseClaim(outboundText)
+          if (withoutClaim !== null) {
+            outboundText = withoutClaim || (isEnglishText(outboundText) ? 'Happy to help. 😊' : 'Con mucho gusto le ayudo. 😊')
+            closeClaimStripped = true
           }
         }
       } catch (err) {
@@ -2052,7 +2066,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           const closed = await handOffIfReservationComplete({
             db, accountId, contactId, conversationId, configOwnerUserId,
             category: proposal.category as ReservationCategory,
-            confirmed: proposal.confirmed,
+            confirmed: proposal.confirmed || closeClaimStripped,
             stillAsking: isStillAsking(textBeforePaymentOffer),
             currency: hotelCurrency,
             sinceISO: conv.ai_context_reset_at,
@@ -3202,7 +3216,8 @@ function normalizeReservationDate(v?: string): string | undefined {
  */
 /**
  * Whether any of this turn's reservation markers leaves its request
- * complete (every required field, no date in the past) — computed BEFORE
+ * complete (every required field, no date in the past; else 'sent' when a
+ * touched request is already with the team, 'incomplete' otherwise) — computed BEFORE
  * the reply is sent, by merging the markers into the current active rows,
  * because the rows themselves are only written after the send. Drives the
  * CLOSE enforcement right before `sendReplyWithRetry`.
@@ -3243,8 +3258,9 @@ async function anyReservationCompleteAfterTurn(
   proposals: GenerateResult['reservationProposals'],
   todayISO: string,
   guest: { contactId: string; sinceISO: string | null; nameStatedThisTurn: boolean },
-): Promise<boolean> {
+): Promise<'complete' | 'sent' | 'incomplete'> {
   const nameKnown = guest.nameStatedThisTurn || (await guestNameKnown(db, accountId, guest.contactId, guest.sinceISO))
+  let sawSent = false
   const { data } = await db
     .from('reservation_requests')
     .select('category, service_name, guests, adults, children_ages, check_in, check_out, use_date, hall, guest_confirmed_at')
@@ -3255,7 +3271,10 @@ async function anyReservationCompleteAfterTurn(
   for (const p of proposals) {
     const row = rows.find((r) => r.category === p.category)
     const startNew = ['1', 'true', 'si', 'sí', 'yes', 'nueva'].includes((p.fields.nueva ?? '').trim().toLowerCase())
-    if (row?.guest_confirmed_at && !startNew) continue // already sent — not a new close
+    if (row?.guest_confirmed_at && !startNew) { // already sent — not a new close
+      sawSent = true
+      continue
+    }
     const base: ReservationFieldSnapshot = startNew || !row ? { category: p.category as ReservationCategory } : { ...row }
     const f = p.fields
     const guests = f.personas != null && Number.isFinite(Number(f.personas)) ? Math.round(Number(f.personas)) : undefined
@@ -3275,9 +3294,11 @@ async function anyReservationCompleteAfterTurn(
     } as ReservationFieldSnapshot)
     if (missingReservationFields(merged).length > 0) continue
     if (isPastDate(merged.check_in ?? merged.use_date ?? null, todayISO)) continue
-    return true
+    return 'complete'
   }
-  return false
+  // A request already with the team may be what the reply talks about —
+  // only an open, still-incomplete one makes a "queda solicitado" false.
+  return sawSent ? 'sent' : 'incomplete'
 }
 
 const isStayCategoryName = (category: string) => category === 'habitaciones' || category === 'paquetes'
