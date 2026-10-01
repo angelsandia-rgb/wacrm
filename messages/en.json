@@ -3,6 +3,17 @@
     "message": "We could not load complete hotel metrics. Try again; if the problem continues, contact your administrator.",
     "retry": "Retry"
   },
+  "ForgotPasswordPage": {
+    "title": "Reset password",
+    "desc": "Enter your email and we'll send you a reset link",
+    "emailLabel": "Email",
+    "submit": "Send reset link",
+    "sending": "Sending...",
+    "back": "Back to sign in",
+    "sentTitle": "Check your email",
+    "sentDesc": "If an account exists for {email}, we've sent it a password reset link. It can take a few minutes — check your spam folder too.",
+    "sentNoAccount": "No email after 5 minutes? That address may not have an account yet. If you were invited, open your invitation link to create it."
+  },
   "LoginPage": {
     "titleAccept": "Sign in to accept",
     "titleWelcome": "Welcome back",

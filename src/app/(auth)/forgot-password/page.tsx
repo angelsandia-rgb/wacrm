@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,13 +22,14 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const supabase = createClient();
+  const t = useTranslations("ForgotPasswordPage");
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
     });
 
@@ -50,13 +52,14 @@ export default function ForgotPasswordPage() {
               <CheckCircle className="h-6 w-6 text-primary" />
             </div>
             <CardTitle className="text-xl text-foreground">
-              Check your email
+              {t("sentTitle")}
             </CardTitle>
             <CardDescription className="text-muted-foreground">
-              We&apos;ve sent a password reset link to{" "}
-              <span className="text-foreground">{email}</span>. Please check your
-              inbox.
+              {t("sentDesc", { email })}
             </CardDescription>
+            <p className="pt-2 text-sm text-muted-foreground">
+              {t("sentNoAccount")}
+            </p>
           </CardHeader>
           <CardContent>
             <Link href="/login">
@@ -64,7 +67,7 @@ export default function ForgotPasswordPage() {
                 variant="outline"
                 className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
               >
-                Back to sign in
+                {t("back")}
               </Button>
             </Link>
           </CardContent>
@@ -80,9 +83,9 @@ export default function ForgotPasswordPage() {
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
             <MessageSquare className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle className="text-xl text-foreground">Reset password</CardTitle>
+          <CardTitle className="text-xl text-foreground">{t("title")}</CardTitle>
           <CardDescription className="text-muted-foreground">
-            Enter your email and we&apos;ll send you a reset link
+            {t("desc")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -95,7 +98,7 @@ export default function ForgotPasswordPage() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="email" className="text-muted-foreground">
-                Email
+                {t("emailLabel")}
               </Label>
               <Input
                 id="email"
@@ -113,7 +116,7 @@ export default function ForgotPasswordPage() {
               disabled={loading}
               className="mt-2 h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {loading ? "Sending..." : "Send reset link"}
+              {loading ? t("sending") : t("submit")}
             </Button>
           </form>
 
@@ -122,7 +125,7 @@ export default function ForgotPasswordPage() {
             className="mt-6 flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to sign in
+            {t("back")}
           </Link>
         </CardContent>
       </Card>
