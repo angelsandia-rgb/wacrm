@@ -2045,6 +2045,7 @@ ${PAYMENT_HANDOFF_OFFER}`
             stillAsking: isStillAsking(textBeforePaymentOffer),
             currency: hotelCurrency,
             sinceISO: conv.ai_context_reset_at,
+            nameStatedThisTurn: Boolean(contactName),
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
           })
           if (closed && (proposal.category === 'habitaciones' || proposal.category === 'paquetes')) closedStayThisTurn = true
@@ -3525,7 +3526,7 @@ async function autoSetContactName(args: {
     // Already the contact's name (e.g. their WhatsApp profile name) —
     // still log it: `guestNameKnown` reads this log to know the guest
     // actually told us who the booking is for.
-    await db.from('ai_action_log').insert({
+    const { error: logError } = await db.from('ai_action_log').insert({
       account_id: accountId,
       actor_user_id: configOwnerUserId,
       action: 'set_contact_name',
@@ -3533,6 +3534,7 @@ async function autoSetContactName(args: {
       input: { name: clean, previous: contact.name ?? null, source: 'auto_reply_autonomous' },
       result: { contact_id: contactId, name: clean, unchanged: true },
     })
+    if (logError) console.error('[ai auto-reply] set_contact_name log insert failed:', logError)
     return
   }
 
@@ -3546,7 +3548,7 @@ async function autoSetContactName(args: {
     return
   }
 
-  await db.from('ai_action_log').insert({
+  const { error: logError } = await db.from('ai_action_log').insert({
     account_id: accountId,
     actor_user_id: configOwnerUserId,
     action: 'set_contact_name',
@@ -3554,6 +3556,7 @@ async function autoSetContactName(args: {
     input: { name: clean, previous: contact.name ?? null, source: 'auto_reply_autonomous' },
     result: { contact_id: contactId, name: clean },
   })
+  if (logError) console.error('[ai auto-reply] set_contact_name log insert failed:', logError)
 
   // Rewrite the name into any Google Sheet reservation rows already
   // written for this contact (row-builder reads `contacts.name`).
@@ -4138,12 +4141,16 @@ async function handOffIfReservationComplete(args: {
   stillAsking: boolean
   currency: string
   sinceISO: string | null
+  /** The guest stated their name this turn. Same signal the reply-time
+   *  close check uses, so the reply and the hand-off can't disagree when
+   *  the `set_contact_name` log row is missing (QA 2026-09-30). */
+  nameStatedThisTurn?: boolean
   /** Business-local YYYY-MM-DD — a request dated in the past is never
    *  closed (test run 2026-09-24, prueba #16: "del 10 al 12 de
    *  septiembre", asked on the 23rd, was registered, priced and sent). */
   todayISO?: string
 }): Promise<boolean> {
-  const { db, accountId, contactId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, todayISO } = args
+  const { db, accountId, contactId, conversationId, configOwnerUserId, category, confirmed, stillAsking, currency, sinceISO, nameStatedThisTurn, todayISO } = args
 
   const { data: rawRow } = await db
     .from('reservation_requests')
@@ -4156,7 +4163,7 @@ async function handOffIfReservationComplete(args: {
   if (!rawRow) return false
   const row = await withPartySplitRequirement(db, accountId, {
     ...(rawRow as ReservationFieldSnapshot),
-    closing: { nameKnown: await guestNameKnown(db, accountId, contactId, sinceISO) },
+    closing: { nameKnown: Boolean(nameStatedThisTurn) || (await guestNameKnown(db, accountId, contactId, sinceISO)) },
   })
   // Already sent to the team on an earlier turn — the bot keeps chatting
   // after the close (see below), and a re-emitted confirm marker on a
