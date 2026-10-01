@@ -286,6 +286,22 @@ describe('upsertReservationRequest — separate bookings (startNew)', () => {
     })
   })
 
+  it('starts a new booking from only a check-in later than the old check-out', async () => {
+    // live QA 2026-10-01: "otro paquete romántico aparte para el 27" —
+    // merged with the old row this read check_in 27 > check_out 18 and failed.
+    const { admin, calls } = makeAdmin(ROOM, { count: 1 })
+    const id = await upsertReservationRequest(admin, 'acct-1', {
+      category: 'habitaciones',
+      conversation_id: 'conv-1',
+      check_in: '2026-09-27',
+      startNew: true,
+    })
+    expect(id).toBe('new-id')
+    expect(calls.updated).toContainEqual({ is_active_build: false })
+    expect(calls.inserted[0]).toMatchObject({ check_in: '2026-09-27' })
+    expect(calls.inserted[0]).not.toHaveProperty('check_out')
+  })
+
   it('does NOT split when startNew repeats with the dates it just created (idempotent re-emit)', async () => {
     // model re-emits nueva=1 with the SAME dates already on the build row
     const { admin, calls } = makeAdmin({ ...ROOM, check_in: '2026-09-09', check_out: '2026-09-10', guests: 1 }, { count: 2 })
