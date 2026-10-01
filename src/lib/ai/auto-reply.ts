@@ -8,8 +8,11 @@ import { retrieveKnowledge } from './knowledge'
 import { loadCatalogContext } from './catalog-context'
 import {
   CLOSE_AVAILABILITY_AND_TOTAL_LINE,
+  CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN,
   CLOSE_AVAILABILITY_LINE,
+  CLOSE_AVAILABILITY_LINE_EN,
   computeStayEstimateStatus,
+  isEnglishText,
   loadHotelStayEstimate,
 } from './hotel-stay-estimate'
 import { loadKnownContactFacts, loadActiveReservationsSummary } from './known-context'
@@ -54,6 +57,7 @@ import { hasFeature } from '@/lib/features/flags'
 import {
   acceptsPhotoOffer,
   guestAskedForPhotos,
+  isArrivalTimeQuestion,
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
@@ -62,11 +66,13 @@ import {
   isPolicyQuestion,
   mapsLinkIn,
   PAYMENT_HANDOFF_OFFER,
+  PAYMENT_HANDOFF_OFFER_EN,
   photoOnlyReplyText,
   productForPhotoRequest,
+  replyNamesProduct,
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
-import { claimsRequestNoted, closeLine, hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { claimsRequestNoted, closeLine, replyWithoutNotedClaim, hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import {
@@ -1045,7 +1051,7 @@ For airport transport, record the guest's request in nota on the relevant existi
         console.error('[ai auto-reply] missing-record-marker retry failed:', describeError(err))
       }
       if ((generation.reservationProposals ?? []).length === 0 || (airportRequest && !hasAirportNote(generation))) {
-        generation = { ...generation, text: 'No pude guardar esta petición en su solicitud. Por favor, coordínela con el equipo del hotel por este chat; sigue pendiente de confirmación.' }
+        generation = { ...generation, text: replyWithoutNotedClaim(generation.text) }
       }
     }
 
@@ -1508,7 +1514,7 @@ For airport transport, record the guest's request in nota on the relevant existi
       // sucia") is not a question about it — no promotional banner (test
       // run 2026-09-24, prueba #22).
       const isComplaint = COMPLAINT_RE.test(latestInbound ?? '')
-      const askedCategories = isComplaint ? [] : categorySlugsMentioned(latestInbound)
+      const askedCategories = isComplaint || isArrivalTimeQuestion(latestInbound) ? [] : categorySlugsMentioned(latestInbound)
       // "¿Dónde quedan?" wants the map, not a gallery — even when the reply
       // names a room while answering the rest of the message (B42).
       const isLocationAsk = isLocationQuestion(latestInbound)
@@ -1519,7 +1525,7 @@ For airport transport, record the guest's request in nota on the relevant existi
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
         const namedInReply =
-          !isGenericCategoryMenu && productNames.some((name) => lowerOutboundText.includes(name.toLowerCase()))
+          !isGenericCategoryMenu && productNames.some((name) => replyNamesProduct(outboundText, name))
         const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
         if (!proposal && !namedInReply && !askedInMessage) continue
         if (isLocationAsk && !askedInMessage) continue
@@ -1652,10 +1658,15 @@ For airport transport, record the guest's request in nota on the relevant existi
     // The close check below keeps looking at the text WITHOUT this offer,
     // so a complete request still closes and reaches the team.
     const textBeforePaymentOffer = outboundText
-    if (isHotel && isPaymentRequest(latestInbound) && !/conect|comunic|asesor/i.test(outboundText)) {
+    // Offered once per conversation, and in the reply's language — QA
+    // 2026-10-01: an English guest who had just said "no need" got the
+    // Spanish offer again.
+    const PERSON_OFFER_RE = /conect|connect|comunic|asesor|team member|colleague|someone from the team/i
+    const paymentOfferedBefore = messages.some((m) => m.role === 'assistant' && PERSON_OFFER_RE.test(m.content))
+    if (isHotel && isPaymentRequest(latestInbound) && !paymentOfferedBefore && !PERSON_OFFER_RE.test(outboundText)) {
       outboundText = `${outboundText.trim()}
 
-${PAYMENT_HANDOFF_OFFER}`
+${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER}`
     }
 
     // A teammate replied WHILE this reply was being generated (the model
@@ -3975,6 +3986,9 @@ async function sendStayEstimateFollowUpIfDue(args: {
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing } = args
   const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
+  const english = isEnglishText(modelText ?? '')
+  const availabilityLine = english ? CLOSE_AVAILABILITY_LINE_EN : CLOSE_AVAILABILITY_LINE
+  const availabilityAndTotalLine = english ? CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN : CLOSE_AVAILABILITY_AND_TOTAL_LINE
 
   const sendLine = (contentText: string) =>
     sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
@@ -3989,12 +4003,12 @@ async function sendStayEstimateFollowUpIfDue(args: {
       accountId,
       throttleMinutes: 360,
     })
-    if (closing) await sendLine(CLOSE_AVAILABILITY_AND_TOTAL_LINE)
+    if (closing) await sendLine(availabilityAndTotalLine)
     return
   }
   if (result.status !== 'priced') {
     // incomplete / too_large_group / uneven_rooms — no total to share yet.
-    if (closing) await sendLine(CLOSE_AVAILABILITY_AND_TOTAL_LINE)
+    if (closing) await sendLine(availabilityAndTotalLine)
     return
   }
 
@@ -4004,22 +4018,28 @@ async function sendStayEstimateFollowUpIfDue(args: {
     .eq('account_id', accountId)
     .eq('action', 'send_stay_estimate')
     .eq('target_id', result.reservationRequestId)
-  const alreadySentThisTotal = ((priorSends ?? []) as { result: unknown; created_at: string }[]).some(
-    (row) =>
-      (row.result as { total?: number } | null)?.total === result.total &&
-      (!sinceISO || row.created_at > sinceISO),
-  )
+  // Only the LATEST total counts — QA 2026-10-01: Master (Q970) → Premium
+  // (Q920) → back to Master closed without a total, so the last figure
+  // the guest saw was the Premium's.
+  const latestSend = ((priorSends ?? []) as { result: unknown; created_at: string }[])
+    .filter((row) => !sinceISO || row.created_at > sinceISO)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  const alreadySentThisTotal = (latestSend?.result as { total?: number } | null)?.total === result.total
   if (alreadySentThisTotal) {
     // The guest already has this exact total — don't repeat it.
-    if (closing) await sendLine(CLOSE_AVAILABILITY_LINE)
+    if (closing) await sendLine(availabilityLine)
     return
   }
 
-  const baseText = closing ? result.closingText : result.text
+  const baseText = english
+    ? (closing ? result.closingTextEn : result.textEn)
+    : (closing ? result.closingText : result.text)
   const conflicting =
     Boolean(modelText) && hasConflictingAmount(modelText ?? '', result.total, estimateDeposit(result.total, depositPercent))
   const contentText = conflicting
-    ? `Una corrección importante sobre el monto que le mencioné: ${baseText.charAt(0).toLowerCase()}${baseText.slice(1)}`
+    ? english
+      ? `An important correction to the amount I mentioned: ${baseText.charAt(0).toLowerCase()}${baseText.slice(1)}`
+      : `Una corrección importante sobre el monto que le mencioné: ${baseText.charAt(0).toLowerCase()}${baseText.slice(1)}`
     : baseText
 
   await sendLine(contentText)

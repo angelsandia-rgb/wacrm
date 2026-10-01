@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadHotelStayEstimate, computeStayEstimateStatus } from './hotel-stay-estimate'
+import { loadHotelStayEstimate, computeStayEstimateStatus, isEnglishText } from './hotel-stay-estimate'
 
 // 2026-09-09 is a Wednesday. Couple rate Mon–Thu = 500, Fri–Sun = 700.
 const RATES = [
@@ -266,6 +266,25 @@ describe('computeStayEstimateStatus', () => {
     }
   })
 
+  it('presents a multi-night package as an estimate the team confirms (QA 2026-10-01)', async () => {
+    const res = await computeStayEstimateStatus(
+      makeDb2({
+        reservation: { ...RESV, category: 'paquetes', check_out: '2026-09-11', service_name: 'Master Suite Deluxe' },
+        rates: RATES,
+        products: [{ id: 'p1', name: 'Master Suite Deluxe' }],
+      }),
+      'acct-1',
+      'cv-1',
+      'GTQ',
+      50,
+    )
+    expect(res.status).toBe('priced')
+    if (res.status === 'priced') {
+      expect(res.closingText).toContain('Es un estimado: el precio de la noche adicional del paquete')
+      expect(res.text).toContain('noche adicional')
+    }
+  })
+
   it('returns incomplete without dates or guests', async () => {
     expect(
       await computeStayEstimateStatus(makeDb2({ reservation: null }), 'acct-1', 'cv-1', 'GTQ'),
@@ -387,7 +406,7 @@ describe('partial estimate over capacity (owner, 2026-09-26)', () => {
     expect(res.closingText).toContain('(4 adultos y 2 niños; los menores de 6 años no pagan)')
     expect(res.closingText).not.toMatch(/\([^)]*\(/) // never nested parentheses
     expect(res.closingText).not.toMatch(/\) \(/) // never two in a row
-    expect(res.closingText).toContain('Es un estimado: Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
+    expect(res.closingText).toContain('Es un estimado: como son 6 personas, el equipo validará la disponibilidad y el precio final.')
     expect(res.text).toContain('Como son 6 personas, el equipo validará la disponibilidad y el precio final.')
   })
 })
@@ -425,5 +444,13 @@ describe('partial estimate wording — one parenthesis (owner, 2026-09-26)', () 
       '(1 adulto y 4 niños; calculado con la tarifa de pareja, la mínima de la habitación)',
     )
     expect(res.status === 'priced' && res.text).toContain('(calculado con la tarifa de pareja, la mínima de la habitación)')
+  })
+})
+
+describe('isEnglishText', () => {
+  it('tells English replies from Spanish ones', () => {
+    expect(isEnglishText("Thank you, John. I've noted 2 guests for the Suite Master Deluxe. Check-in is from 3:00 pm.")).toBe(true)
+    expect(isEnglishText('Queda solicitada su Suite Premium para 2 personas; el check-in es a partir de las 3:00 pm.')).toBe(false)
+    expect(isEnglishText('')).toBe(false)
   })
 })

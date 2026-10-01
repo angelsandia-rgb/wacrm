@@ -236,12 +236,27 @@ export type StayEstimateStatus =
        *  closing reply — no item/dates recap (the close just said them),
        *  and the one mention that a colleague confirms availability. */
       closingText: string
+      /** English versions, for a guest the bot is answering in English
+       *  (QA 2026-10-01: an English guest got the total in Spanish). */
+      textEn: string
+      closingTextEn: string
       total: number
     }
 
 /** Sent after a hotel close when there is no fresh total to share. */
 export const CLOSE_AVAILABILITY_LINE = 'Un compañero le confirmará la disponibilidad en breve. 😊'
 export const CLOSE_AVAILABILITY_AND_TOTAL_LINE = 'Un compañero le confirmará la disponibilidad y el total en breve. 😊'
+export const CLOSE_AVAILABILITY_LINE_EN = 'A team member will confirm availability shortly. 😊'
+export const CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN = 'A team member will confirm availability and the total shortly. 😊'
+
+/** Whether a reply is written in English — the model answers in the
+ *  guest's language, so the system's own lines follow it. */
+export function isEnglishText(text: string): boolean {
+  const words = text.toLowerCase().match(/[a-záéíóúñ]+/g) ?? []
+  const en = words.filter((w) => /^(the|and|you|your|is|are|for|with|we|will|to|of|please|thank|would|room|night|i|i'm|it)$/.test(w)).length
+  const es = words.filter((w) => /^(el|la|los|las|de|que|y|en|para|su|con|por|usted|le|es|una|un)$/.test(w)).length
+  return en >= 3 && en > es
+}
 
 /**
  * Same underlying data `loadHotelStayEstimate` computes, but as a
@@ -286,6 +301,14 @@ export async function computeStayEstimateStatus(
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
   const total = quote.total * rooms
   const deposit = estimateDeposit(total, depositPercent)
+  // A package priced for several nights repeats the package rate each
+  // night, but the extra night's real price (and e.g. Luna de Miel's 25%
+  // second-night discount) is the team's call — QA 2026-10-01 quoted
+  // Q3,400 right after the bot promised the discount.
+  const packageNightsNote =
+    rr.category === 'paquetes' && quote.nights.length > 1
+      ? 'El precio de la noche adicional del paquete (y su descuento, si aplica) lo confirma el equipo.'
+      : ''
   // No "a person confirms availability" disclaimer here: the model's own
   // closing already says it once, and repeating it in every system
   // message read as duplicated noise (test run 2026-09-22).
@@ -293,7 +316,8 @@ export async function computeStayEstimateStatus(
     `El total estimado sería de ${formatCurrency(total, currency)} por ${quote.nights.length} ${nightsWord} ` +
     `para ${headcountEs(quote)}${freeChildNote(quote)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}${partialBasisNote(quote)}. ` +
     `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.` +
-    (quote.partial.length > 0 ? ` ${partialTeamLine(quote)}` : '')
+    (quote.partial.length > 0 ? ` ${partialTeamLine(quote)}` : '') +
+    (packageNightsNote ? ` ${packageNightsNote}` : '')
 
   // Same best-effort seed loadHotelStayEstimate does — keeps the Sheet /
   // Panel figure correct even if this exact total was already stored
@@ -313,7 +337,22 @@ export async function computeStayEstimateStatus(
   const closingText =
     `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
     `${detailBits.length ? ` (${detailBits.join('; ')})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
-    (quote.partial.length > 0 ? `Es un estimado: ${partialTeamLine(quote)} 😊` : CLOSE_AVAILABILITY_LINE)
+    (quote.partial.length > 0
+      ? `Es un estimado: ${lowerFirst(partialTeamLine(quote))}${packageNightsNote ? ` ${packageNightsNote}` : ''} 😊`
+      : packageNightsNote
+        ? `Es un estimado: ${lowerFirst(packageNightsNote)} ${CLOSE_AVAILABILITY_LINE}`
+        : CLOSE_AVAILABILITY_LINE)
 
-  return { status: 'priced', reservationRequestId: rr.id, text, closingText, total }
+  const estimateNoteEn = quote.partial.length > 0 || packageNightsNote ? ' This is an estimate; the team will confirm the final amount.' : ''
+  const nightsEn = `${quote.nights.length} ${quote.nights.length === 1 ? 'night' : 'nights'}`
+  const textEn =
+    `The estimated total would be ${formatCurrency(total, currency)} for ${nightsEn} at ${label}, ` +
+    `${formatDateEs(rr.check_in)} to ${formatDateEs(rr.check_out)}. A deposit of ${formatCurrency(deposit, currency)} is required to hold it.${estimateNoteEn}`
+  const closingTextEn =
+    `The estimated total for your request is ${formatCurrency(total, currency)} for ${nightsEn}, ` +
+    `with a deposit of ${formatCurrency(deposit, currency)} to hold it.${estimateNoteEn} ${CLOSE_AVAILABILITY_LINE_EN}`
+
+  return { status: 'priced', reservationRequestId: rr.id, text, closingText, textEn, closingTextEn, total }
 }
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1)

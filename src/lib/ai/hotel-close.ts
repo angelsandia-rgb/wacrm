@@ -180,3 +180,21 @@ const NOTED_CLAIM_RE =
 export function claimsRequestNoted(text: string): boolean {
   return NOTED_CLAIM_RE.test(text)
 }
+
+/**
+ * The reply minus the sentences that claim the request was noted — used
+ * when nothing was actually saved. QA 2026-10-01: "¿cómo llego? ¿tienen
+ * transporte?" got its whole answer swapped for a "No pude guardar…"
+ * error because one sentence said "lo dejo anotado". Keep the answer,
+ * drop only the false claim, and say the team confirms.
+ */
+export function replyWithoutNotedClaim(text: string): string {
+  const kept = text
+    .split(/\n+/)
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((s) => !NOTED_CLAIM_RE.test(s)).join(' ').trim())
+    .filter(Boolean)
+    .join('\n\n')
+  return kept
+    ? `${kept}\n\nEl equipo del hotel se lo confirma por este chat en breve.`
+    : 'El equipo del hotel le confirma esta petición por este chat en breve.'
+}

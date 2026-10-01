@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout } from './hotel-media-intent'
+import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout, replyNamesProduct, isArrivalTimeQuestion } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -216,5 +216,24 @@ describe('stripTrailingPhotoOffer', () => {
     ).toBe('Es una opción muy agradable si buscan amplitud y descanso.')
     const plain = 'Tiene 2 camas Queen. Le comparto que el desayuno está incluido.'
     expect(stripTrailingPhotoOffer(plain)).toBe(plain)
+  })
+})
+
+describe('replyNamesProduct', () => {
+  it('matches a one-word name only as a proper noun', () => {
+    expect(replyNamesProduct('Tenemos: Romántico, San Vicente y Luna de Miel.', 'Romántico')).toBe(true)
+    expect(replyNamesProduct('Si quieren algo más especial y romántico, la Master.', 'Romántico')).toBe(false)
+    expect(replyNamesProduct('un ambiente relajante', 'Relajante')).toBe(false)
+  })
+  it('matches a multi-word name case-insensitively', () => {
+    expect(replyNamesProduct('le recomiendo la suite master deluxe', 'Suite Master Deluxe')).toBe(true)
+  })
+})
+
+describe('isArrivalTimeQuestion', () => {
+  it('spots arrival / check-in timing questions', () => {
+    expect(isArrivalTimeQuestion('si llego como a las 11:30 de la noche hay problema? y puedo entrar a la habitacion a las 10?')).toBe(true)
+    expect(isArrivalTimeQuestion('a qué hora es el check in?')).toBe(true)
+    expect(isArrivalTimeQuestion('las habitaciones cuanto cuestan?')).toBe(false)
   })
 })
