@@ -271,8 +271,6 @@ export async function upsertReservationRequest(
     }
 
     if (existing) {
-      if (reservationFieldError({ ...existing, ...patch })) return null
-
       const dateComplete = isStay
         ? Boolean(existing.check_in && existing.check_out)
         : Boolean(existing.use_date)
@@ -305,6 +303,11 @@ export async function upsertReservationRequest(
           .eq('account_id', accountId)
         if (retireError) return null
       } else {
+        // Only a patch onto the existing row is validated merged: a new
+        // booking's lone check-in (27/11) against the old row's check-out
+        // (14/11) read as a negative stay and failed the split (QA
+        // 2026-10-01). `input` alone was already checked above.
+        if (reservationFieldError({ ...existing, ...patch })) return null
         id = existing.id
         if (Object.keys(patch).length > 0) {
           const { error } = await admin

@@ -181,6 +181,27 @@ export function claimsRequestNoted(text: string): boolean {
   return NOTED_CLAIM_RE.test(text)
 }
 
+/** "Queda solicitado su Paquete…", "ya quedó reservada…", "I've booked…" —
+ *  the reply tells the guest the request is DONE (sent to the team). */
+const CLOSE_CLAIM_RE =
+  /\b(?:queda(?:n)?|qued[oó]|ya\s+(?:qued[oó]|est[aá]n?))\s+(?:solicitad|reservad|confirmad)[ao]s?\b|\bI(?:['’]ve| have)\s+(?:noted|booked|requested|registered)\b/i
+
+/**
+ * The reply minus the sentences that claim the request is closed, or
+ * `null` when it makes no such claim. For a request still missing a field
+ * (QA 2026-10-01: "Ya queda solicitado su Paquete Romántico…" with no
+ * name yet, followed by the system's "¿a nombre de quién…?"). May return
+ * '' when the claim was the whole reply.
+ */
+export function replyWithoutCloseClaim(text: string): string | null {
+  if (!CLOSE_CLAIM_RE.test(text)) return null
+  return text
+    .split(/\n+/)
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((s) => !CLOSE_CLAIM_RE.test(s)).join(' ').trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 /**
  * The reply minus the sentences that claim the request was noted — used
  * when nothing was actually saved. QA 2026-10-01: "¿cómo llego? ¿tienen
