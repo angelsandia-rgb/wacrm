@@ -132,6 +132,7 @@
       "saveDraft": "Guardar borrador",
       "untitled": "Automatización sin título",
       "backToAutomations": "Volver a automatizaciones",
+      "aiDoubleReplyWarning": "La respuesta automática de IA está activa en esta cuenta, así que también responderá a este mismo mensaje. El cliente puede recibir dos respuestas.",
       "toasts": {
         "saved": "Automatización guardada",
         "created": "Automatización creada",

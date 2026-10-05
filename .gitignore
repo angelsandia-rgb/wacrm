@@ -60,3 +60,7 @@ evals/ai/*.local.txt
 evals/ai/*.local.json
 evals/ai/node_modules/
 .promptfoo/
+
+# graphify knowledge graph (local, regenerable)
+graphify-out/
+.claude/settings.local.json

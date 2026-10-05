@@ -1584,6 +1584,7 @@
       "saveDraft": "초안 저장",
       "untitled": "제목 없는 자동화",
       "backToAutomations": "자동화로 돌아가기",
+      "aiDoubleReplyWarning": "이 계정은 AI 자동 응답이 켜져 있어 같은 메시지에 AI도 답장합니다. 고객이 답장을 두 번 받을 수 있습니다.",
       "toasts": {
         "saved": "자동화가 저장되었습니다",
         "created": "자동화가 생성되었습니다",

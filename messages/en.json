@@ -1584,6 +1584,7 @@
       "saveDraft": "Save Draft",
       "untitled": "Untitled automation",
       "backToAutomations": "Back to automations",
+      "aiDoubleReplyWarning": "The AI auto-reply is on for this account, so it will also answer the same message. The customer may get two replies.",
       "toasts": {
         "saved": "Automation saved",
         "created": "Automation created",
