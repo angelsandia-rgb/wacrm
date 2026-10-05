@@ -226,6 +226,33 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: 'time_based' },
 ];
 
+// Triggers that fire on the same inbound the AI auto-reply answers
+// (`interactive_reply` is excluded — the AI never replies to a tap).
+// Since the 2026-08-19 decision the AI no longer stands down for
+// automations, so a customer-facing step here means a double reply.
+const AI_OVERLAP_TRIGGERS: ReadonlySet<AutomationTriggerType> = new Set([
+  'new_message_received',
+  'keyword_match',
+  'first_inbound_message',
+  'new_contact_created',
+]);
+const CUSTOMER_SEND_STEPS: ReadonlySet<AutomationStepType> = new Set([
+  'send_message',
+  'send_buttons',
+  'send_list',
+  'send_template',
+  'send_photo',
+]);
+
+function hasCustomerSend(steps: BuilderStep[]): boolean {
+  return steps.some(
+    (s) =>
+      CUSTOMER_SEND_STEPS.has(s.step_type) ||
+      (!!s.branches &&
+        (hasCustomerSend(s.branches.yes) || hasCustomerSend(s.branches.no)))
+  );
+}
+
 function cid(): string {
   return (
     'c_' +
@@ -866,6 +893,32 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   const [state, setState] = useState<BuilderInitial>(initial);
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [aiAutoReplyOn, setAiAutoReplyOn] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/ai/config', { cache: 'no-store' });
+        if (!res.ok) return;
+        const cfg = await readResponseJson<{
+          is_active?: boolean;
+          auto_reply_enabled?: boolean;
+        }>(res);
+        if (!cancelled) setAiAutoReplyOn(!!cfg.is_active && !!cfg.auto_reply_enabled);
+      } catch {
+        // Warning is advisory — stay silent if the config can't load.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const showAiDoubleReplyWarning =
+    aiAutoReplyOn &&
+    AI_OVERLAP_TRIGGERS.has(state.trigger_type) &&
+    hasCustomerSend(state.steps);
 
   function patchTop<K extends keyof BuilderInitial>(
     key: K,
@@ -1005,6 +1058,15 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
               onConfigChange={(c) => patchTop('trigger_config', c)}
               t={t}
             />
+            {showAiDoubleReplyWarning && (
+              <div
+                role="status"
+                className="z-10 mt-3 flex w-full max-w-[320px] items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 sm:w-80 dark:text-amber-300"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                <span>{t('aiDoubleReplyWarning')}</span>
+              </div>
+            )}
             <StepList
               steps={state.steps}
               basePath={[]}
