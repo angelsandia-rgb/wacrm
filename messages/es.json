@@ -1499,6 +1499,17 @@
       "byCategoryDesc": "Solicitudes, aprobaciones e ingreso estimado por categoría"
     }
   },
+  "ForgotPasswordPage": {
+    "title": "Restablecer contraseña",
+    "desc": "Escribe tu correo y te enviaremos un enlace para restablecerla",
+    "emailLabel": "Correo",
+    "submit": "Enviar enlace",
+    "sending": "Enviando...",
+    "back": "Volver a iniciar sesión",
+    "sentTitle": "Revisa tu correo",
+    "sentDesc": "Si existe una cuenta con {email}, le enviamos un enlace para restablecer la contraseña. Puede tardar unos minutos; revisa también la carpeta de spam.",
+    "sentNoAccount": "¿No llegó nada en 5 minutos? Es posible que ese correo aún no tenga cuenta. Si te invitaron, abre tu enlace de invitación para crearla."
+  },
   "LoginPage": {
     "titleAccept": "Inicia sesión para aceptar",
     "titleWelcome": "Bienvenido de nuevo",
