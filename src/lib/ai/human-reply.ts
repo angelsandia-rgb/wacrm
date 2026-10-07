@@ -104,11 +104,12 @@ export async function countHumanRepliesAfter(
 }
 
 /**
- * Hotel takeover rule (owner, 2026-10-07): once a teammate has replied in
- * a conversation, the AI stops answering it — it used to talk over them
- * ("le comunico con alguien del equipo" while one was already chatting).
- * It comes back when someone presses "Reactivar IA" (writes a note with
- * this prefix) or "Reiniciar IA" (moves `ai_context_reset_at`).
+ * Hotel "a teammate is here" signal (owner, 2026-10-07): once a teammate
+ * has replied in a conversation, follow-up nudges stop and the AI keeps
+ * assisting but is told not to offer to connect the guest with the team
+ * (it used to, while one was already chatting). Cleared by "Reanudar IA"
+ * (writes a note with this prefix) or "Reiniciar IA" (moves
+ * `ai_context_reset_at`).
  */
 export const AI_RESUMED_NOTE_PREFIX = '▶️'
 
