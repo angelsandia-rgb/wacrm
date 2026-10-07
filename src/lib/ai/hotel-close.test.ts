@@ -174,3 +174,10 @@ describe('replyWithoutCloseClaim', () => {
     expect(replyWithoutCloseClaim('Queda anotada su mascota.')).toBeNull()
   })
 })
+
+describe('replyWithoutNotedClaim — no duplicated team line', () => {
+  it('keeps the reply as-is when it already says the team follows up', () => {
+    expect(replyWithoutNotedClaim('Con gusto, el equipo le escribe para el ingreso temprano. Le dejo anotada su solicitud.'))
+      .toBe('Con gusto, el equipo le escribe para el ingreso temprano.')
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout, replyNamesProduct, isArrivalTimeQuestion } from './hotel-media-intent'
+import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout, replyNamesProduct, isArrivalTimeQuestion, isExistingBookingTalk, isNewBookingRequest } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -235,5 +235,32 @@ describe('isArrivalTimeQuestion', () => {
     expect(isArrivalTimeQuestion('si llego como a las 11:30 de la noche hay problema? y puedo entrar a la habitacion a las 10?')).toBe(true)
     expect(isArrivalTimeQuestion('a qué hora es el check in?')).toBe(true)
     expect(isArrivalTimeQuestion('las habitaciones cuanto cuestan?')).toBe(false)
+  })
+})
+
+describe('isExistingBookingTalk (no promo banner) — VSR 2026-10-07', () => {
+  it('talk about a booking, payment or quote the guest already has', () => {
+    for (const t of [
+      'La habitación está para los recién casados Sirin Gudiel\nEste sería el primer pago',
+      'Una cónsulta el número que usted necesita es para coordinar la actividad de la próxima semana?',
+      'había estado conversando con alguien anteriormente que me pidió el nombre de mi novio relacionado a una cotización para un evento',
+      'Confirmado  mi habitación  de hoy?',
+      'Esque como ayer no pudimos ir y habíamos echo una reservación',
+    ]) expect(isExistingBookingTalk(t), t).toBe(true)
+  })
+  it('a guest browsing still gets the banner', () => {
+    for (const t of ['Hola,tiene espacio  para 2 personas la noche del sábado', 'habitacion', 'Quiero una habitación para 2 personas del 20 al 23 de octubre, ¿cuánto sale?'])
+      expect(isExistingBookingTalk(t), t).toBe(false)
+  })
+})
+
+describe('isNewBookingRequest (AI takes the thread back from a teammate)', () => {
+  it('Crhistian Santoyo asking for an additional booking', () => {
+    expect(isNewBookingRequest('Aprovecho a adelantar solicitud   reserva para próximo  jueves 15  también')).toBe(true)
+    expect(isNewBookingRequest('quisiera otra habitación para el sábado')).toBe(true)
+  })
+  it('follow-ups on the booking they have stay with the teammate', () => {
+    for (const t of ['¿ya está confirmada mi reserva?', 'Confirmado  mi habitación  de hoy?', 'quiero cambiar la fecha de mi reserva', 'Muchas gracias', 'Ok 👍'])
+      expect(isNewBookingRequest(t), t).toBe(false)
   })
 })

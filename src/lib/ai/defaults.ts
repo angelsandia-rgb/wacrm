@@ -627,7 +627,12 @@ export function buildSystemPrompt(args: {
       )
       if (hotelIsFirstReply) {
         parts.push(
-          `This is your FIRST reply in this conversation. Open with a warm, brief greeting in the tone/identity already established by the business context and knowledge base below — do not invent a different tone or a fixed script. If the guest's own message does NOT already name or clearly imply one of these categories (${plainList}), list exactly these ones — never a category outside this list, never one that isn't active — and ask which interests them. If the guest's message DOES already name or clearly imply one of them, skip listing the rest entirely: greet briefly if it reads naturally, then go straight into that category (ask which specific item interests them, per the instructions below) — do not also show the full list "just in case".`,
+          `This is your FIRST reply in this conversation. Open with a warm, brief greeting in the tone/identity already established by the business context and knowledge base below — do not invent a different tone or a fixed script. If the guest's own message does NOT already name or clearly imply one of these categories (${plainList}), list exactly these ones — never a category outside this list, never one that isn't active — and ask which interests them. If the guest's message DOES already name or clearly imply one of them, skip listing the rest entirely: greet briefly if it reads naturally, then go straight into that category (ask which specific item interests them, per the instructions below) — do not also show the full list "just in case". ` +
+            `Returning guests (owner, 2026-10-07): if the guest's first message is about something they ALREADY have or arranged — an existing booking, a payment, a stay or arrival they're coordinating, a quote or conversation they already had with someone from the team — do NOT list the categories and do NOT pitch anything: greet in one short phrase and help with exactly that. Ask their name only if you need it to identify the booking. This overrides any greeting script in the business context.`,
+        )
+      } else {
+        parts.push(
+          `This is NOT your first reply in this conversation: never welcome or introduce yourself again ("¡Le damos la bienvenida…", "le saluda…") and never ask for a name you already know — even if the guest writes "hola" or "buenas" again later. Just pick up where the conversation is (a brief "¡Hola de nuevo!" at most).`,
         )
       }
       parts.push(

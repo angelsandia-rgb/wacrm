@@ -24,6 +24,7 @@ import { buildSystemPrompt, aiAutoReplyRetryDelayMs, RECORD_RESERVATION_SENTINEL
 import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
+import { isClosingMessage } from './followups'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -58,7 +59,9 @@ import {
   acceptsPhotoOffer,
   guestAskedForPhotos,
   isArrivalTimeQuestion,
+  isExistingBookingTalk,
   isExplicitHumanRequest,
+  isNewBookingRequest,
   isLocationQuestion,
   isMedicalCaution,
   isPaymentRequest,
@@ -82,6 +85,7 @@ import {
   HUMAN_REPLY_CHECK_PROMPT,
   humanReplyGapNote,
   loadTrailingOutbound,
+  AI_RESUMED_NOTE_PREFIX,
   parseHumanReplyVerdict,
   teammateTookOver,
   trailingCustomerTurns,
@@ -269,6 +273,10 @@ const COMPLAINT_RE =
 /** A reply that already brings up the booking details — the post-photo
  *  nudge would only ask the same thing again. */
 const REPLY_MENTIONS_BOOKING_RE = /\b(fechas?|personas|reserv\w*|apart\w*|solicitud)\b/i
+
+/** Our own one-line sign-off ("¡Con mucho gusto! Aquí estamos para lo que
+ *  necesite. 😊", "¡Igualmente! Que tenga un bendecido día."). */
+const SIGN_OFF_REPLY_RE = /^[^\p{L}]*(?:con (?:mucho )?gusto|igualmente|a usted|de nada|un placer)\b[^?¿]{0,100}$/iu
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
@@ -692,9 +700,22 @@ export async function dispatchInboundToAiReply(
     // now; the AI stays quiet until someone reactivates or resets it
     // (owner, 2026-10-07 — see `teammateTookOver`). Fails open: a read
     // error must not leave the guest unanswered.
+    // Exception (owner, 2026-10-07): the guest asks for ANOTHER booking —
+    // the AI takes the thread back (the note re-arms it for the rest of
+    // that booking) so the request isn't left waiting on a person.
     if (neverSelfPause) {
       try {
-        if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) return
+        if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) {
+          if (!isNewBookingRequest(trailingCustomerTurns(messages).join('\n'))) return
+          const { error: noteError } = await db.from('messages').insert({
+            conversation_id: conversationId,
+            sender_type: 'bot',
+            content_type: 'internal_note',
+            content_text: `${AI_RESUMED_NOTE_PREFIX} La IA retomó la conversación: el cliente pidió una reservación adicional.`,
+            status: 'sent',
+          })
+          if (noteError) console.error('[ai auto-reply] resume note insert failed:', noteError)
+        }
       } catch (err) {
         console.error('[ai auto-reply] teammate-takeover check failed:', describeError(err))
       }
@@ -736,6 +757,16 @@ export async function dispatchInboundToAiReply(
       if (knownHumanReplies > 0) return
     }
     if (messages[messages.length - 1].role !== 'user') return
+
+    // We already said goodbye and the customer only says goodbye again —
+    // nothing left to add (VSR 2026-10-07: "¡Con mucho gusto!…" then
+    // "¡Igualmente! Que tenga un bendecido día" to the same guest).
+    if (
+      trailingCustomerTurns(messages).every((t) => isClosingMessage(t)) &&
+      SIGN_OFF_REPLY_RE.test(previousAssistantMessage(messages))
+    ) {
+      return
+    }
 
     // Angel's explicit product decision (2026-08-19): the AI must never
     // go quiet because of a message-level automation (`new_message_received`
@@ -1544,7 +1575,11 @@ For airport transport, record the guest's request in nota on the relevant existi
     // 2026-09-20: seeing the banner before the "¿cuál le interesa?"
     // question reads more naturally than the other way around) — this
     // must stay ahead of the `engineSendText` call right below.
-    if (isHotel) {
+    // No promotional banner when the guest is talking about something they
+    // already have — a booking, a payment, a quote in progress (VSR
+    // 2026-10-07: a first-payment receipt got the Habitaciones banner).
+    const recentInbound = trailingCustomerTurns(messages).join('\n')
+    if (isHotel && !isExistingBookingTalk(recentInbound)) {
       const lowerOutboundText = outboundText.toLowerCase()
       // A reply naming two or more category LABELS together (not
       // products) is the generic "¿cuál le interesa: Habitaciones, Spa,
@@ -1581,6 +1616,10 @@ For airport transport, record the guest's request in nota on the relevant existi
           !isGenericCategoryMenu && productNames.some((name) => replyNamesProduct(outboundText, name))
         const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
         if (!proposal && !namedInReply && !askedInMessage) continue
+        // The guest already picked an item of this category themselves
+        // ("3 habitaciones Suite Clásica") — past browsing, the banner adds
+        // nothing (the item's own photos still go out on their own).
+        if (productNames.some((name) => replyNamesProduct(recentInbound, name))) continue
         if (isLocationAsk && !askedInMessage) continue
         if (isPolicyAsk && !askedInMessage && !proposal) continue
         // The guest asked about OTHER categories and this one only shows
@@ -1982,7 +2021,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
     // is only ever taught for hotel accounts with at least one category
     // banner on file, but re-check here too — a hallucination or an
     // injection attempt must never send an arbitrary image.
-    if (sendCategoryBannerName && isHotel) {
+    if (sendCategoryBannerName && isHotel && !isExistingBookingTalk(recentInbound)) {
       try {
         await autoSendCategoryBanner({
           db,
