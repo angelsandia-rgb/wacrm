@@ -40,6 +40,7 @@ interface OpenAiResponse {
     prompt_tokens?: number
     completion_tokens?: number
     total_tokens?: number
+    prompt_tokens_details?: { cached_tokens?: number }
   }
 }
 
@@ -49,7 +50,7 @@ interface OpenAiResponse {
  * in `generateReply`).
  */
 export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult> {
-  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+  const { apiKey, model, systemPrompt, messages, timeoutMs, cacheKey } = args
 
   let res: Response
   try {
@@ -66,6 +67,7 @@ export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult
           ...toOpenAiMessages(mergeConsecutive(messages), model),
         ],
         max_completion_tokens: MAX_OUTPUT_TOKENS,
+        ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -88,6 +90,7 @@ export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult
     prompt: data?.usage?.prompt_tokens,
     completion: data?.usage?.completion_tokens,
     total: data?.usage?.total_tokens,
+    cached: data?.usage?.prompt_tokens_details?.cached_tokens,
   })
   return { text, usage }
 }

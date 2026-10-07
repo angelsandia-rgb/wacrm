@@ -10,6 +10,9 @@ export interface ProviderArgs {
   systemPrompt: string
   messages: ChatMessage[]
   timeoutMs: number
+  /** Stable per-account key for the provider's prompt cache (OpenAI
+   *  `prompt_cache_key`). */
+  cacheKey?: string
 }
 
 /**
@@ -23,6 +26,8 @@ export function normalizeUsage(raw: {
   prompt?: unknown
   completion?: unknown
   total?: unknown
+  /** Prompt tokens served from the provider's cache (billed far cheaper). */
+  cached?: unknown
 }): AiUsage | null {
   const num = (v: unknown): number =>
     typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
@@ -33,7 +38,10 @@ export function normalizeUsage(raw: {
   if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) {
     return null
   }
-  return { promptTokens, completionTokens, totalTokens }
+  const cachedPromptTokens = num(raw.cached)
+  return cachedPromptTokens > 0
+    ? { promptTokens, completionTokens, totalTokens, cachedPromptTokens }
+    : { promptTokens, completionTokens, totalTokens }
 }
 
 /** Map a fetch rejection (timeout / DNS / offline) to a typed AiError. */

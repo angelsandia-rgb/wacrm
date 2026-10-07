@@ -54,3 +54,14 @@ describe('generateOpenAi — inbound photos', () => {
     expect(sentBody().messages[1]).toEqual({ role: 'user', content: 'this one?' })
   })
 })
+
+describe('generateOpenAi — prompt cache', () => {
+  it('sends prompt_cache_key and reports cached prompt tokens', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      okResponse({ ...okBody, usage: { prompt_tokens: 19000, completion_tokens: 100, total_tokens: 19100, prompt_tokens_details: { cached_tokens: 15360 } } }),
+    )
+    const { usage } = await generateOpenAi({ ...baseArgs, model: 'gpt-5.4', cacheKey: 'wacrm-abc', messages: [{ role: 'user', content: 'hi' }] })
+    expect(sentBody().prompt_cache_key).toBe('wacrm-abc')
+    expect(usage).toEqual({ promptTokens: 19000, completionTokens: 100, totalTokens: 19100, cachedPromptTokens: 15360 })
+  })
+})

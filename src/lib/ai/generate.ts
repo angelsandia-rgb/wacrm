@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   AiError,
   type AiConfig,
@@ -85,6 +86,10 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
     systemPrompt,
     messages,
     timeoutMs,
+    // Groups one account's calls for the provider's prompt cache: the
+    // account's own business prompt is stable per account and differs
+    // across accounts, so no account id needs threading through here.
+    cacheKey: `wacrm-${createHash('sha256').update(`${config.model}\n${config.systemPrompt ?? ''}`).digest('hex').slice(0, 24)}`,
   }
 
   let result: { text: string; usage: AiUsage | null }
