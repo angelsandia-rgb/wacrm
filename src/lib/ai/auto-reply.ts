@@ -297,6 +297,23 @@ interface DispatchArgs {
 }
 
 async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
+  // Never send the same holding message twice in a row: during a sustained
+  // outage (hotel never self-pauses) every new inbound used to get it again
+  // (2026-10-07, 3× to one guest in 4 min). Fail open — a lookup error sends.
+  try {
+    const { data: last } = await supabaseAdmin()
+      .from('messages')
+      .select('content_text')
+      .eq('conversation_id', args.conversationId)
+      .neq('sender_type', 'customer')
+      .neq('content_type', 'internal_note')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (last?.content_text === AI_PROVIDER_FALLBACK_TEXT) return
+  } catch {
+    // fall through and send
+  }
   try {
     await engineSendText({
       accountId: args.accountId,
@@ -2471,19 +2488,25 @@ async function handleAiGenerationFailure(args: {
 
   const code = err instanceof AiError ? err.code : 'unknown'
   const message = describeError(err)
+  const quotaExhausted = code === 'quota_exhausted'
   console.error(`[ai auto-reply] generateReply failed after retry (${code}):`, message)
 
+  // Out of credits = the bot is down for the whole account until someone
+  // tops up billing, so it is critical and gets its own dedup key (the
+  // generic one is shared with every transient blip and easy to miss).
   void dispatchSystemAlert({
-    severity: 'warning',
+    severity: quotaExhausted ? 'critical' : 'warning',
     source: 'ai_generate_error',
-    title: 'AI auto-reply could not generate a response',
+    title: quotaExhausted
+      ? 'AI provider account is out of credits — the bot is down for this account'
+      : 'AI auto-reply could not generate a response',
     detail: {
       account_id: accountId,
       conversation_id: conversationId,
       code,
       message: message.slice(0, 300),
     },
-    dedupKey: `ai_generate_error:${accountId}`,
+    dedupKey: quotaExhausted ? `ai_quota_exhausted:${accountId}` : `ai_generate_error:${accountId}`,
     accountId,
     throttleMinutes: 60,
   })
@@ -2496,8 +2519,9 @@ async function handleAiGenerationFailure(args: {
     conversationId,
     handoffAgentId: config.handoffAgentId,
     alreadyAssigned,
-    summary:
-      '🤖 La IA tuvo un error temporal con el proveedor y no pudo generar una respuesta (se reintentó una vez). La conversación se pasó a un humano para darle seguimiento.',
+    summary: quotaExhausted
+      ? '🤖 La cuenta del proveedor de IA se quedó sin crédito, así que la IA no puede responder. Un administrador debe recargar el saldo; mientras tanto, esta conversación necesita seguimiento humano.'
+      : '🤖 La IA tuvo un error temporal con el proveedor y no pudo generar una respuesta (se reintentó una vez). La conversación se pasó a un humano para darle seguimiento.',
     transient: true,
   })
 }
