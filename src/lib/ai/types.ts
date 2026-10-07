@@ -73,6 +73,8 @@ export interface AiUsage {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /** Part of `promptTokens` the provider served from its prompt cache. */
+  cachedPromptTokens?: number
 }
 
 /** Raw text + usage a provider adapter returns before handoff parsing. */

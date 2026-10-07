@@ -510,3 +510,24 @@ describe('buildSystemPrompt — stale (past-due) reservation prompts reschedule-
     ).not.toContain('PAST-DUE')
   })
 })
+
+describe('buildSystemPrompt — cache-friendly ordering', () => {
+  const fixed = {
+    userPrompt: 'Eres Angela María Martínez, la anfitriona virtual de Villa San Ricardo.',
+    mode: 'auto_reply' as const,
+    catalog: ['Suite Premium (Q1,200/noche)'],
+    hotelReservations: true,
+    hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: true }],
+  }
+  it('two different conversations/moments share the whole fixed part as an identical prefix', () => {
+    const a = buildSystemPrompt({ ...fixed, currentDate: 'martes, 7 de octubre de 2026, 10:01', knownContactFacts: 'Nombre: Sussely', hotelIsFirstReply: true, knowledge: ['A'] })
+    const b = buildSystemPrompt({ ...fixed, currentDate: 'martes, 7 de octubre de 2026, 18:44', activeReservations: '- Habitación: Suite Premium', hotelStayEstimate: 'GTQ 850', knowledge: ['B'] })
+    const fixedEnd = a.indexOf('CONTEXT FOR THIS CONVERSATION')
+    expect(fixedEnd).toBeGreaterThan(0)
+    expect(b.slice(0, fixedEnd)).toBe(a.slice(0, fixedEnd))
+    // the business context and catalog are inside that shared prefix
+    expect(a.slice(0, fixedEnd)).toContain('Angela María Martínez')
+    expect(a.slice(0, fixedEnd)).toContain('Suite Premium (Q1,200/noche)')
+    expect(a.slice(0, fixedEnd)).not.toContain('10:01')
+  })
+})
