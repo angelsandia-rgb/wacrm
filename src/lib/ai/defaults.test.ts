@@ -462,11 +462,13 @@ describe('buildSystemPrompt — hotel error/delay recovery protocol', () => {
 })
 
 describe('buildSystemPrompt — hotel modify/cancel existing request', () => {
-  it('teaches capturing which request + motivo, then the two-step hand-off — never claims to modify/cancel itself', () => {
-    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
+  it('routes any question about a booking the guest already has to the reservations team (owner, 2026-10-07) — never claims to modify/cancel itself', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true, hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: false }] })
     expect(p.toLowerCase()).toContain('modify / cancel an existing request')
-    expect(p.toLowerCase()).toContain('"motivo"')
     expect(p.toLowerCase()).toContain('you have no tool to change or cancel a reservation/request yourself')
+    expect(p).toContain('(p) Bookings the guest ALREADY has')
+    expect(p).toContain('a colleague from the reservations team will help them')
+    expect(p).toContain('follow rule (p)')
   })
 })
 
