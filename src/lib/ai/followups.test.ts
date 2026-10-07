@@ -5,6 +5,7 @@ import {
   withinBusinessHours,
   nextDueFollowup,
   normalizeFollowupGoal,
+  isClosingMessage,
   FOLLOWUP_MIN_MINUTES,
   FOLLOWUP_MAX_MINUTES,
   type FollowupStep,
@@ -225,5 +226,18 @@ describe('nextDueFollowup', () => {
     expect(
       nextDueFollowup({ ...args, now: new Date('2026-09-02T15:00:00Z') })?.stepIndex,
     ).toBe(0);
+  });
+});
+
+describe('isClosingMessage', () => {
+  it('real VSR sign-offs that got a needless nudge (2026-10-07)', () => {
+    for (const t of ['gracias', 'muchas gracias', 'Gracias', 'Ok muchas gracias!', 'Muchas gracias bendecido dia', 'Perfecto 👍', 'muy amable, gracias por la información']) {
+      expect(isClosingMessage(t), t).toBe(true);
+    }
+  });
+  it('anything with a question or real content still gets nudged', () => {
+    for (const t of ['Gracias, ¿y el precio?', 'Será el número de la compañera de arquidiócesis de Los Altos?', 'Aprovecho a adelantar solicitud reserva para próximo jueves 15 también', 'Si', 'Hola, buenas tardes', '', null]) {
+      expect(isClosingMessage(t), String(t)).toBe(false);
+    }
   });
 });

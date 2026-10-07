@@ -104,6 +104,66 @@ export async function countHumanRepliesAfter(
 }
 
 /**
+ * Hotel takeover rule (owner, 2026-10-07): once a teammate has replied in
+ * a conversation, the AI stops answering it — it used to talk over them
+ * ("le comunico con alguien del equipo" while one was already chatting).
+ * It comes back when someone presses "Reactivar IA" (writes a note with
+ * this prefix) or "Reiniciar IA" (moves `ai_context_reset_at`).
+ */
+export const AI_RESUMED_NOTE_PREFIX = '▶️'
+
+/** WhatsApp Business app greeting / away messages are echoed as `agent`
+ *  rows (Coexistence) seconds after the customer writes; a person takes
+ *  longer. Anything faster than this is treated as automatic. */
+const AUTO_REPLY_MAX_MS = 15_000
+
+/** Pure: given customer + agent rows oldest-first, did a real teammate
+ *  answer the customer? Agent rows before the customer's first message
+ *  (a campaign or template the team started with) don't count. */
+export function hasTeammateReply(rows: { sender_type: string; created_at: string }[]): boolean {
+  let lastCustomerAt: number | null = null
+  for (const r of rows) {
+    const at = Date.parse(r.created_at)
+    if (r.sender_type === 'customer') lastCustomerAt = at
+    else if (r.sender_type === 'agent' && lastCustomerAt !== null && at - lastCustomerAt > AUTO_REPLY_MAX_MS) return true
+  }
+  return false
+}
+
+/** Has a teammate taken this conversation over since the AI was last
+ *  reset (`resetAtISO`) or reactivated? */
+export async function teammateTookOver(
+  db: SupabaseClient,
+  conversationId: string,
+  resetAtISO: string | null,
+): Promise<boolean> {
+  const { data: resumed } = await db
+    .from('messages')
+    .select('created_at')
+    .eq('conversation_id', conversationId)
+    .eq('content_type', 'internal_note')
+    .like('content_text', `${AI_RESUMED_NOTE_PREFIX}%`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const since = [resetAtISO, (resumed?.[0]?.created_at as string | undefined) ?? null]
+    .filter((s): s is string => !!s)
+    .sort()
+    .pop()
+
+  let q = db
+    .from('messages')
+    .select('sender_type, created_at')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['customer', 'agent'])
+    .neq('content_type', 'internal_note')
+  if (since) q = q.gt('created_at', since)
+  // ponytail: newest 500 rows is plenty for a WhatsApp thread; page if one ever outgrows it.
+  const { data, error } = await q.order('created_at', { ascending: false }).limit(500)
+  if (error) throw error
+  return hasTeammateReply((data ?? []).reverse())
+}
+
+/**
  * Drop the trailing assistant turns (the human's reply) so the
  * transcript ends on the customer's turn again — required by Anthropic
  * and the shape every downstream step expects.

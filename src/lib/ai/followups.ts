@@ -144,6 +144,40 @@ export function renderFollowupText(
   );
 }
 
+/**
+ * Is this customer message just a thank-you / sign-off ("Ok muchas
+ * gracias!", "Muchas gracias bendecido día")? Then the customer has no
+ * open question and a "¿Sigue con dudas…?" nudge is noise (2026-10-07:
+ * 5 of VSR's last 10 nudges went right after a "gracias"). Every word
+ * must be sign-off vocabulary, so "gracias, ¿y el precio?" is not one.
+ */
+const CLOSING_CORE = new Set([
+  'gracias', 'thanks', 'thank', 'ok', 'okay', 'oki', 'listo', 'perfecto', 'excelente',
+  'genial', 'bendiciones', 'bendecido', 'bendecida', 'igualmente', 'saludos', 'amable',
+  'vemos', 'entendido', 'enterado', 'enterada', 'dale', 'va', 'vale',
+]);
+const CLOSING_FILLER = new Set([
+  'muchas', 'muchisimas', 'mil', 'muy', 'bien', 'super', 'que', 'tenga', 'tengan', 'buen',
+  'buena', 'buenas', 'dia', 'dias', 'tarde', 'tardes', 'noche', 'noches', 'feliz', 'por',
+  'la', 'el', 'su', 'toda', 'todo', 'info', 'informacion', 'atencion', 'ayuda', 'nos',
+  'hasta', 'luego', 'pronto', 'a', 'usted', 'ustedes', 'le', 'les', 'de', 'nada', 'y',
+  'you', 'very', 'much', 'quedo', 'atento', 'atenta', 'esta', 'estamos', 'en', 'contacto',
+]);
+export function isClosingMessage(text: string | null | undefined): boolean {
+  if (!text || /[?¿]/.test(text)) return false;
+  const words = text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  return (
+    words.length > 0 &&
+    words.some((w) => CLOSING_CORE.has(w)) &&
+    words.every((w) => CLOSING_CORE.has(w) || CLOSING_FILLER.has(w))
+  );
+}
+
 /** Local hour (0-23) of `date` read in `timeZone`. */
 export function hourInTimeZone(date: Date, timeZone: string): number {
   try {

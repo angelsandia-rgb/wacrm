@@ -11,7 +11,10 @@
 // Deliberately conservative about WHICH conversations qualify — a
 // wrongly-sent nudge is worse than a missed one:
 //   - the last message must be ours (we're waiting on the customer),
-//   - there must be a real inbound to anchor the delay to,
+//   - there must be a real inbound to anchor the delay to, and it must
+//     not be a plain sign-off ("ok, muchas gracias"),
+//   - hotel: no teammate reply in the thread (see teammateTookOver),
+//   - no hotel request the guest just completed (guest_confirmed_at),
 //   - no `schedule_appointment` on record for the contact (demo booked),
 //   - no active Flow run for the contact (the flow owns the thread).
 // ============================================================
@@ -28,9 +31,11 @@ import {
   nextDueFollowup,
   renderFollowupText,
   normalizeFollowupGoal,
+  isClosingMessage,
   type FollowupStep,
   type FollowupGoal,
 } from './followups';
+import { teammateTookOver } from './human-reply';
 
 const MAX_ACCOUNTS = 200;
 const MAX_CONVERSATIONS_PER_ACCOUNT = 300;
@@ -53,7 +58,10 @@ interface AccountCfg {
   followups_business_hours_only: boolean;
   followups_window_start_hour: number;
   followups_window_end_hour: number;
-  accounts: { timezone: string } | { timezone: string }[] | null;
+  accounts:
+    | { timezone: string; industry_vertical: string | null }
+    | { timezone: string; industry_vertical: string | null }[]
+    | null;
 }
 
 export async function runFollowupSweep(
@@ -71,7 +79,7 @@ export async function runFollowupSweep(
   const { data: configs, error } = await admin
     .from('ai_configs')
     .select(
-      'account_id, followups, followups_goal, followups_business_hours_only, followups_window_start_hour, followups_window_end_hour, accounts(timezone)',
+      'account_id, followups, followups_goal, followups_business_hours_only, followups_window_start_hour, followups_window_end_hour, accounts(timezone, industry_vertical)',
     )
     .eq('followups_enabled', true)
     .limit(MAX_ACCOUNTS);
@@ -90,12 +98,13 @@ export async function runFollowupSweep(
 
     const tzField = Array.isArray(cfg.accounts) ? cfg.accounts[0] : cfg.accounts;
     const timeZone = tzField?.timezone || 'America/Guatemala';
+    const isHotel = tzField?.industry_vertical === 'hotel';
     const goal = normalizeFollowupGoal(cfg.followups_goal);
     res.accounts++;
 
     const { data: convos, error: cErr } = await admin
       .from('conversations')
-      .select('id, contact_id')
+      .select('id, contact_id, ai_context_reset_at')
       .eq('account_id', cfg.account_id)
       .eq('status', 'open')
       .eq('channel', 'whatsapp')
@@ -120,6 +129,8 @@ export async function runFollowupSweep(
         decision = await evaluateConversation(admin, {
           accountId: cfg.account_id,
           conversationId: c.id as string,
+          isHotel,
+          resetAt: (c.ai_context_reset_at as string | null) ?? null,
           contactId: (c.contact_id as string | null) ?? null,
           steps,
           goal,
@@ -228,6 +239,8 @@ export async function runFollowupSweep(
 interface EvalArgs {
   accountId: string;
   conversationId: string;
+  isHotel: boolean;
+  resetAt: string | null;
   contactId: string | null;
   steps: FollowupStep[];
   goal: FollowupGoal;
@@ -310,7 +323,7 @@ async function evaluateConversation(
   // The inbound the delay is measured from.
   const { data: lcRows } = await admin
     .from('messages')
-    .select('created_at')
+    .select('created_at, content_text')
     .eq('conversation_id', args.conversationId)
     .eq('sender_type', 'customer')
     .order('created_at', { ascending: false })
@@ -318,6 +331,27 @@ async function evaluateConversation(
   const lcRow = lcRows?.[0];
   if (!lcRow) return null;
   const lastCustomerAt = new Date(lcRow.created_at as string);
+
+  // The customer signed off ("ok, muchas gracias") — nothing to recover.
+  if (isClosingMessage(lcRow.content_text as string | null)) return null;
+
+  // Hotel: a teammate replied in this thread — it's in human hands even
+  // without an assignment (2026-10-07: a nudge went out 10 minutes after
+  // an agent told the guest "Lo esperamos hoy"). Hotel only: elsewhere the
+  // bot's own catalog/menu sends are stored as `agent` rows too.
+  if (args.isHotel && (await teammateTookOver(admin, args.conversationId, args.resetAt))) {
+    return null;
+  }
+
+  // Hotel: the guest's last message completed a request and it went to
+  // the team ("un compañero le confirmará…") — no lead to recover.
+  const { data: confirmedRows } = await admin
+    .from('reservation_requests')
+    .select('id')
+    .eq('conversation_id', args.conversationId)
+    .gte('guest_confirmed_at', lastCustomerAt.toISOString())
+    .limit(1);
+  if (confirmedRows?.length) return null;
 
   if (args.contactId) {
     // The account's objective is already met for this contact → done.

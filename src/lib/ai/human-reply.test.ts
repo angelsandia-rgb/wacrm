@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyTrailingOutbound,
+  hasTeammateReply,
   parseHumanReplyVerdict,
   trailingCustomerTurns,
   trimTrailingAssistant,
@@ -77,5 +78,24 @@ describe('transcript helpers', () => {
 
   it('returns the customer turns the human answered', () => {
     expect(trailingCustomerTurns(trimTrailingAssistant(msgs))).toEqual(['a', 'b'])
+  })
+})
+
+describe('hasTeammateReply', () => {
+  const r = (sender_type: string, created_at: string) => ({ sender_type, created_at })
+  it('WhatsApp Business auto-greetings seconds after the customer are not a teammate (VSR, 2026-10-07)', () => {
+    expect(
+      hasTeammateReply([
+        r('customer', '2026-10-07T03:09:45.994Z'),
+        r('agent', '2026-10-07T03:09:51.023Z'),
+        r('agent', '2026-10-07T03:09:51.291Z'),
+      ]),
+    ).toBe(false)
+  })
+  it('a person answering the customer takes the thread over', () => {
+    expect(hasTeammateReply([r('customer', '2026-10-07T18:24:01Z'), r('agent', '2026-10-07T18:26:43Z')])).toBe(true)
+  })
+  it('a template the team sent before the customer ever wrote does not count', () => {
+    expect(hasTeammateReply([r('agent', '2026-10-07T10:00:00Z'), r('customer', '2026-10-07T11:00:00Z')])).toBe(false)
   })
 })
