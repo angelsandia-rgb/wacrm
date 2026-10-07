@@ -83,6 +83,7 @@ import {
   humanReplyGapNote,
   loadTrailingOutbound,
   parseHumanReplyVerdict,
+  teammateTookOver,
   trailingCustomerTurns,
   trimTrailingAssistant,
 } from './human-reply'
@@ -687,6 +688,17 @@ export async function dispatchInboundToAiReply(
     let humanReplyNote: string | undefined
     let lastCustomerAt: string | null = null
     let knownHumanReplies = 0
+    // Hotel: a teammate already replied in this conversation → it's theirs
+    // now; the AI stays quiet until someone reactivates or resets it
+    // (owner, 2026-10-07 — see `teammateTookOver`). Fails open: a read
+    // error must not leave the guest unanswered.
+    if (neverSelfPause) {
+      try {
+        if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) return
+      } catch (err) {
+        console.error('[ai auto-reply] teammate-takeover check failed:', describeError(err))
+      }
+    }
     if (neverSelfPause) try {
       const trailing = await loadTrailingOutbound(db, conversationId, conv.ai_context_reset_at)
       lastCustomerAt = trailing.lastCustomerAt

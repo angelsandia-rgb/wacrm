@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkSharedRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
+import { AI_RESUMED_NOTE_PREFIX } from '@/lib/ai/human-reply'
 
 type Params = { params: Promise<{ conversationId: string }> }
 
@@ -68,19 +69,19 @@ export async function POST(request: Request, { params }: Params) {
     // after the conversation row is written.
     let takeoverSummary: string | null = null
 
+    // Same visible record the bot's own automated handoffs leave
+    // (handOffToHuman in auto-reply.ts) — until now, a manual "Take
+    // over" silently flipped the flag with no trace of who did it or
+    // why, unlike every other way a conversation leaves the bot.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('user_id', userId)
+      .maybeSingle()
+    const actorName = profile?.full_name || 'Un agente'
+
     if (paused) {
       if (assignToMe) update.assigned_agent_id = userId
-
-      // Same visible record the bot's own automated handoffs leave
-      // (handOffToHuman in auto-reply.ts) — until now, a manual "Take
-      // over" silently flipped the flag with no trace of who did it or
-      // why, unlike every other way a conversation leaves the bot.
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('user_id', userId)
-        .maybeSingle()
-      const actorName = profile?.full_name || 'Un agente'
       takeoverSummary = `🤖 ${actorName} tomó el control de esta conversación manualmente y pausó la IA.`
       update.ai_handoff_summary = takeoverSummary
     } else {
@@ -98,6 +99,9 @@ export async function POST(request: Request, { params }: Params) {
       // a human choosing to re-engage the assistant.
       update.ai_reply_count = 0
       update.ai_handoff_summary = null
+      // Also the anchor that hands a hotel thread a teammate replied in
+      // back to the bot (see `teammateTookOver`).
+      takeoverSummary = `${AI_RESUMED_NOTE_PREFIX} ${actorName} reactivó la IA en esta conversación.`
     }
 
     const { error: upErr } = await supabase
