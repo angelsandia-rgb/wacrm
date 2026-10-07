@@ -11,7 +11,10 @@
 // Deliberately conservative about WHICH conversations qualify — a
 // wrongly-sent nudge is worse than a missed one:
 //   - the last message must be ours (we're waiting on the customer),
-//   - there must be a real inbound to anchor the delay to,
+//   - there must be a real inbound to anchor the delay to, and it must
+//     not be a plain sign-off ("ok, muchas gracias"),
+//   - no teammate reply since that inbound,
+//   - no hotel request the guest just completed (guest_confirmed_at),
 //   - no `schedule_appointment` on record for the contact (demo booked),
 //   - no active Flow run for the contact (the flow owns the thread).
 // ============================================================
@@ -28,6 +31,7 @@ import {
   nextDueFollowup,
   renderFollowupText,
   normalizeFollowupGoal,
+  isClosingMessage,
   type FollowupStep,
   type FollowupGoal,
 } from './followups';
@@ -310,7 +314,7 @@ async function evaluateConversation(
   // The inbound the delay is measured from.
   const { data: lcRows } = await admin
     .from('messages')
-    .select('created_at')
+    .select('created_at, content_text')
     .eq('conversation_id', args.conversationId)
     .eq('sender_type', 'customer')
     .order('created_at', { ascending: false })
@@ -318,6 +322,31 @@ async function evaluateConversation(
   const lcRow = lcRows?.[0];
   if (!lcRow) return null;
   const lastCustomerAt = new Date(lcRow.created_at as string);
+
+  // The customer signed off ("ok, muchas gracias") — nothing to recover.
+  if (isClosingMessage(lcRow.content_text as string | null)) return null;
+
+  // A teammate already answered since then — the thread is in human
+  // hands even without an assignment (2026-10-07: a nudge went out 10
+  // minutes after an agent told the guest "Lo esperamos hoy").
+  const { data: agentRows } = await admin
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', args.conversationId)
+    .eq('sender_type', 'agent')
+    .gt('created_at', lastCustomerAt.toISOString())
+    .limit(1);
+  if (agentRows?.length) return null;
+
+  // Hotel: the guest's last message completed a request and it went to
+  // the team ("un compañero le confirmará…") — no lead to recover.
+  const { data: confirmedRows } = await admin
+    .from('reservation_requests')
+    .select('id')
+    .eq('conversation_id', args.conversationId)
+    .gte('guest_confirmed_at', lastCustomerAt.toISOString())
+    .limit(1);
+  if (confirmedRows?.length) return null;
 
   if (args.contactId) {
     // The account's objective is already met for this contact → done.
