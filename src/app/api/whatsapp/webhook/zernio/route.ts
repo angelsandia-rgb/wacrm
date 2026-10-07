@@ -2,7 +2,7 @@ import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { findExistingContact, isUniqueViolation, shouldAdoptProfileName } from '@/lib/contacts/dedupe'
 import { reopenClosedConversation } from '@/lib/conversations/reopen'
 import { verifyZernioWebhookSignature } from '@/lib/zernio/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -328,7 +328,7 @@ async function findOrCreateContact(accountId: string, configOwnerUserId: string,
     // with the fully-qualified number Zernio just gave us, instead of
     // letting the malformed value keep breaking future outbound sends.
     const updates: Record<string, unknown> = {}
-    if (name && name !== existingContact.name) updates.name = name
+    if (shouldAdoptProfileName(existingContact, name)) updates.name = name
     if (normalizePhone(phone) !== normalizePhone(existingContact.phone)) updates.phone = phone
     if (Object.keys(updates).length > 0) {
       await supabaseAdmin()

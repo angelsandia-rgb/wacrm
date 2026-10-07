@@ -3650,6 +3650,21 @@ async function autoSetContactName(args: {
   })
   if (logError) console.error('[ai auto-reply] set_contact_name log insert failed:', logError)
 
+  // Open deals created before the guest gave their name carry the old
+  // (WhatsApp profile) name as their title, so the pipeline card never
+  // showed the guest's real name. Only titles that ARE the old name —
+  // never one a teammate wrote.
+  if (contact.name) {
+    const { error: dealError } = await db
+      .from('deals')
+      .update({ title: clean, updated_at: new Date().toISOString() })
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+      .eq('status', 'open')
+      .eq('title', contact.name)
+    if (dealError) console.error('[ai auto-reply] set_contact_name deal rename failed:', dealError)
+  }
+
   // Rewrite the name into any Google Sheet reservation rows already
   // written for this contact (row-builder reads `contacts.name`).
   const { data: rows } = await db

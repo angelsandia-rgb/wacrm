@@ -20,7 +20,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { findExistingContact, isUniqueViolation, shouldAdoptProfileName } from '@/lib/contacts/dedupe';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
 import { resolveWhatsAppConfig } from '@/lib/whatsapp/resolve-config';
@@ -90,7 +90,7 @@ export async function resolveConversationByPhone(
   const existing = await findExistingContact(db, accountId, sanitized);
   if (existing) {
     contactId = existing.id;
-    if (name && name !== existing.name) {
+    if (shouldAdoptProfileName(existing, name)) {
       await db
         .from('contacts')
         .update({ name, updated_at: new Date().toISOString() })

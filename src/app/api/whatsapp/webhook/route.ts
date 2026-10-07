@@ -4,7 +4,7 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { startTypingIndicatorLoop } from '@/lib/whatsapp/typing-indicator'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { findExistingContact, isUniqueViolation, shouldAdoptProfileName } from '@/lib/contacts/dedupe'
 import { reopenClosedConversation } from '@/lib/conversations/reopen'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -1184,7 +1184,7 @@ async function findOrCreateContact(
     // the moment to replace whatever malformed value was stored
     // before it silently breaks a future outbound send (2026-08-25).
     const updates: Record<string, unknown> = {}
-    if (name && name !== existingContact.name) updates.name = name
+    if (shouldAdoptProfileName(existingContact, name)) updates.name = name
     if (normalizePhone(phone) !== normalizePhone(existingContact.phone)) updates.phone = phone
     if (Object.keys(updates).length > 0) {
       await supabaseAdmin()

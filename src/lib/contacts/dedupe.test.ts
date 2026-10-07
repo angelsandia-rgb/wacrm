@@ -6,7 +6,23 @@ import {
   isExactMatch,
   isUniqueViolation,
   normalizeKey,
+  shouldAdoptProfileName,
 } from "./dedupe";
+
+describe("shouldAdoptProfileName", () => {
+  const phone = "50231922861";
+  it("never overwrites a real name (set by a teammate or the AI)", () => {
+    expect(shouldAdoptProfileName({ name: "Sussely", phone }, "Third Eye Connections")).toBe(false);
+  });
+  it("fills in a contact that has no name or only its phone", () => {
+    expect(shouldAdoptProfileName({ name: null, phone }, "Ana")).toBe(true);
+    expect(shouldAdoptProfileName({ name: "+502 3192 2861", phone }, "Ana")).toBe(true);
+  });
+  it("ignores an empty or identical profile name", () => {
+    expect(shouldAdoptProfileName({ name: null, phone }, "")).toBe(false);
+    expect(shouldAdoptProfileName({ name: "Ana", phone }, "Ana")).toBe(false);
+  });
+});
 
 describe("normalizeKey", () => {
   it("strips every non-digit", () => {
