@@ -61,7 +61,6 @@ import {
   isArrivalTimeQuestion,
   isExistingBookingTalk,
   isExplicitHumanRequest,
-  isNewBookingRequest,
   isLocationQuestion,
   isMedicalCaution,
   isPaymentRequest,
@@ -85,7 +84,6 @@ import {
   HUMAN_REPLY_CHECK_PROMPT,
   humanReplyGapNote,
   loadTrailingOutbound,
-  AI_RESUMED_NOTE_PREFIX,
   parseHumanReplyVerdict,
   teammateTookOver,
   trailingCustomerTurns,
@@ -277,6 +275,10 @@ const REPLY_MENTIONS_BOOKING_RE = /\b(fechas?|personas|reserv\w*|apart\w*|solici
 /** Our own one-line sign-off ("¡Con mucho gusto! Aquí estamos para lo que
  *  necesite. 😊", "¡Igualmente! Que tenga un bendecido día."). */
 const SIGN_OFF_REPLY_RE = /^[^\p{L}]*(?:con (?:mucho )?gusto|igualmente|a usted|de nada|un placer)\b[^?¿]{0,100}$/iu
+
+/** Appended when a teammate has already replied in this hotel thread. */
+const TEAMMATE_PRESENT_NOTE =
+  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team, do NOT say a colleague will contact them, and do NOT hand off — a person is already here. Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
@@ -696,28 +698,16 @@ export async function dispatchInboundToAiReply(
     let humanReplyNote: string | undefined
     let lastCustomerAt: string | null = null
     let knownHumanReplies = 0
-    // Hotel: a teammate already replied in this conversation → it's theirs
-    // now; the AI stays quiet until someone reactivates or resets it
-    // (owner, 2026-10-07 — see `teammateTookOver`). Fails open: a read
-    // error must not leave the guest unanswered.
-    // Exception (owner, 2026-10-07): the guest asks for ANOTHER booking —
-    // the AI takes the thread back (the note re-arms it for the rest of
-    // that booking) so the request isn't left waiting on a person.
+    // Hotel: a teammate already replied in this conversation. The AI keeps
+    // assisting (owner, 2026-10-07: not muted), but is told a person is
+    // here — it used to offer "¿le conecto con alguien del equipo?" to a
+    // guest a teammate was already chatting with.
+    let teammateNote: string | undefined
     if (neverSelfPause) {
       try {
-        if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) {
-          if (!isNewBookingRequest(trailingCustomerTurns(messages).join('\n'))) return
-          const { error: noteError } = await db.from('messages').insert({
-            conversation_id: conversationId,
-            sender_type: 'bot',
-            content_type: 'internal_note',
-            content_text: `${AI_RESUMED_NOTE_PREFIX} La IA retomó la conversación: el cliente pidió una reservación adicional.`,
-            status: 'sent',
-          })
-          if (noteError) console.error('[ai auto-reply] resume note insert failed:', noteError)
-        }
+        if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) teammateNote = TEAMMATE_PRESENT_NOTE
       } catch (err) {
-        console.error('[ai auto-reply] teammate-takeover check failed:', describeError(err))
+        console.error('[ai auto-reply] teammate-presence check failed:', describeError(err))
       }
     }
     if (neverSelfPause) try {
@@ -1006,7 +996,7 @@ export async function dispatchInboundToAiReply(
       activeReservations,
       staleReservations,
     })
-    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', humanReplyNote].filter(Boolean).join('\n\n')
+    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', teammateNote, humanReplyNote].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {

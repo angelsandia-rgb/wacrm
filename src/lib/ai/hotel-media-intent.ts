@@ -304,18 +304,6 @@ export function isExistingBookingTalk(message: string | null | undefined): boole
   return EXISTING_BOOKING_RE.test(normalizeForMatch(message ?? ''))
 }
 
-const BOOKING_WORD_RE = /\b(?:reserv\w*|solicitud|habitacion(?:es)?|cuarto|hospedaje|hosped\w*)\b/
-const NEW_BOOKING_MARKER_RE =
-  /\b(?:otra|otro|adicional|tambien|nueva|nuevo|adelant\w*|aprovech\w*|quisiera|quiero|me gustaria|necesito|ocupo|deseo)\b/
-
-/** The guest asks for ANOTHER booking ("Aprovecho a adelantar solicitud
- *  reserva para próximo jueves 15 también" — Crhistian Santoyo, 2026-10-07)
- *  rather than following up on the one they have. */
-export function isNewBookingRequest(message: string | null | undefined): boolean {
-  const t = normalizeForMatch(message ?? '')
-  return BOOKING_WORD_RE.test(t) && NEW_BOOKING_MARKER_RE.test(t) && !EXISTING_BOOKING_RE.test(t) && !/\bconfirm/.test(t)
-}
-
 const ARRIVAL_TIME_RE =
   /\b(a que hora|llego|llegar|llegamos|llegaria|llegariamos|llegada|entrar|ingresar|check\s*(?:in|out)|early check|late check|arrive|arrival)\b/
 
