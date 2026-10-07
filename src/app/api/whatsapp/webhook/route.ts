@@ -940,7 +940,10 @@ async function processMessage(
   // stops it in its own `finally`, once — see stopTyping's doc comment
   // on `DispatchArgs` for why a burst of rapid messages (each starting
   // its own loop call here) can't stop it early.
-  if (!flowConsumed && !interactiveReplyId && inboundText.trim()) {
+  // A caption-less photo has no text but is still a customer turn: the
+  // vision context (context.ts) shows it to the model. Without this a
+  // guest who only sends a screenshot never gets an answer.
+  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || contentType === 'image')) {
     const stopTyping = startTypingIndicatorLoop({
       provider: 'meta',
       phoneNumberId,

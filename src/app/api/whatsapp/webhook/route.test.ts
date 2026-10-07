@@ -391,3 +391,17 @@ describe('inbound webhook: after() awaits automations (#368)', () => {
     expect(h.state.automationCompleted).toBe(3)
   })
 })
+
+describe('inbound webhook: caption-less photo', () => {
+  it('still dispatches to the AI so a screenshot-only message gets an answer', async () => {
+    await runWebhook({
+      id: 'wamid.IMG1',
+      from: '15551230000',
+      timestamp: '1700000000',
+      type: 'image',
+      image: { id: 'media-1', mime_type: 'image/jpeg' },
+    })
+
+    expect(h.dispatchInboundToAiReply).toHaveBeenCalledTimes(1)
+  })
+})

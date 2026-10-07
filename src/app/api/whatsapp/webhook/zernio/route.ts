@@ -681,7 +681,8 @@ async function processInboundMessage(message: ZernioWebhookMessage, config: any,
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
 
-  if (!flowConsumed && inboundText.trim()) {
+  // Caption-less photos too — see the same gate in ../route.ts.
+  if (!flowConsumed && (inboundText.trim() || contentType === 'image')) {
     // "escribiendo…" — see src/lib/whatsapp/typing-indicator.ts's own
     // doc comment for why this is a loop, not a single call.
     // `conversation.zernio_conversation_id` is reliably set by this
