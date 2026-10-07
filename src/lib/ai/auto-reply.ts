@@ -278,7 +278,7 @@ const SIGN_OFF_REPLY_RE = /^[^\p{L}]*(?:con (?:mucho )?gusto|igualmente|a usted|
 
 /** Appended when a teammate has already replied in this hotel thread. */
 const TEAMMATE_PRESENT_NOTE =
-  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team, do NOT say a colleague will contact them, and do NOT hand off — a person is already here. Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
+  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team and do NOT hand off — a person is already here. If they ask about a booking they already have, just say kindly that the colleague already helping them in this chat will take care of it (no hand-off marker). Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
