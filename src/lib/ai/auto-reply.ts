@@ -158,6 +158,25 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
  *  whether to teach it in the first place. */
 const CUSTOMER_ASKS_FOR_CATALOG_RE = /\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
 
+/** The bot's previous reply OFFERED the catalog as a question ("¿Le
+ *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
+ *  answers next is a reply to that offer. A message that merely mentions
+ *  the catalog (e.g. the sent link itself) doesn't count. */
+const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?/i
+
+/**
+ * The full catalog only goes out when the customer asked for it — in
+ * their latest burst of messages, or by answering the bot's own offer.
+ * A price question ("¿cuánto cuesta por noche?") is NOT a catalog
+ * request: the bot answers it and asks what they're looking for instead.
+ * Owner's rule (2026-10-06, Villa San Ricardo): the model sent the
+ * catalog link unprompted on a "costo por noche" question.
+ */
+export function customerRequestedCatalog(messages: ChatMessage[]): boolean {
+  if (trailingCustomerTurns(messages).some((t) => CUSTOMER_ASKS_FOR_CATALOG_RE.test(t))) return true
+  return BOT_OFFERED_CATALOG_RE.test(previousAssistantMessage(messages))
+}
+
 /** Same idea for the restaurant's food/drink menu. Trailing lookahead
  *  instead of `\b` after the accented "ú" — JS's `\b` is ASCII-only, so
  *  `\bmenú\b` fails to match "menú?" (no boundary between "ú" and "?",
@@ -1080,8 +1099,13 @@ For airport transport, record the guest's request in nota on the relevant existi
     const explicitHumanAsk = isHotel && !handoff && isExplicitHumanRequest(latestInbound)
     const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
     const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
+    const catalogRequested = customerRequestedCatalog(messages)
+    if (modelSendCatalog && !catalogRequested) {
+      console.warn(`[ai auto-reply] conversation ${conversationId}: model sent the catalog unrequested — suppressed`)
+    }
     const sendCatalog =
-      modelSendCatalog || (!quickReplyId && customerAskedForCatalog && Boolean(catalog?.length))
+      (modelSendCatalog && catalogRequested) ||
+      (!quickReplyId && customerAskedForCatalog && Boolean(catalog?.length))
     const sendRestaurantMenu =
       modelSendRestaurantMenu || (!quickReplyId && hasRestaurantMenu && customerAskedForMenu)
     if (!modelSendCatalog && sendCatalog) {
