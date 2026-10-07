@@ -2216,6 +2216,11 @@ describe('dispatchInboundToAiReply — catalog context in prompt', () => {
 })
 
 describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
+  beforeEach(() => {
+    // The marker only counts when the customer actually asked for it.
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '¿Me manda el catálogo?' }])
+  })
+
   it('sends the catalog when the model asks for it', async () => {
     h.generateReply.mockResolvedValue({
       text: 'Claro, aquí tienes nuestro catálogo.',
@@ -2226,6 +2231,39 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+  })
+
+  it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Buenas noches' },
+      { role: 'user', content: 'Quisiera saber el costo por noche ?' },
+    ])
+    h.generateReply.mockResolvedValue({
+      text: 'Con gusto le comparto las tarifas. ¿Para qué fechas y cuántas personas?',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendCatalogToConversation).not.toHaveBeenCalled()
+  })
+
+  it('sends the catalog when the customer accepts the bot\'s own offer', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Hola' },
+      { role: 'assistant', content: '¡Hola! ¿Te gustaría que te comparta nuestro catálogo de camas?' },
+      { role: 'user', content: 'Sí, porfa' },
+    ])
+    h.generateReply.mockResolvedValue({
+      text: '¡Con mucho gusto!',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendCatalogToConversation).toHaveBeenCalled()
   })
 
   it('does not send the catalog when the model does not ask for it', async () => {
