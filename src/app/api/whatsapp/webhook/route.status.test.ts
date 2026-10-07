@@ -73,7 +73,7 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
   isLegacyFormat: vi.fn(),
 }))
 vi.mock('@/lib/whatsapp/meta-api', () => ({ getMediaUrl: vi.fn(), downloadMedia: vi.fn() }))
-vi.mock('@/lib/contacts/dedupe', () => ({ findExistingContact: vi.fn(), isUniqueViolation: vi.fn() }))
+vi.mock('@/lib/contacts/dedupe', () => ({ findExistingContact: vi.fn(), isUniqueViolation: vi.fn(), shouldAdoptProfileName: vi.fn() }))
 vi.mock('@/lib/conversations/reopen', () => ({ reopenClosedConversation: vi.fn() }))
 vi.mock('@/lib/whatsapp/webhook-signature', () => ({ verifyMetaWebhookSignature: vi.fn() }))
 vi.mock('@/lib/automations/engine', () => ({ runAutomationsForTrigger: vi.fn() }))

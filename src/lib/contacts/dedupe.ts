@@ -56,6 +56,23 @@ export async function findExistingContact(
 }
 
 /**
+ * True when an inbound profile name (WhatsApp push name) should replace
+ * the stored name: only while the contact has no real name yet (empty,
+ * or just its phone number). It used to overwrite on every inbound,
+ * silently undoing a name a teammate or the AI's set_contact_name had
+ * set (2026-10-07: "Sussely" reverted to her WhatsApp profile name twice).
+ */
+export function shouldAdoptProfileName(
+  existing: { name?: string | null; phone: string },
+  profileName: string | null | undefined,
+): boolean {
+  if (!profileName || profileName === existing.name) return false;
+  const current = (existing.name ?? "").trim();
+  const digits = normalizePhone(current);
+  return !current || (!!digits && digits === normalizePhone(existing.phone));
+}
+
+/**
  * True when an existing contact is an *exact* normalized match for
  * `phone` (vs only a fuzzy trunk-variant match). The form hard-blocks
  * exact matches but only warns on fuzzy ones.

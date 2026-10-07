@@ -157,6 +157,7 @@ vi.mock('@/lib/contacts/dedupe', () => ({
     phone: '15551230000',
   })),
   isUniqueViolation: () => false,
+  shouldAdoptProfileName: () => false,
 }))
 vi.mock('@/lib/whatsapp/webhook-signature', () => ({
   verifyMetaWebhookSignature: () => true,
