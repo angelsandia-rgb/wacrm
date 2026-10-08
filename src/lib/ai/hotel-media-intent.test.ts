@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout, replyNamesProduct, isArrivalTimeQuestion, isExistingBookingTalk } from './hotel-media-intent'
+import { acceptsPhotoOffer, guestAskedForPhotos, isExplicitHumanRequest, isPolicyQuestion, stripTrailingPhotoOffer, isLocationQuestion, photoOnlyReplyText, productForPhotoRequest, isMedicalCaution, isPaymentRequest, isPhotoPromise, mapsLinkIn, productAskedAbout, replyNamesProduct, isArrivalTimeQuestion, isExistingBookingTalk, isNewQuoteAsk } from './hotel-media-intent'
 import { categorySlugsMentioned } from '@/lib/reservations/upsert'
 
 const HOTEL = [
@@ -251,5 +251,24 @@ describe('isExistingBookingTalk (no promo banner) — VSR 2026-10-07', () => {
   it('a guest browsing still gets the banner', () => {
     for (const t of ['Hola,tiene espacio  para 2 personas la noche del sábado', 'habitacion', 'Quiero una habitación para 2 personas del 20 al 23 de octubre, ¿cuánto sale?'])
       expect(isExistingBookingTalk(t), t).toBe(false)
+  })
+})
+
+describe('isNewQuoteAsk (banner again in a thread in progress) — VSR 2026-10-08', () => {
+  it('reads a request for another option, price or dates as a new quote', () => {
+    for (const t of [
+      'Gracias mire y una opción que sea con hospedaje el domingo aunque no me quede?',
+      '¿Cuánto cuesta la suite?',
+      'Quisiera reservar otra habitación para diciembre',
+      '¿Qué tienen para parejas?',
+    ]) expect(isNewQuoteAsk(t), t).toBe(true)
+  })
+  it('reads follow-ups on something already arranged as not new', () => {
+    for (const t of [
+      'Lo podemos dejar domingo para las 8 de la mañana',
+      'Esque si necesitamos las 10 habitaciones ☹️',
+      'Disculpe me indicaron que hay solicitud de dos masajes, yo soy la masajista',
+      'Si gracias',
+    ]) expect(isNewQuoteAsk(t), t).toBe(false)
   })
 })
