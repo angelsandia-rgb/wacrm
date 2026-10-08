@@ -57,7 +57,7 @@ export async function loadTrailingOutbound(
   db: SupabaseClient,
   conversationId: string,
   sinceISO: string | null,
-): Promise<{ lastCustomerAt: string | null; rows: OutboundRow[] }> {
+): Promise<{ lastCustomerAt: string | null; humanSince: string | null; rows: OutboundRow[] }> {
   let lastQ = db
     .from('messages')
     .select('created_at')
@@ -70,7 +70,21 @@ export async function loadTrailingOutbound(
     .maybeSingle()
   if (lastErr) throw lastErr
   const lastCustomerAt = (last?.created_at as string | undefined) ?? null
-  if (!lastCustomerAt) return { lastCustomerAt: null, rows: [] }
+  if (!lastCustomerAt) return { lastCustomerAt: null, humanSince: null, rows: [] }
+
+  // A brand-new conversation (nothing ever sent by the hotel before this
+  // customer message) is the only place the business app's greeting/away
+  // echo is ignored; in an active thread every teammate reply counts.
+  const { data: prior, error: priorErr } = await db
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['agent', 'bot'])
+    .neq('content_type', 'internal_note')
+    .lt('created_at', lastCustomerAt)
+    .limit(1)
+  if (priorErr) throw priorErr
+  const humanSince = humanReplySince(lastCustomerAt, (prior ?? []).length === 0)
 
   const { data, error } = await db
     .from('messages')
@@ -81,7 +95,10 @@ export async function loadTrailingOutbound(
     .gt('created_at', lastCustomerAt)
     .order('created_at', { ascending: true })
   if (error) throw error
-  return { lastCustomerAt, rows: (data ?? []) as OutboundRow[] }
+  const rows = ((data ?? []) as OutboundRow[]).filter(
+    (r) => r.sender_type !== 'agent' || Date.parse(r.created_at) > Date.parse(humanSince),
+  )
+  return { lastCustomerAt, humanSince, rows }
 }
 
 /** Count human (`agent`) outbound rows after `afterISO`. */
@@ -115,6 +132,15 @@ export const AI_RESUMED_NOTE_PREFIX = '▶️'
  *  rows (Coexistence) seconds after the customer writes; a person takes
  *  longer. Anything faster than this is treated as automatic. */
 const AUTO_REPLY_MAX_MS = 15_000
+
+/** Pure: from when an `agent` row counts as a teammate answering the
+ *  customer message at `customerAtISO`. In a new conversation the
+ *  business app's greeting/away echo lands within AUTO_REPLY_MAX_MS and is
+ *  not a person (VSR, 2026-10-08); in an active thread every reply counts. */
+export function humanReplySince(customerAtISO: string, isNewConversation: boolean): string {
+  if (!isNewConversation) return customerAtISO
+  return new Date(Date.parse(customerAtISO) + AUTO_REPLY_MAX_MS).toISOString()
+}
 
 /** Pure: given customer + agent rows oldest-first, did a real teammate
  *  answer the customer? Agent rows before the customer's first message

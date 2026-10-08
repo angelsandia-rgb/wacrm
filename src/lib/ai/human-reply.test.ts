@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyTrailingOutbound,
   hasTeammateReply,
+  humanReplySince,
   trailingCustomerTurns,
   type OutboundRow,
 } from './human-reply'
@@ -73,5 +74,18 @@ describe('hasTeammateReply', () => {
   })
   it('a template the team sent before the customer ever wrote does not count', () => {
     expect(hasTeammateReply([r('agent', '2026-10-07T10:00:00Z'), r('customer', '2026-10-07T11:00:00Z')])).toBe(false)
+  })
+})
+
+describe('humanReplySince', () => {
+  // Villa San Ricardo, 2026-10-08: the WhatsApp Business app's greeting +
+  // away message echoed ~4 s after a NEW guest wrote and silenced the AI.
+  const customerAt = '2026-10-08T05:14:27.252Z'
+  const echoAt = Date.parse('2026-10-08T05:14:31.570Z')
+  it('ignores the app echo in a brand-new conversation', () => {
+    expect(echoAt > Date.parse(humanReplySince(customerAt, true))).toBe(false)
+  })
+  it('counts every teammate reply in an active conversation, however fast', () => {
+    expect(echoAt > Date.parse(humanReplySince(customerAt, false))).toBe(true)
   })
 })
