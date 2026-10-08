@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 vi.mock('./auto-reply', () => ({ dispatchInboundToAiReply: vi.fn() }))
+// Which conversations count as answered (an outbound text after the
+// customer's message, app greeting echoes already dropped).
+const answeredIds = vi.hoisted(() => new Set<string>())
+vi.mock('./human-reply', () => ({
+  loadTrailingOutbound: async (_db: unknown, conversationId: string) => ({
+    lastCustomerAt: null,
+    humanSince: null,
+    rows: answeredIds.has(conversationId)
+      ? [{ sender_type: 'agent', content_type: 'text', content_text: 'hola', created_at: '' }]
+      : [],
+  }),
+}))
 
 import { recoverUnansweredInbound } from './inbound-recovery'
 
@@ -20,6 +32,8 @@ interface Fixture {
 }
 
 function db(fx: Fixture) {
+  answeredIds.clear()
+  for (const id of fx.answered ?? []) answeredIds.add(id)
   const inserts: Record<string, unknown>[] = []
   const client = {
     from(table: string) {

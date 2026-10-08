@@ -4969,6 +4969,21 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
     h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
   })
 
+  it('answers a new lead whose only reply so far is the app greeting echo (VSR 2026-10-08, Silvia)', async () => {
+    // loadTrailingOutbound already dropped the echo, but the transcript
+    // still ends on it.
+    h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:15.000Z', rows: [] })
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Me puede dar información sobre su hospedaje?' },
+      { role: 'assistant', content: 'Gracias por su mensaje. Nuestro horario de atención es de 8:00am a 8:00pm.' },
+    ])
+    h.generateReply.mockResolvedValueOnce(reply('¡Con gusto! Tenemos varias habitaciones.'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.generateReply.mock.calls[0][0].messages.at(-1)).toEqual({ role: 'user', content: 'Me puede dar información sobre su hospedaje?' })
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
   it('never answers a message a teammate already answered (owner, 2026-10-07)', async () => {
     h.buildConversationContext.mockResolvedValue([
       { role: 'user', content: '¿Tienen parqueo? ¿A qué hora es el check-in?' },

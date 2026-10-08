@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchInboundToAiReply } from './auto-reply'
+import { loadTrailingOutbound } from './human-reply'
 
 const MIN_AGE_MS = 4 * 60_000
 /** Older than this, a late automatic reply would read as odd — leave it
@@ -91,15 +92,10 @@ export async function recoverUnansweredInbound(
     // between the two left a thread whose last message is our photo and
     // no reply at all — and this sweep skipped it as "answered" (test run
     // 2026-09-24, prueba #27, killed by a deploy mid-reply).
-    const { data: repliesAfter } = await db
-      .from('messages')
-      .select('id')
-      .eq('conversation_id', conv.id)
-      .in('sender_type', ['bot', 'agent'])
-      .eq('content_type', 'text')
-      .gt('created_at', msg.created_at)
-      .limit(1)
-    if (repliesAfter && repliesAfter.length > 0) continue
+    // The business app's greeting/away echo on a new conversation is
+    // not an answer (loadTrailingOutbound drops it — VSR 2026-10-08).
+    const { rows: repliesAfter } = await loadTrailingOutbound(db, conv.id, null)
+    if (repliesAfter.some((r) => r.content_type === 'text')) continue
     const age = now - Date.parse(msg.created_at)
     if (age < MIN_AGE_MS || age > MAX_AGE_MS) continue
 
