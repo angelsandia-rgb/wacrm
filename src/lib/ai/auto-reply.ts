@@ -84,6 +84,7 @@ import {
   loadTrailingOutbound,
   teammateTookOver,
   trailingCustomerTurns,
+  trimTrailingAssistant,
 } from './human-reply'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -707,10 +708,15 @@ export async function dispatchInboundToAiReply(
       humanSince = trailing.humanSince
       const state = classifyTrailingOutbound(trailing.rows)
       if (state.kind === 'human_answered') return
+      // Nothing counted as an answer, so any assistant turns after the
+      // customer's message are the app's greeting/away echo — without this
+      // the transcript ends on them and the AI stays silent (VSR
+      // 2026-10-08, Silvia: a new lead got no reply).
+      if (state.kind === 'unanswered') messages = trimTrailingAssistant(messages)
     } catch (err) {
       console.error('[ai auto-reply] human-reply check failed:', describeError(err))
     }
-    if (messages[messages.length - 1].role !== 'user') return
+    if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return
 
     // We already said goodbye and the customer only says goodbye again —
     // nothing left to add (VSR 2026-10-07: "¡Con mucho gusto!…" then

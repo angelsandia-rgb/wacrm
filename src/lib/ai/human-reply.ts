@@ -188,6 +188,15 @@ export async function teammateTookOver(
   return hasTeammateReply((data ?? []).reverse())
 }
 
+/** Drop the trailing assistant turns so the transcript ends on the
+ *  customer's turn — used when those turns are the business app's
+ *  greeting/away echo, which is not an answer (see humanReplySince). */
+export function trimTrailingAssistant(messages: ChatMessage[]): ChatMessage[] {
+  let end = messages.length
+  while (end > 0 && messages[end - 1].role === 'assistant') end -= 1
+  return messages.slice(0, end)
+}
+
 /** The customer's consecutive trailing turns (what the human answered). */
 export function trailingCustomerTurns(messages: ChatMessage[], max = 4): string[] {
   const out: string[] = []
