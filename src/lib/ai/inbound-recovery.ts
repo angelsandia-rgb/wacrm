@@ -16,7 +16,7 @@
 // rule itself (auto-reply off for the account, or switched off on the
 // thread by a person), so a conversation the bot should stay out of stays
 // silent. An assigned teammate no longer mutes the bot (2026-09-26).
-// Each message is attempted at most once (ai_action_log claim).
+// Each message is attempted at most MAX_ATTEMPTS times (ai_action_log claims).
 // ============================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -27,6 +27,11 @@ const MIN_AGE_MS = 4 * 60_000
  *  to a human. */
 const MAX_AGE_MS = 60 * 60_000
 const MAX_PER_RUN = 20
+/** Attempts per customer message. More than one because the usual cause
+ *  is a provider outage lasting minutes — VSR 2026-10-08: Zernio timed out
+ *  on the reply, its fallback AND the single retry 4 min later, and the
+ *  guest never got that answer. The sweep runs every 5 min. */
+const MAX_ATTEMPTS = 3
 
 export interface InboundRecoveryResult {
   scanned: number
@@ -109,8 +114,8 @@ export async function recoverUnansweredInbound(
       .or(`status.eq.active,last_advanced_at.gte.${since},ended_at.gte.${since}`)
     if (flowError || (flowTouches ?? 0) > 0) continue
 
-    // Claim this message once — a later sweep (or an overlapping one)
-    // must never re-dispatch it.
+    // Claim this attempt — a message is re-dispatched at most
+    // MAX_ATTEMPTS times, however many sweeps see it unanswered.
     const { data: prior } = await db
       .from('ai_action_log')
       .select('id')
@@ -118,8 +123,8 @@ export async function recoverUnansweredInbound(
       .eq('action', 'inbound_recovery')
       .eq('target_id', conv.id)
       .eq('input->>message_id', msg.id)
-      .limit(1)
-    if (prior && prior.length > 0) continue
+      .limit(MAX_ATTEMPTS)
+    if (prior && prior.length >= MAX_ATTEMPTS) continue
 
     const { data: account } = await db
       .from('accounts')
