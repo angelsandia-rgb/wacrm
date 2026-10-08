@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyTrailingOutbound,
   hasTeammateReply,
+  isAppAutoReply,
   trailingCustomerTurns,
   type OutboundRow,
 } from './human-reply'
@@ -73,5 +74,20 @@ describe('hasTeammateReply', () => {
   })
   it('a template the team sent before the customer ever wrote does not count', () => {
     expect(hasTeammateReply([r('agent', '2026-10-07T10:00:00Z'), r('customer', '2026-10-07T11:00:00Z')])).toBe(false)
+  })
+})
+
+describe('isAppAutoReply', () => {
+  // Villa San Ricardo, 2026-10-08: the WhatsApp Business app's greeting +
+  // away message echoed ~4 s after the guest wrote and silenced the AI.
+  const customerAt = '2026-10-08T05:14:27.252+00:00'
+  it('treats an agent echo seconds after the customer as the app, not a person', () => {
+    expect(isAppAutoReply({ sender_type: 'agent', created_at: '2026-10-08T05:14:31.570+00:00' }, customerAt)).toBe(true)
+  })
+  it('treats a later agent reply as a teammate', () => {
+    expect(isAppAutoReply({ sender_type: 'agent', created_at: '2026-10-08T05:15:10.000+00:00' }, customerAt)).toBe(false)
+  })
+  it('never drops bot rows (duplicate guard)', () => {
+    expect(isAppAutoReply({ sender_type: 'bot', created_at: '2026-10-08T05:14:31.570+00:00' }, customerAt)).toBe(false)
   })
 })

@@ -81,7 +81,10 @@ export async function loadTrailingOutbound(
     .gt('created_at', lastCustomerAt)
     .order('created_at', { ascending: true })
   if (error) throw error
-  return { lastCustomerAt, rows: (data ?? []) as OutboundRow[] }
+  // The WhatsApp Business app's own greeting/away messages are not a
+  // teammate answering (2026-10-08: they silenced the AI on new chats).
+  const rows = ((data ?? []) as OutboundRow[]).filter((r) => !isAppAutoReply(r, lastCustomerAt))
+  return { lastCustomerAt, rows }
 }
 
 /** Count human (`agent`) outbound rows after `afterISO`. */
@@ -96,7 +99,8 @@ export async function countHumanRepliesAfter(
     .eq('conversation_id', conversationId)
     .eq('sender_type', 'agent')
     .neq('content_type', 'internal_note')
-    .gt('created_at', afterISO)
+    // Skip the app's instant greeting/away echoes (see isAppAutoReply).
+    .gt('created_at', new Date(Date.parse(afterISO) + AUTO_REPLY_MAX_MS).toISOString())
   if (error) throw error
   return count ?? 0
 }
@@ -115,6 +119,12 @@ export const AI_RESUMED_NOTE_PREFIX = '▶️'
  *  rows (Coexistence) seconds after the customer writes; a person takes
  *  longer. Anything faster than this is treated as automatic. */
 const AUTO_REPLY_MAX_MS = 15_000
+
+/** Pure: an `agent` row that landed within AUTO_REPLY_MAX_MS of the
+ *  customer's message is the business app's automatic reply, not a person. */
+export function isAppAutoReply(row: { sender_type: string; created_at: string }, customerAtISO: string): boolean {
+  return row.sender_type === 'agent' && Date.parse(row.created_at) - Date.parse(customerAtISO) <= AUTO_REPLY_MAX_MS
+}
 
 /** Pure: given customer + agent rows oldest-first, did a real teammate
  *  answer the customer? Agent rows before the customer's first message
