@@ -15,7 +15,8 @@ interface Fixture {
   /** Conversations with an outbound TEXT after the customer's message. */
   answered?: string[]
   flowTouches?: Record<string, number>
-  claimed?: string[]
+  /** Prior recovery attempts per message id. */
+  claimed?: Record<string, number>
 }
 
 function db(fx: Fixture) {
@@ -54,8 +55,8 @@ function db(fx: Fixture) {
           }
           if (table === 'flow_runs') return resolve({ count: fx.flowTouches?.[filters.conversation_id] ?? 0, error: null })
           if (table === 'ai_action_log') {
-            const claimed = (fx.claimed ?? []).includes(filters['input->>message_id'])
-            return resolve({ data: claimed ? [{ id: 'x' }] : [], error: null })
+            const n = fx.claimed?.[filters['input->>message_id']] ?? 0
+            return resolve({ data: Array.from({ length: n }, (_, i) => ({ id: `x${i}` })), error: null })
           }
           return resolve({ data: [], error: null })
         },
@@ -90,7 +91,7 @@ describe('recoverUnansweredInbound', () => {
     expect(res.recovered).toBe(1)
   })
 
-  it('leaves answered, already-retried, flow-consumed, non-text and too-recent messages alone', async () => {
+  it('leaves answered, retried 3 times, flow-consumed, non-text and too-recent messages alone', async () => {
     const dispatch = vi.fn()
     const { client } = db({
       conversations: [conv('answered'), conv('retried'), conv('flow'), conv('image'), conv('fresh', 2)],
@@ -103,10 +104,17 @@ describe('recoverUnansweredInbound', () => {
       },
       answered: ['answered'],
       flowTouches: { flow: 1 },
-      claimed: ['m2'],
+      claimed: { m2: 3 },
     })
     const res = await recoverUnansweredInbound(client, { now: NOW, dispatch })
     expect(res.recovered).toBe(0)
     expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('retries a message whose earlier attempts failed to send, up to 3 times (Zernio outage, VSR 2026-10-08)', async () => {
+    const dispatch = vi.fn()
+    const { client } = db({ conversations: [conv('c1')], lastCustomer: { c1: customerText('m1') }, claimed: { m1: 2 } })
+    const res = await recoverUnansweredInbound(client, { now: NOW, dispatch })
+    expect(res.recovered).toBe(1)
   })
 })
