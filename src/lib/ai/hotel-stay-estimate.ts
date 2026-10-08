@@ -281,6 +281,8 @@ export async function computeStayEstimateStatus(
   if (!rr || !rr.check_in || !rr.check_out) return { status: 'incomplete' }
   if (!rr.guests && !rr.adults) return { status: 'incomplete' }
   if (todayISO && rr.check_in < todayISO) return { status: 'incomplete' }
+  // No room picked yet ("1 habitación para hoy") — keep collecting, not an owner alert.
+  if (!rr.product_id && !rr.service_name?.trim()) return { status: 'incomplete' }
 
   const productId = await resolveStayProductId(db, accountId, rr)
   if (!productId) return { status: 'unpriceable', reason: 'no_product_match' }

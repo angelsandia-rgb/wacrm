@@ -4273,7 +4273,7 @@ async function sendPastDateClarification(args: {
   const text =
     `Una aclaración importante: la fecha que tengo anotada${what} (${formatDateEs(dateISO)}) ya pasó, ` +
     `así que todavía no la he registrado. ¿Me confirma para qué fecha la desea? Con mucho gusto se la dejo lista. 😊`
-  await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText: text })
+  await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText: text, senderType: 'bot' })
   await db.from('ai_action_log').insert({
     account_id: accountId,
     actor_user_id: configOwnerUserId,
@@ -4607,6 +4607,9 @@ async function sendReservationNudge(args: {
     conversationId,
     messageType: 'text',
     contentText: text,
+    // 'bot', not the default 'agent': an 'agent' row reads as a teammate
+    // reply (human-reply check, teammateTookOver).
+    senderType: 'bot',
   })
 
   await db.from('ai_action_log').insert({

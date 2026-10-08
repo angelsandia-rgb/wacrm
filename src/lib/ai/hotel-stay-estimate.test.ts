@@ -243,6 +243,16 @@ describe('computeStayEstimateStatus', () => {
     expect(res).toEqual({ status: 'unpriceable', reason: 'no_product_match' })
   })
 
+  it('is incomplete (no alert) while the guest has not picked a room yet', async () => {
+    const res = await computeStayEstimateStatus(
+      makeDb2({ reservation: { ...RESV, service_name: null, product_id: null }, rates: RATES, products: [] }),
+      'acct-1',
+      'cv-1',
+      'GTQ',
+    )
+    expect(res).toEqual({ status: 'incomplete' })
+  })
+
   it('computes the correct mixed-rate total and text when the name resolves cleanly', async () => {
     // check_in Wed, check_out Fri (exclusive) = Wed(500) + Thu(500) = 1000.
     const res = await computeStayEstimateStatus(
