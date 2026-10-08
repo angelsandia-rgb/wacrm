@@ -2,12 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ChatMessage } from './types'
 
 /**
- * "A human already answered" handling for AI auto-reply (owner's rule,
- * 2026-09-26): the bot never pauses itself any more, so when a teammate
- * replies to the customer before the bot does (the debounce window, or a
- * thread a human is actively working), the bot must first check whether
- * that human reply already covers what the customer asked. Covered →
- * stay quiet. Not covered → answer ONLY what is still missing.
+ * "A human already answered" handling for hotel AI auto-reply: the bot
+ * never pauses itself, but a customer message a teammate already answered
+ * is theirs — the AI stays quiet on it (owner, 2026-10-07; it used to
+ * fill in whatever the teammate left out).
  *
  * A "human" message is an outbound `sender_type = 'agent'` row — inbox
  * sends, the business's own WhatsApp app (echoes) and the public API.
@@ -164,17 +162,6 @@ export async function teammateTookOver(
   return hasTeammateReply((data ?? []).reverse())
 }
 
-/**
- * Drop the trailing assistant turns (the human's reply) so the
- * transcript ends on the customer's turn again — required by Anthropic
- * and the shape every downstream step expects.
- */
-export function trimTrailingAssistant(messages: ChatMessage[]): ChatMessage[] {
-  let end = messages.length
-  while (end > 0 && messages[end - 1].role === 'assistant') end -= 1
-  return messages.slice(0, end)
-}
-
 /** The customer's consecutive trailing turns (what the human answered). */
 export function trailingCustomerTurns(messages: ChatMessage[], max = 4): string[] {
   const out: string[] = []
@@ -183,44 +170,4 @@ export function trailingCustomerTurns(messages: ChatMessage[], max = 4): string[
     out.unshift(messages[i].content)
   }
   return out
-}
-
-export const HUMAN_REPLY_CHECK_PROMPT = `Eres un verificador interno de un equipo de atención por WhatsApp. No hablas con el cliente.
-Recibes los últimos mensajes de un cliente y la respuesta que YA le dio un asesor humano del equipo.
-Decide si la respuesta del asesor ya atiende TODO lo que el cliente preguntó o pidió en esos mensajes.
-- Si ya lo atiende (aunque sea diciendo que lo revisa, que le confirma luego, o saludando cuando el cliente solo saludó), responde exactamente: CUBIERTO
-- Si quedó alguna pregunta o pedido concreto sin atender, responde exactamente: PENDIENTE: <en pocas palabras, qué quedó sin atender>
-No escribas nada más.`
-
-export function buildHumanReplyCheckInput(customerTurns: string[], humanTexts: string[]): string {
-  return [
-    'Mensajes del cliente:',
-    ...customerTurns.map((t) => `- ${t}`),
-    '',
-    'Respuesta del asesor humano:',
-    ...humanTexts.map((t) => `- ${t}`),
-  ].join('\n')
-}
-
-export type HumanReplyVerdict = { covered: true } | { covered: false; pending: string }
-
-/**
- * Parse the checker's answer. Anything that isn't a clear PENDIENTE is
- * treated as covered: when a person is already on the thread, staying
- * quiet is the safe default (a wrong extra bot message can contradict
- * what the teammate just said).
- */
-export function parseHumanReplyVerdict(raw: string): HumanReplyVerdict {
-  const text = raw.trim()
-  const m = /^PENDIENTE\s*:?\s*([\s\S]*)$/i.exec(text)
-  if (!m) return { covered: true }
-  const pending = m[1].trim()
-  return { covered: false, pending: pending || 'lo que el cliente preguntó y el asesor no respondió' }
-}
-
-/** System-prompt addendum for the reply that fills the gap. */
-export function humanReplyGapNote(humanTexts: string[], pending: string): string {
-  return `IMPORTANTE — UN ASESOR HUMANO YA RESPONDIÓ: después del último mensaje del cliente, un asesor del equipo ya le escribió:
-${humanTexts.map((t) => `«${t}»`).join('\n')}
-No repitas, no resumas y no contradigas lo que dijo el asesor, y no vuelvas a saludar. Responde SOLO lo que quedó pendiente: ${pending}. Sé breve.`
 }

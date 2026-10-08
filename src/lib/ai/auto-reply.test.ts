@@ -708,10 +708,10 @@ describe('dispatchInboundToAiReply — debounce', () => {
     expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1')
   })
 
-  it('gives hotel staff 30 seconds of customer silence before generating', async () => {
+  it('gives hotel staff 2 minutes to answer before the AI generates (owner, 2026-10-07)', async () => {
     h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1', 30_000)
+    expect(h.waitForQuietPeriod).toHaveBeenCalledWith('conv-1', 120_000)
   })
 
   it('passes the recent staff exchange to the hotel generation prompt', async () => {
@@ -4908,7 +4908,7 @@ describe('dispatchInboundToAiReply — non-hotel verticals keep the long-standin
   })
 })
 
-describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner, 2026-09-26)', () => {
+describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner, 2026-10-07)', () => {
   const HUMAN_ROW = {
     sender_type: 'agent',
     content_type: 'text',
@@ -4926,39 +4926,13 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
     h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
   })
 
-  it('stays quiet when the human reply already covers the question', async () => {
-    h.generateReply.mockResolvedValueOnce(reply('CUBIERTO'))
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.generateReply).toHaveBeenCalledTimes(1) // only the check
-    const checkInput = h.generateReply.mock.calls[0][0].messages[0].content as string
-    expect(checkInput).toContain('¿Tienen parqueo?')
-    expect(checkInput).toContain('Sí, tenemos parqueo gratis.')
-    expect(h.engineSendText).not.toHaveBeenCalled()
-  })
-
-  it('answers only what is still missing when the human reply left something open', async () => {
+  it('never answers a message a teammate already answered (owner, 2026-10-07)', async () => {
     h.buildConversationContext.mockResolvedValue([
       { role: 'user', content: '¿Tienen parqueo? ¿A qué hora es el check-in?' },
       { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
     ])
-    h.generateReply
-      .mockResolvedValueOnce(reply('PENDIENTE: la hora del check-in'))
-      .mockResolvedValueOnce(reply('El check-in es a partir de las 3:00 pm.'))
     await dispatchInboundToAiReply(ARGS)
-    const main = h.generateReply.mock.calls[1][0]
-    expect(main.systemPrompt).toContain('UN ASESOR HUMANO YA RESPONDIÓ')
-    expect(main.systemPrompt).toContain('la hora del check-in')
-    // The transcript ends on the customer's turn again (the human's reply
-    // lives in the prompt note, not as a trailing assistant turn).
-    expect(main.messages.at(-1)).toEqual({ role: 'user', content: '¿Tienen parqueo? ¿A qué hora es el check-in?' })
-    expect(h.engineSendText).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'El check-in es a partir de las 3:00 pm.' }),
-    )
-  })
-
-  it('stays quiet when the check itself fails — never talks over a teammate blind', async () => {
-    h.generateReply.mockRejectedValueOnce(new AiError('bad key', { code: 'invalid_key' }))
-    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
@@ -4972,22 +4946,13 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('re-checks instead of sending when a teammate replies while the reply is being generated', async () => {
-    h.loadTrailingOutbound
-      .mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
-      .mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
+  it('drops its reply when a teammate answers while it is being generated', async () => {
+    h.loadTrailingOutbound.mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
     h.countHumanRepliesAfter.mockResolvedValueOnce(1)
-    h.generateReply
-      .mockResolvedValueOnce(reply('Sí, hay parqueo.')) // first pass, never sent
-      .mockResolvedValueOnce(reply('CUBIERTO')) // re-run's check
-    h.buildConversationContext
-      .mockResolvedValueOnce([{ role: 'user', content: '¿Tienen parqueo?' }])
-      .mockResolvedValueOnce([
-        { role: 'user', content: '¿Tienen parqueo?' },
-        { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
-      ])
+    h.generateReply.mockResolvedValueOnce(reply('Sí, hay parqueo.'))
+    h.buildConversationContext.mockResolvedValueOnce([{ role: 'user', content: '¿Tienen parqueo?' }])
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.generateReply).toHaveBeenCalledTimes(1)
   })
 })

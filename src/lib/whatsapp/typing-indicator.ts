@@ -33,7 +33,7 @@ const REFRESH_MS = 20_000
  *  forgets to wire it) can't leave a loop calling the API forever for
  *  one stale conversation. Comfortably covers the worst realistic case
  *  (debounce + generation + one retry) with room to spare. */
-const MAX_DURATION_MS = 120_000
+const MAX_DURATION_MS = 200_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

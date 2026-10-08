@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyTrailingOutbound,
   hasTeammateReply,
-  parseHumanReplyVerdict,
   trailingCustomerTurns,
-  trimTrailingAssistant,
   type OutboundRow,
 } from './human-reply'
 
@@ -46,24 +44,6 @@ describe('classifyTrailingOutbound', () => {
   })
 })
 
-describe('parseHumanReplyVerdict', () => {
-  it('reads CUBIERTO as covered', () => {
-    expect(parseHumanReplyVerdict('CUBIERTO')).toEqual({ covered: true })
-  })
-
-  it('reads PENDIENTE with what is missing', () => {
-    expect(parseHumanReplyVerdict('PENDIENTE: la hora del check-in')).toEqual({
-      covered: false,
-      pending: 'la hora del check-in',
-    })
-  })
-
-  it('treats anything unclear as covered (stay quiet next to a teammate)', () => {
-    expect(parseHumanReplyVerdict('no estoy seguro')).toEqual({ covered: true })
-    expect(parseHumanReplyVerdict('')).toEqual({ covered: true })
-  })
-})
-
 describe('transcript helpers', () => {
   const msgs = [
     { role: 'assistant' as const, content: 'Bienvenido' },
@@ -72,12 +52,8 @@ describe('transcript helpers', () => {
     { role: 'assistant' as const, content: 'humano' },
   ]
 
-  it('drops the trailing assistant turns', () => {
-    expect(trimTrailingAssistant(msgs).at(-1)).toEqual({ role: 'user', content: 'b' })
-  })
-
-  it('returns the customer turns the human answered', () => {
-    expect(trailingCustomerTurns(trimTrailingAssistant(msgs))).toEqual(['a', 'b'])
+  it('returns the customer turns at the end of the transcript', () => {
+    expect(trailingCustomerTurns(msgs.slice(0, 3))).toEqual(['a', 'b'])
   })
 })
 
