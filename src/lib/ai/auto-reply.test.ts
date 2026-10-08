@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   upsertReservationRequest: vi.fn(),
   loadTrailingOutbound: vi.fn(),
   countHumanRepliesAfter: vi.fn(),
+  teammateTookOver: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     claim: true as boolean,
@@ -135,6 +136,7 @@ vi.mock('./human-reply', async (importOriginal) => {
     ...actual,
     loadTrailingOutbound: h.loadTrailingOutbound,
     countHumanRepliesAfter: h.countHumanRepliesAfter,
+    teammateTookOver: h.teammateTookOver,
   }
 })
 vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
@@ -666,6 +668,7 @@ beforeEach(() => {
   h.waitForQuietPeriod.mockReset().mockResolvedValue(true)
   h.loadTrailingOutbound.mockReset().mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:00.000Z', rows: [] })
   h.countHumanRepliesAfter.mockReset().mockResolvedValue(0)
+  h.teammateTookOver.mockReset().mockResolvedValue(false)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -2998,6 +3001,46 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
         contentText: 'Habitaciones',
         senderType: 'bot',
       }),
+    )
+  })
+
+  // Owner, 2026-10-08: a thread the hotel staff is already handling gets
+  // no promotional banner unless the guest asks for a new quote.
+  it('skips the banner when a teammate is already handling the thread', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.teammateTookOver.mockResolvedValue(true)
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Esque si necesitamos las 10 habitaciones' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Entiendo, para esas fechas solo quedan 3.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('still sends it in a thread in progress when the guest asks for a new option', async () => {
+    h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.teammateTookOver.mockResolvedValue(true)
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Gracias mire y una opción que sea con hospedaje el domingo aunque no me quede?' },
+    ])
+    h.generateReply.mockResolvedValue({
+      text: 'Le comparto las habitaciones.',
+      handoff: false,
+      markDealWon: false,
+      moveToStageName: null,
+      sendCatalog: false,
+      sendCategoryBannerName: 'Habitaciones',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      expect.objectContaining({ mediaUrl: 'https://cdn.example.com/rooms.jpg' }),
     )
   })
 

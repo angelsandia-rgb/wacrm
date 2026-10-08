@@ -304,6 +304,16 @@ export function isExistingBookingTalk(message: string | null | undefined): boole
   return EXISTING_BOOKING_RE.test(normalizeForMatch(message ?? ''))
 }
 
+/** The guest is asking for a NEW quote (another option, a price, other
+ *  dates) — the only time a thread already in progress gets a banner
+ *  again (owner, 2026-10-08). Accents already stripped. */
+const NEW_QUOTE_RE =
+  /\b(?:opcion(?:es)?|otr[ao]s? (?:habitacion\w*|fecha\w*|reserva\w*|paquete\w*|cotizacion\w*)|nuev[ao] (?:reserva\w*|cotizacion)|cotiz\w*|precios?|tarifas?|cuanto (?:cuesta|sale|seria|cobran|es|vale)|que (?:tienen|ofrecen|incluye)|que hay (?:de|para)|quiero reservar|quisiera reservar|me interesa\w*)\b/
+
+export function isNewQuoteAsk(message: string | null | undefined): boolean {
+  return NEW_QUOTE_RE.test(normalizeForMatch(message ?? ''))
+}
+
 const ARRIVAL_TIME_RE =
   /\b(a que hora|llego|llegar|llegamos|llegaria|llegariamos|llegada|entrar|ingresar|check\s*(?:in|out)|early check|late check|arrive|arrival)\b/
 

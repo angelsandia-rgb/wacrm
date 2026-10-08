@@ -60,6 +60,7 @@ import {
   guestAskedForPhotos,
   isArrivalTimeQuestion,
   isExistingBookingTalk,
+  isNewQuoteAsk,
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
@@ -1532,7 +1533,15 @@ For airport transport, record the guest's request in nota on the relevant existi
     // already have — a booking, a payment, a quote in progress (VSR
     // 2026-10-07: a first-payment receipt got the Habitaciones banner).
     const recentInbound = trailingCustomerTurns(messages).join('\n')
-    if (isHotel && !isExistingBookingTalk(recentInbound)) {
+    // A thread already in progress (a teammate replied, or a request is
+    // on file) gets a banner only for a genuinely new quote; otherwise the
+    // AI just assists (owner, 2026-10-08: a masseuse coordinating an
+    // arranged massage and a group the staff was already handling both got
+    // a promotional banner).
+    const threadInProgress = Boolean(teammateNote) || Boolean(activeReservations)
+    const bannerAllowed =
+      isHotel && !isExistingBookingTalk(recentInbound) && (!threadInProgress || isNewQuoteAsk(recentInbound))
+    if (bannerAllowed) {
       const lowerOutboundText = outboundText.toLowerCase()
       // A reply naming two or more category LABELS together (not
       // products) is the generic "¿cuál le interesa: Habitaciones, Spa,
@@ -1970,7 +1979,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
     // is only ever taught for hotel accounts with at least one category
     // banner on file, but re-check here too — a hallucination or an
     // injection attempt must never send an arbitrary image.
-    if (sendCategoryBannerName && isHotel && !isExistingBookingTalk(recentInbound)) {
+    if (sendCategoryBannerName && bannerAllowed) {
       try {
         await autoSendCategoryBanner({
           db,
