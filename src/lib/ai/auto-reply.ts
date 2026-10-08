@@ -78,16 +78,11 @@ import { claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNote
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import {
-  buildHumanReplyCheckInput,
   classifyTrailingOutbound,
   countHumanRepliesAfter,
-  HUMAN_REPLY_CHECK_PROMPT,
-  humanReplyGapNote,
   loadTrailingOutbound,
-  parseHumanReplyVerdict,
   teammateTookOver,
   trailingCustomerTurns,
-  trimTrailingAssistant,
 } from './human-reply'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -96,6 +91,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
  *  longer stops the bot — the owner's rule is that it never goes quiet
  *  on its own. Postgres `integer` max. */
 const UNBOUNDED_REPLY_SLOTS = 2147483647
+/** Hotel: how long the AI waits for the staff to answer a message first. */
+const HOTEL_STAFF_WAIT_MS = 120_000
 
 /**
  * Hotel vertical only (owner, 2026-09-26 — Villa San Ricardo): the bot
@@ -302,9 +299,6 @@ interface DispatchArgs {
    *  which only picks up messages that have already sat unanswered for
    *  minutes, so there is no burst left to coalesce. */
   skipDebounce?: boolean
-  /** Set on the one re-run triggered when a teammate replied while this
-   *  dispatch was generating — never re-runs a second time. */
-  humanRaceRetry?: boolean
 }
 
 async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
@@ -487,8 +481,9 @@ export async function dispatchInboundToAiReply(
   // drop the customer's message (worst case a duplicate, far better
   // than silence).
   let isLatest: boolean
-  // Hotels allow 30s for native-app staff intervention (owner, 2026-09-28).
-  // Other verticals retain the global debounce; race retries skip either wait.
+  // Hotels give the staff 2 minutes to answer first (owner, 2026-10-07);
+  // the AI only replies if nobody from the hotel did. Other verticals keep
+  // the global debounce; recovery-sweep dispatches skip either wait.
   let neverSelfPause = false
   try {
     neverSelfPause = await botNeverSelfPauses(supabaseAdmin(), accountId)
@@ -497,7 +492,7 @@ export async function dispatchInboundToAiReply(
   }
   try {
     isLatest = args.skipDebounce ? true : neverSelfPause
-      ? await waitForQuietPeriod(conversationId, 30_000)
+      ? await waitForQuietPeriod(conversationId, HOTEL_STAFF_WAIT_MS)
       : await waitForQuietPeriod(conversationId)
   } catch (err) {
     console.error('[ai auto-reply] debounce check failed, proceeding without it:', err)
@@ -690,14 +685,9 @@ export async function dispatchInboundToAiReply(
     // would risk the opposite, previously-fixed bug — a duplicate
     // reply to the same customer message; see debounce.ts.)
     //
-    // Exception, hotel vertical only (owner's rule, 2026-09-26): when ONLY
-    // a teammate answered the customer's latest message (no bot/platform
-    // row after it), the bot reads that human reply first — covered → stay
-    // quiet; something left unanswered → reply with just that
-    // (humanReplyNote below).
-    let humanReplyNote: string | undefined
+    // Hotel vertical (owner, 2026-10-07): a message someone from the hotel
+    // already answered is theirs — the AI never answers it too.
     let lastCustomerAt: string | null = null
-    let knownHumanReplies = 0
     // Hotel: a teammate already replied in this conversation. The AI keeps
     // assisting (owner, 2026-10-07: not muted), but is told a person is
     // here — it used to offer "¿le conecto con alguien del equipo?" to a
@@ -714,37 +704,9 @@ export async function dispatchInboundToAiReply(
       const trailing = await loadTrailingOutbound(db, conversationId, conv.ai_context_reset_at)
       lastCustomerAt = trailing.lastCustomerAt
       const state = classifyTrailingOutbound(trailing.rows)
-      if (state.kind === 'human_answered') {
-        knownHumanReplies = trailing.rows.filter((r) => r.sender_type === 'agent').length
-        messages = trimTrailingAssistant(messages)
-        if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return
-        const check = await generateReplyWithOneRetry({
-          config,
-          systemPrompt: HUMAN_REPLY_CHECK_PROMPT,
-          messages: [
-            {
-              role: 'user',
-              content: buildHumanReplyCheckInput(trailingCustomerTurns(messages), state.humanTexts),
-            },
-          ],
-        })
-        void logAiUsage(db, {
-          accountId,
-          conversationId,
-          mode: 'auto_reply',
-          provider: config.provider,
-          model: config.model,
-          usage: check.usage,
-        })
-        const verdict = parseHumanReplyVerdict(check.text)
-        if (verdict.covered) return // the teammate already answered it
-        humanReplyNote = humanReplyGapNote(state.humanTexts, verdict.pending)
-      }
+      if (state.kind === 'human_answered') return
     } catch (err) {
-      // A teammate is on this thread (or the read failed): when in doubt,
-      // don't talk over them. The pre-existing rule below still applies.
       console.error('[ai auto-reply] human-reply check failed:', describeError(err))
-      if (knownHumanReplies > 0) return
     }
     if (messages[messages.length - 1].role !== 'user') return
 
@@ -996,7 +958,7 @@ export async function dispatchInboundToAiReply(
       activeReservations,
       staleReservations,
     })
-    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', teammateNote, humanReplyNote].filter(Boolean).join('\n\n')
+    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', teammateNote].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {
@@ -1766,15 +1728,11 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
     }
 
     // A teammate replied WHILE this reply was being generated (the model
-    // call takes tens of seconds). Don't send a reply written without
-    // seeing theirs: re-run once, which reads the human reply and decides
-    // whether anything is still missing (the actions above are
-    // idempotent upserts, safe to repeat).
-    if (neverSelfPause && lastCustomerAt && !args.humanRaceRetry) {
-      const humanNow = await countHumanRepliesAfter(db, conversationId, lastCustomerAt).catch(() => knownHumanReplies)
-      if (humanNow > knownHumanReplies) {
-        console.warn(`[ai auto-reply] conversation ${conversationId}: a teammate replied mid-generation — re-checking before sending`)
-        await dispatchInboundToAiReply({ ...args, skipDebounce: true, humanRaceRetry: true, stopTyping: undefined })
+    // call takes tens of seconds): their answer stands, drop ours.
+    if (neverSelfPause && lastCustomerAt) {
+      const humanNow = await countHumanRepliesAfter(db, conversationId, lastCustomerAt).catch(() => 0)
+      if (humanNow > 0) {
+        console.warn(`[ai auto-reply] conversation ${conversationId}: a teammate replied mid-generation — not sending`)
         return
       }
     }
