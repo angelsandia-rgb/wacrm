@@ -664,7 +664,7 @@ beforeEach(() => {
   h.checkFreeBusy.mockReset().mockResolvedValue([])
   h.createEvent.mockReset().mockResolvedValue({ eventId: 'evt-1', htmlLink: 'https://calendar.google.com/evt-1', meetLink: 'https://meet.google.com/abc' })
   h.waitForQuietPeriod.mockReset().mockResolvedValue(true)
-  h.loadTrailingOutbound.mockReset().mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
+  h.loadTrailingOutbound.mockReset().mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:00.000Z', rows: [] })
   h.countHumanRepliesAfter.mockReset().mockResolvedValue(0)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
@@ -4923,7 +4923,7 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
       { role: 'user', content: '¿Tienen parqueo?' },
       { role: 'assistant', content: 'Sí, tenemos parqueo gratis.' },
     ])
-    h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
+    h.loadTrailingOutbound.mockResolvedValue({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:00.000Z', rows: [HUMAN_ROW] })
   })
 
   it('never answers a message a teammate already answered (owner, 2026-10-07)', async () => {
@@ -4939,6 +4939,7 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
   it('still stands down when the bot itself already answered (duplicate guard unchanged)', async () => {
     h.loadTrailingOutbound.mockResolvedValue({
       lastCustomerAt: '2026-09-26T10:00:00.000Z',
+      humanSince: '2026-09-26T10:00:00.000Z',
       rows: [{ ...HUMAN_ROW, sender_type: 'bot' }],
     })
     await dispatchInboundToAiReply(ARGS)
@@ -4947,7 +4948,7 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
   })
 
   it('drops its reply when a teammate answers while it is being generated', async () => {
-    h.loadTrailingOutbound.mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', rows: [] })
+    h.loadTrailingOutbound.mockResolvedValueOnce({ lastCustomerAt: '2026-09-26T10:00:00.000Z', humanSince: '2026-09-26T10:00:00.000Z', rows: [] })
     h.countHumanRepliesAfter.mockResolvedValueOnce(1)
     h.generateReply.mockResolvedValueOnce(reply('Sí, hay parqueo.'))
     h.buildConversationContext.mockResolvedValueOnce([{ role: 'user', content: '¿Tienen parqueo?' }])

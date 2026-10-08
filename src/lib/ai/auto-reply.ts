@@ -687,7 +687,8 @@ export async function dispatchInboundToAiReply(
     //
     // Hotel vertical (owner, 2026-10-07): a message someone from the hotel
     // already answered is theirs — the AI never answers it too.
-    let lastCustomerAt: string | null = null
+    // From when an agent row counts as a teammate answer (see humanReplySince).
+    let humanSince: string | null = null
     // Hotel: a teammate already replied in this conversation. The AI keeps
     // assisting (owner, 2026-10-07: not muted), but is told a person is
     // here — it used to offer "¿le conecto con alguien del equipo?" to a
@@ -702,7 +703,7 @@ export async function dispatchInboundToAiReply(
     }
     if (neverSelfPause) try {
       const trailing = await loadTrailingOutbound(db, conversationId, conv.ai_context_reset_at)
-      lastCustomerAt = trailing.lastCustomerAt
+      humanSince = trailing.humanSince
       const state = classifyTrailingOutbound(trailing.rows)
       if (state.kind === 'human_answered') return
     } catch (err) {
@@ -1729,8 +1730,8 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
 
     // A teammate replied WHILE this reply was being generated (the model
     // call takes tens of seconds): their answer stands, drop ours.
-    if (neverSelfPause && lastCustomerAt) {
-      const humanNow = await countHumanRepliesAfter(db, conversationId, lastCustomerAt).catch(() => 0)
+    if (neverSelfPause && humanSince) {
+      const humanNow = await countHumanRepliesAfter(db, conversationId, humanSince).catch(() => 0)
       if (humanNow > 0) {
         console.warn(`[ai auto-reply] conversation ${conversationId}: a teammate replied mid-generation — not sending`)
         return
