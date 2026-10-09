@@ -32,6 +32,7 @@ import {
   renderFollowupText,
   normalizeFollowupGoal,
   isClosingMessage,
+  botAwaitsAnswer,
   type FollowupStep,
   type FollowupGoal,
 } from './followups';
@@ -334,6 +335,21 @@ async function evaluateConversation(
 
   // The customer signed off ("ok, muchas gracias") — nothing to recover.
   if (isClosingMessage(lcRow.content_text as string | null)) return null;
+
+  // Our last reply asked nothing (a farewell, "aquí estamos para lo que
+  // necesite") — the customer owes us no answer, so there is no lead to
+  // recover. Only text replies count; a banner/image alone says nothing.
+  const { data: lastBotRows } = await admin
+    .from('messages')
+    .select('content_text')
+    .eq('conversation_id', args.conversationId)
+    .eq('sender_type', 'bot')
+    .eq('content_type', 'text')
+    .gt('created_at', lastCustomerAt.toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const lastBot = lastBotRows?.[0];
+  if (lastBot && !botAwaitsAnswer(lastBot.content_text as string | null)) return null;
 
   // Hotel: a teammate replied in this thread — it's in human hands even
   // without an assignment (2026-10-07: a nudge went out 10 minutes after

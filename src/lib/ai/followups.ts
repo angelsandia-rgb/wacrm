@@ -155,6 +155,7 @@ const CLOSING_CORE = new Set([
   'gracias', 'thanks', 'thank', 'ok', 'okay', 'oki', 'listo', 'perfecto', 'excelente',
   'genial', 'bendiciones', 'bendecido', 'bendecida', 'igualmente', 'saludos', 'amable',
   'vemos', 'entendido', 'enterado', 'enterada', 'dale', 'va', 'vale',
+  'agradezco', 'agradecemos', 'agradecido', 'agradecida', 'agradecidos', 'agradecidas',
 ]);
 const CLOSING_FILLER = new Set([
   'muchas', 'muchisimas', 'mil', 'muy', 'bien', 'super', 'que', 'tenga', 'tengan', 'buen',
@@ -176,6 +177,17 @@ export function isClosingMessage(text: string | null | undefined): boolean {
     words.some((w) => CLOSING_CORE.has(w)) &&
     words.every((w) => CLOSING_CORE.has(w) || CLOSING_FILLER.has(w))
   );
+}
+
+/**
+ * Did our last reply leave the customer something to answer? A nudge
+ * only makes sense after a question; after a sign-off ("¡Siempre a la
+ * orden! Será un gusto recibirle…") the conversation is closed and
+ * "¿Sigue con dudas…?" reads as a bot that wasn't listening (VSR
+ * 2026-10-09: a guest said "Les agradezco" and still got one).
+ */
+export function botAwaitsAnswer(lastBotText: string | null | undefined): boolean {
+  return /\?/.test(lastBotText ?? '');
 }
 
 /** Local hour (0-23) of `date` read in `timeZone`. */
