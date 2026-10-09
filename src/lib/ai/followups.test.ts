@@ -6,6 +6,7 @@ import {
   nextDueFollowup,
   normalizeFollowupGoal,
   isClosingMessage,
+  botAwaitsAnswer,
   FOLLOWUP_MIN_MINUTES,
   FOLLOWUP_MAX_MINUTES,
   type FollowupStep,
@@ -239,5 +240,17 @@ describe('isClosingMessage', () => {
     for (const t of ['Gracias, ¿y el precio?', 'Será el número de la compañera de arquidiócesis de Los Altos?', 'Aprovecho a adelantar solicitud reserva para próximo jueves 15 también', 'Si', 'Hola, buenas tardes', '', null]) {
       expect(isClosingMessage(t), String(t)).toBe(false);
     }
+  });
+});
+
+describe('no nudge after a closed conversation (VSR 2026-10-09)', () => {
+  it('"Les agradezco" is a sign-off', () => {
+    expect(isClosingMessage('Les agradezco')).toBe(true);
+    expect(isClosingMessage('Muy agradecida')).toBe(true);
+  });
+  it('a farewell reply awaits nothing; a question does', () => {
+    expect(botAwaitsAnswer('¡Siempre a la orden! Será un gusto recibirle en una próxima oportunidad. 😊')).toBe(false);
+    expect(botAwaitsAnswer('¡Con mucho gusto! Aquí estamos para cuando decidan, será un placer atenderles. 😊')).toBe(false);
+    expect(botAwaitsAnswer('Tenemos Suite Clásica y Premium. ¿Cuál le gustaría conocer?')).toBe(true);
   });
 });
