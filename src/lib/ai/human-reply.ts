@@ -162,15 +162,7 @@ export async function teammateTookOver(
   conversationId: string,
   resetAtISO: string | null,
 ): Promise<boolean> {
-  const { data: resumed } = await db
-    .from('messages')
-    .select('created_at')
-    .eq('conversation_id', conversationId)
-    .eq('content_type', 'internal_note')
-    .like('content_text', `${AI_RESUMED_NOTE_PREFIX}%`)
-    .order('created_at', { ascending: false })
-    .limit(1)
-  const since = [resetAtISO, (resumed?.[0]?.created_at as string | undefined) ?? null]
+  const since = [resetAtISO, await lastResumedAt(db, conversationId)]
     .filter((s): s is string => !!s)
     .sort()
     .pop()
@@ -186,6 +178,95 @@ export async function teammateTookOver(
   const { data, error } = await q.order('created_at', { ascending: false }).limit(500)
   if (error) throw error
   return hasTeammateReply((data ?? []).reverse())
+}
+
+/** When "Reanudar IA" was last pressed in this conversation, if ever. */
+async function lastResumedAt(db: SupabaseClient, conversationId: string): Promise<string | null> {
+  const { data } = await db
+    .from('messages')
+    .select('created_at')
+    .eq('conversation_id', conversationId)
+    .eq('content_type', 'internal_note')
+    .like('content_text', `${AI_RESUMED_NOTE_PREFIX}%`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  return (data?.[0]?.created_at as string | undefined) ?? null
+}
+
+/** Hotel: after a teammate replies, the conversation is theirs for this
+ *  long — the AI stays quiet (owner meeting, 2026-10-09). */
+export const TEAMMATE_QUIET_MS = 3 * 60 * 60 * 1000
+
+/** Pure: customer + agent rows oldest-first. Did a person reply after
+ *  `sinceISO`? An agent row within AUTO_REPLY_MAX_MS of a customer
+ *  message may be the business app's greeting/away echo — returned as
+ *  `possibleEchoes` for the caller to confirm (canned text). */
+export function classifyRecentAgentRows(
+  rows: { sender_type: string; content_text: string | null; created_at: string }[],
+  sinceISO: string,
+): { humanReply: boolean; possibleEchoes: string[] } {
+  const since = Date.parse(sinceISO)
+  const echoes = new Set<string>()
+  let lastCustomerAt: number | null = null
+  for (const r of rows) {
+    const at = Date.parse(r.created_at)
+    if (r.sender_type === 'customer') {
+      lastCustomerAt = at
+      continue
+    }
+    if (r.sender_type !== 'agent' || at <= since) continue
+    const text = r.content_text?.trim() ?? ''
+    if (text && lastCustomerAt !== null && at - lastCustomerAt <= AUTO_REPLY_MAX_MS) echoes.add(text)
+    else return { humanReply: true, possibleEchoes: [] }
+  }
+  return { humanReply: false, possibleEchoes: [...echoes] }
+}
+
+/**
+ * Has a teammate replied in this conversation within TEAMMATE_QUIET_MS?
+ * "Reanudar IA" / "Reiniciar IA" end the window early. The business's
+ * automatic WhatsApp messages (greeting / away) don't count: a fast
+ * agent row whose exact text the account also sent in another
+ * conversation is canned, not a person.
+ */
+export async function teammateRepliedRecently(
+  db: SupabaseClient,
+  accountId: string,
+  conversationId: string,
+  resetAtISO: string | null,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const windowStart = new Date(now.getTime() - TEAMMATE_QUIET_MS).toISOString()
+  const since = [windowStart, resetAtISO, await lastResumedAt(db, conversationId)]
+    .filter((s): s is string => !!s)
+    .sort()
+    .pop() as string
+  const { data, error } = await db
+    .from('messages')
+    .select('sender_type, content_text, created_at')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['customer', 'agent'])
+    .neq('content_type', 'internal_note')
+    .gt('created_at', new Date(Date.parse(since) - AUTO_REPLY_MAX_MS).toISOString())
+    .order('created_at', { ascending: true })
+    .limit(500)
+  if (error) throw error
+  const { humanReply, possibleEchoes } = classifyRecentAgentRows(data ?? [], since)
+  if (humanReply) return true
+  for (const text of possibleEchoes) {
+    // ponytail: unindexed content_text match; fine at today's volume, index or cache canned texts if messages grows large.
+    const { data: elsewhere, error: e2 } = await db
+      .from('messages')
+      .select('id, conversations!inner(account_id)')
+      .eq('conversations.account_id', accountId)
+      .eq('sender_type', 'agent')
+      .eq('content_text', text)
+      .neq('conversation_id', conversationId)
+      .limit(1)
+    if (e2) throw e2
+    if ((elsewhere ?? []).length === 0) return true
+  }
+  return false
 }
 
 /** Drop the trailing assistant turns so the transcript ends on the

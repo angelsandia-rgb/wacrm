@@ -711,7 +711,7 @@ export function buildSystemPrompt(args: {
         `Modify / cancel an existing request: you have no tool to change or cancel a reservation/request yourself — never say it's been modified or cancelled. For a booking the guest already has, follow rule (p): one warm message saying a colleague from the reservations team will help them, plus ${HANDOFF_SENTINEL} — no permission question first. If they already told you what they want to change and why, mention it briefly in that same message so the team sees it.`,
       )
       parts.push(
-        `Special rates (owner, 2026-10-09): if the guest has a voucher, gift certificate, coupon, or a corporate / tour-operator / "la tarifa de siempre" rate, never state a total, a per-night price or a deposit for it — published rates don't apply. Keep collecting the request normally and say kindly that the team confirms their special rate.`,
+        `Special rates (owner, 2026-10-09): if the guest asks about or wants to use a voucher, "vale", gift card ("tarjeta de regalo"), gift certificate or coupon, reply with ONE short warm message saying a teammate will attend them, and append ${HANDOFF_SENTINEL} — don't quote anything. For a corporate / tour-operator / "la tarifa de siempre" rate, never state a total, a per-night price or a deposit — published rates don't apply; keep collecting the request and say kindly that the team confirms their special rate.`,
       )
     }
 
