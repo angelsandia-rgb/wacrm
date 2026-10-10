@@ -391,3 +391,21 @@ const GIFT_VOUCHER_RE =
 export function isGiftVoucherAsk(message: string | null | undefined): boolean {
   return GIFT_VOUCHER_RE.test(normalizeForMatch(message ?? ''))
 }
+
+/**
+ * Buying intent in the guest's own words ("¿tienen habitaciones?",
+ * "quisiera información del spa", "necesitamos 10 habitaciones") — with
+ * a category named, the banner is safe to send (owner, 2026-10-09).
+ * Coordination ("los masajes serían el sábado?") is not intent.
+ */
+const QUOTE_INTENT_RE =
+  /\b(?:disponib\w*|tienen|tendran?|hay (?:disponib\w*|espacio|cupo|habitac\w*)|informacion|info|costos?|reservar|hospedar\w*|hospedaje|alojamiento|quisiera|quiero|me gustaria|busco|buscando|necesito|necesitamos|cuestan|valen|salen|cobran|precio\w*|tarifa\w*)\b/
+
+export function isQuoteIntent(message: string | null | undefined): boolean {
+  return isNewQuoteAsk(message) || QUOTE_INTENT_RE.test(normalizeForMatch(message ?? ''))
+}
+
+/** Does this bot reply spell out a date ("…el 11/10/2026")? */
+export function statesDate(text: string | null | undefined): boolean {
+  return /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(text ?? '')
+}
