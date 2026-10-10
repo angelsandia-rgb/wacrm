@@ -25,6 +25,7 @@ import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
+import { contactMutesAi } from './muted-contact'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -61,6 +62,7 @@ import {
   isArrivalTimeQuestion,
   isExistingBookingTalk,
   isNewQuoteAsk,
+  isSpecialRateTalk,
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
@@ -158,7 +160,7 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
  *  model to react to with `SEND_CATALOG_SENTINEL`. Used only to detect
  *  when the model failed to use a marker it was taught, never to decide
  *  whether to teach it in the first place. */
-const CUSTOMER_ASKS_FOR_CATALOG_RE = /\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
+const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
 
 /** The bot's previous reply OFFERED the catalog as a question ("¿Le
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
@@ -277,7 +279,7 @@ const SIGN_OFF_REPLY_RE = /^[^\p{L}]*(?:con (?:mucho )?gusto|igualmente|a usted|
 
 /** Appended when a teammate has already replied in this hotel thread. */
 const TEAMMATE_PRESENT_NOTE =
-  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team and do NOT hand off — a person is already here. If they ask about a booking they already have, just say kindly that the colleague already helping them in this chat will take care of it (no hand-off marker). Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
+  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team and do NOT hand off — a person is already here. If they ask about a booking they already have, just say kindly that our teammate already helping them in this chat will take care of it (no hand-off marker). In Spanish call that person "nuestro compañero" or "alguien de nuestro equipo" — never "su colega" or "la colega". Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
@@ -535,6 +537,9 @@ export async function dispatchInboundToAiReply(
       return
     }
     if (!config || !config.autoReplyEnabled) return
+    // Staff / personal / supplier contact (tag "Interno", "Personal",
+    // "Proveedor" or "Sin IA") — never the bot's conversation.
+    if (await contactMutesAi(db, contactId)) return
 
     const conv = await loadConvEligibility(db, accountId, conversationId)
     if (!conv) return
@@ -2147,6 +2152,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
             modelText: outboundText,
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
             closing: closedStayThisTurn,
+            specialRate: isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content)),
           })
         } catch (err) {
           console.error('[ai auto-reply] proactive stay estimate follow-up failed:', err)
@@ -4082,15 +4088,23 @@ async function sendStayEstimateFollowUpIfDue(args: {
    *  confirmará la disponibilidad", or just that line when there's no
    *  fresh total to share (owner, 2026-09-24). */
   closing?: boolean
+  /** Voucher / certificate / negotiated rate in the thread: the
+   *  published-rate total doesn't apply — the team confirms it. */
+  specialRate?: boolean
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing } = args
-  const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
+  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing, specialRate } = args
   const english = isEnglishText(modelText ?? '')
   const availabilityLine = english ? CLOSE_AVAILABILITY_LINE_EN : CLOSE_AVAILABILITY_LINE
   const availabilityAndTotalLine = english ? CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN : CLOSE_AVAILABILITY_AND_TOTAL_LINE
 
   const sendLine = (contentText: string) =>
     sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
+
+  if (specialRate) {
+    if (closing) await sendLine(availabilityAndTotalLine)
+    return
+  }
+  const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
 
   if (result.status === 'unpriceable') {
     void dispatchSystemAlert({
@@ -4527,6 +4541,24 @@ async function sendHotelBookingNudge(args: {
   })
 }
 
+/** Did one of the bot's last replies already state a date (dd/mm/yyyy)?
+ *  Fails closed (false → nudge as before) on any read problem. */
+async function botAlreadyStatedDates(db: SupabaseClient, conversationId: string): Promise<boolean> {
+  try {
+    const { data } = await db
+      .from('messages')
+      .select('content_text')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'bot')
+      .eq('content_type', 'text')
+      .order('created_at', { ascending: false })
+      .limit(4)
+    return (data ?? []).some((r) => /\d{1,2}\/\d{1,2}\/\d{4}/.test((r as { content_text: string | null }).content_text ?? ''))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Sends the deterministic "would you like to confirm? I still need X"
  * (or, once nothing's missing, the full recap) nudge for a hotel
@@ -4554,6 +4586,11 @@ async function sendReservationNudge(args: {
   // dedupe key. The wording itself rotates between warm variants, so
   // comparing the sent text would stop recognizing a repeat.
   const signature = buildReservationFollowUpMessage(snapshot, currency, 0)
+
+  // The bot already spelled out the dates in this chat ("…el 11/10/2026")
+  // — the marker just missed them. Asking "solo necesito las fechas"
+  // right after reads as not listening (VSR 2026-10-08, four times).
+  if (/fechas/.test(signature) && (await botAlreadyStatedDates(db, conversationId))) return
 
   // Never repeat the same nudge back to back in one conversation — real
   // incident 2026-09-21: a guest asking to see two different rooms in a

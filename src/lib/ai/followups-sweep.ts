@@ -20,6 +20,7 @@
 // ============================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { contactMutesAi } from './muted-contact';
 import {
   sendMessageToConversation,
   SendMessageError,
@@ -335,6 +336,9 @@ async function evaluateConversation(
 
   // The customer signed off ("ok, muchas gracias") — nothing to recover.
   if (isClosingMessage(lcRow.content_text as string | null)) return null;
+
+  // Staff / personal / supplier contact — never nudged.
+  if (await contactMutesAi(admin, args.contactId)) return null;
 
   // Our last reply asked nothing (a farewell, "aquí estamos para lo que
   // necesite") — the customer owes us no answer, so there is no lead to
