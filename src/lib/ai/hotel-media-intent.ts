@@ -364,3 +364,17 @@ export function stripTrailingPhotoOffer(text: string): string | null {
   if (!changed) return trimmed
   return kept || null
 }
+
+/**
+ * The guest has a voucher, gift certificate or a negotiated rate
+ * (corporate, tour operator, "la de siempre") — the published-rate
+ * total and deposit don't apply (VSR 2026-10-07: a guest with a prepaid
+ * certificate was told "GTQ 970, anticipo GTQ 485"; staff had to say
+ * "usted no paga nada"). The team confirms their rate instead.
+ */
+const SPECIAL_RATE_RE =
+  /\b(?:voucher\w*|vaucher\w*|cupon\w*|certificado\w*|gift ?card|tarjeta de regalo|tour ?operador\w*|convenio|tarifa (?:corporativa|empresarial|especial|de siempre|que siempre)|la tarifa que siempre)\b/
+
+export function isSpecialRateTalk(messages: readonly string[]): boolean {
+  return messages.some((m) => SPECIAL_RATE_RE.test(normalizeForMatch(m)))
+}
