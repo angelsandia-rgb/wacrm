@@ -2978,6 +2978,19 @@ describe('dispatchInboundToAiReply — autonomous send_photo', () => {
 describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
   beforeEach(() => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
+    // A guest genuinely quoting rooms — the only time a banner may go out (owner, 2026-10-09).
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero ver si tienen habitaciones?' }])
+  })
+
+  it('no banner when the guest is not quoting that category, even if the model asks for one', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Los masajes serian sábado por la tarde?' }])
+    h.generateReply.mockResolvedValue({
+      text: 'Sí, el sábado por la tarde.',
+      handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: false, sendPhotoProductName: null,
+      sendCategoryBannerName: 'Spa',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ messageType: 'image' }))
   })
 
   it('sends the matched category\'s default banner when the model asks for one', async () => {
@@ -3044,8 +3057,9 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
     )
   })
 
-  it('does not send anything when the model does not ask for a category banner', async () => {
+  it('does not send anything when the guest is not quoting a category', async () => {
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
     await dispatchInboundToAiReply(ARGS) // default mock: sendCategoryBannerName undefined
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
   })
@@ -3167,6 +3181,7 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
   })
 
   it('sends nothing when the name matches no real category — never an arbitrary image', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
     h.generateReply.mockResolvedValue({
       text: 'Aquí tiene.',
@@ -3770,6 +3785,7 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
   })
 
   it('sends the banner the moment the reply itself names one of the category\'s products — no record_reservation proposal needed yet. Real gap found 2026-09-21 (conversation 97052a12-...): "habitaciones por favor" got a room list back with nothing to record yet, so the banner never fired until a specific room+dates existed several turns later, landing next to an unrelated message', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'habitaciones por favor' }])
     h.state.categories = [{ id: 'cat-1', name: 'Habitaciones', banner_url: 'https://cdn.example.com/rooms.jpg' }]
     h.state.products = [
       { id: 'p1', name: 'Suite Master Deluxe', category_id: 'cat-1' },
@@ -3891,6 +3907,7 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
   })
 
   it('sends the banner when products share a leading word the model naturally drops while listing them — Real gap found 2026-09-21: "Tenemos estos paquetes: Romántico, San Vicente, San Ricardo y Luna de Miel" never contains the full "Paquete Romántico" product name, so a plain substring match against full names alone missed it entirely, twice in the same live conversation (a5340ecc-...)', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'quisiera información de los paquetes' }])
     h.state.categories = [{ id: 'cat-1', name: 'Paquetes', banner_url: 'https://cdn.example.com/paquetes.jpg' }]
     h.state.products = [
       { id: 'p1', name: 'Paquete Romántico', category_id: 'cat-1' },

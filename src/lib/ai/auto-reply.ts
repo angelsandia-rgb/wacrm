@@ -65,6 +65,8 @@ import {
   isNewQuoteAsk,
   isSpecialRateTalk,
   isGiftVoucherAsk,
+  isQuoteIntent,
+  statesDate,
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
@@ -1572,54 +1574,44 @@ For airport transport, record the guest's request in nota on the relevant existi
     const threadInProgress = Boolean(teammateNote) || Boolean(activeReservations)
     const bannerAllowed =
       isHotel && !isExistingBookingTalk(recentInbound) && (!threadInProgress || isNewQuoteAsk(recentInbound))
+    // Owner, 2026-10-09: a banner only when we're SURE the guest is quoting
+    // that category — they named it with buying intent ("¿tienen
+    // habitaciones?", "precio del spa") or picked it from our category
+    // menu, or a request for it is being recorded this turn. A room or
+    // massage the reply merely names is not enough (a masseuse
+    // coordinating, a guest asking about a voucher's meals, someone asking
+    // which number to call for an activity all got banners).
+    const isComplaint = COMPLAINT_RE.test(latestInbound ?? '')
+    const lastBotReplyLower = previousAssistantMessage(messages).toLowerCase()
+    const answeredCategoryMenu =
+      Array.from(bannerCategoryBySlug.values()).filter((c) => lastBotReplyLower.includes(c.name.toLowerCase())).length >= 2
+    // A bare pick ("habitaciones por favor", "spa") is choosing that category.
+    const barePick = recentInbound.trim().split(/\s+/).length <= 3
+    const quotedSlugs =
+      isComplaint || isArrivalTimeQuestion(latestInbound) || !(answeredCategoryMenu || barePick || isQuoteIntent(recentInbound))
+        ? []
+        : categorySlugsMentioned(recentInbound)
+    // "hospedaje" / "alojamiento" is rooms when nothing else is named.
+    if (quotedSlugs.length === 0 && (answeredCategoryMenu || isQuoteIntent(recentInbound)) && /hosped|alojamiento/i.test(recentInbound)) {
+      quotedSlugs.push('habitaciones')
+    }
+    const quotedCategory = quotedSlugs.length === 1 ? quotedSlugs[0] : null
     if (bannerAllowed) {
-      const lowerOutboundText = outboundText.toLowerCase()
-      // A reply naming two or more category LABELS together (not
-      // products) is the generic "¿cuál le interesa: Habitaciones, Spa,
-      // Paquetes...?" menu, not an answer about any one of them — never
-      // treat it as "the guest is now looking at category X's items".
-      // Belt-and-suspenders alongside the account-name guard in
-      // `loadHotelCategoryProductNames`: this catches the same class of
-      // false positive for any future category/product-name collision,
-      // not just "San Ricardo".
-      const mentionedCategoryLabels = Array.from(bannerCategoryBySlug.values()).filter((c) =>
-        lowerOutboundText.includes(c.name.toLowerCase()),
-      ).length
-      const isGenericCategoryMenu = mentionedCategoryLabels >= 2
-      // The guest's OWN message asking about exactly one category ("las
-      // habitaciones cuánto cuestan?", "¿qué tienen de spa?") — real gap
-      // 2026-09-24: the model answered that with the catalog link, named
-      // no room, and the banner only went out a turn later. Two or more
-      // categories in one message is a general question → no banner.
-      // A complaint that merely names a category ("la habitación estaba
-      // sucia") is not a question about it — no promotional banner (test
-      // run 2026-09-24, prueba #22).
-      const isComplaint = COMPLAINT_RE.test(latestInbound ?? '')
-      const askedCategories = isComplaint || isArrivalTimeQuestion(latestInbound) ? [] : categorySlugsMentioned(latestInbound)
-      // "¿Dónde quedan?" wants the map, not a gallery — even when the reply
-      // names a room while answering the rest of the message (B42).
+      // "¿Dónde quedan?" wants the map, not a gallery (B42); a policy
+      // question (discount, pets, payment…) isn't browsing either.
       const isLocationAsk = isLocationQuestion(latestInbound)
-      // Same for a policy question (discount, pets, payment…): a room or
-      // package named in passing is not the guest browsing that category.
       const isPolicyAsk = isPolicyQuestion(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
-        const namedInReply =
-          !isGenericCategoryMenu && productNames.some((name) => replyNamesProduct(outboundText, name))
-        const askedInMessage = askedCategories.length === 1 && askedCategories[0] === slug
-        if (!proposal && !namedInReply && !askedInMessage) continue
+        const askedInMessage = quotedCategory === slug
+        if (!proposal && !askedInMessage) continue
         // The guest already picked an item of this category themselves
         // ("3 habitaciones Suite Clásica") — past browsing, the banner adds
         // nothing (the item's own photos still go out on their own).
         if (productNames.some((name) => replyNamesProduct(recentInbound, name))) continue
         if (isLocationAsk && !askedInMessage) continue
         if (isPolicyAsk && !askedInMessage && !proposal) continue
-        // The guest asked about OTHER categories and this one only shows
-        // up because the reply names one of its products — e.g. a package
-        // "incluye 2 masajes relajantes" sent the Spa banner to a guest who
-        // only asked about the Luna de Miel package (test run 2026-09-24).
-        if (!proposal && !askedInMessage && askedCategories.length > 0 && !askedCategories.includes(slug as ReservationCategory)) continue
         try {
           await autoSendCategoryBanner({
             db,
@@ -2008,37 +2000,11 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
     }
 
 
-    // Defense in depth, same reasoning as send_photo above: the marker
-    // is only ever taught for hotel accounts with at least one category
-    // banner on file, but re-check here too — a hallucination or an
-    // injection attempt must never send an arbitrary image.
-    if (sendCategoryBannerName && bannerAllowed) {
-      try {
-        await autoSendCategoryBanner({
-          db,
-          accountId,
-          configOwnerUserId,
-          conversationId,
-          categoryName: sendCategoryBannerName,
-          sinceISO: conv.ai_context_reset_at,
-        })
-      } catch (err) {
-        console.error('[ai auto-reply] autonomous send_category_banner failed:', describeError(err))
-        void dispatchSystemAlert({
-          severity: 'warning',
-          source: 'ai_dispatch_error',
-          title: 'AI tried to send a category banner but it could not be sent',
-          detail: {
-            account_id: accountId,
-            conversation_id: conversationId,
-            message: describeError(err).slice(0, 300),
-          },
-          dedupKey: `ai_send_category_banner_failed:${accountId}`,
-          accountId,
-          throttleMinutes: 60,
-        })
-      }
-    }
+    // The model's send_category_banner marker is no longer acted on: the
+    // deterministic path above sends a banner only when the guest is
+    // quoting that category (owner, 2026-10-09), which covers every case
+    // the marker was right about.
+    void sendCategoryBannerName
 
     // Defense in depth, same reasoning as the checks below: the marker
     // is only ever taught when `hasRestaurantMenu`, but re-check the URL
@@ -4583,7 +4549,7 @@ async function botAlreadyStatedDates(db: SupabaseClient, conversationId: string)
       .eq('content_type', 'text')
       .order('created_at', { ascending: false })
       .limit(4)
-    return (data ?? []).some((r) => /\d{1,2}\/\d{1,2}\/\d{4}/.test((r as { content_text: string | null }).content_text ?? ''))
+    return (data ?? []).some((r) => statesDate((r as { content_text: string | null }).content_text))
   } catch {
     return false
   }
