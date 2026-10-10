@@ -26,6 +26,7 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
 import { contactMutesAi } from './muted-contact'
+import { isAfterHours, withAttentionHours } from './attention-hours'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -63,6 +64,7 @@ import {
   isExistingBookingTalk,
   isNewQuoteAsk,
   isSpecialRateTalk,
+  isGiftVoucherAsk,
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
@@ -80,7 +82,7 @@ import {
 import { claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
-import {
+import { teammateRepliedRecently,
   classifyTrailingOutbound,
   countHumanRepliesAfter,
   loadTrailingOutbound,
@@ -283,6 +285,8 @@ const TEAMMATE_PRESENT_NOTE =
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
+/** Hotel: the hours line is appended by `withAttentionHours`. */
+const HOTEL_HANDOFF_ACK_TEXT = 'Con mucho gusto, un compañero de nuestro equipo le atenderá por este chat. 🙌'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -570,6 +574,16 @@ export async function dispatchInboundToAiReply(
         // fall through: the bot is re-enabled, handle this inbound normally.
       } else {
         return // explicit handoff / manual pause — leave it to a human.
+      }
+    }
+    // Hotel: a teammate replied in the last 3 hours — the conversation is
+    // theirs; the AI stays out (owner meeting, 2026-10-09). The hotel's
+    // automatic WhatsApp greeting/away messages don't count. Fails open.
+    if (neverSelfPause) {
+      try {
+        if (await teammateRepliedRecently(db, accountId, conversationId, conv.ai_context_reset_at ?? null)) return
+      } catch (err) {
+        console.error('[ai auto-reply] teammate quiet-window check failed, replying anyway:', describeError(err))
       }
     }
     // Hotel vertical: the per-conversation reply budget is a "long
@@ -1121,7 +1135,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // Hotel: a guest who plainly asks for a person is transferred now, not
     // asked "¿le gustaría que le conecte…?" (owner's rule; live test
     // 2026-09-25 — the model asked instead of transferring).
-    const explicitHumanAsk = isHotel && !handoff && isExplicitHumanRequest(latestInbound)
+    const explicitHumanAsk = isHotel && !handoff && (isExplicitHumanRequest(latestInbound) || isGiftVoucherAsk(latestInbound))
     const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
     const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
     const catalogRequested = customerRequestedCatalog(messages)
@@ -1405,7 +1419,13 @@ For airport transport, record the guest's request in nota on the relevant existi
           conversationId,
           messageType: 'text',
           // An explicit ask skips the model's own (usually "¿le conecto?") text.
-          contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
+          contentText: isHotel
+            ? withAttentionHours(
+                explicitHumanAsk || !outboundText ? HOTEL_HANDOFF_ACK_TEXT : outboundText,
+                isAfterHours(new Date(), businessTimeZone),
+                true,
+              )
+            : explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
           // Platform-sent, not a teammate — the hotel human-reply check keys on this.
           ...(neverSelfPause ? { senderType: 'bot' as const } : {}),
         })
@@ -1772,6 +1792,8 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
         }
       }
     }
+
+    if (isHotel) outboundText = withAttentionHours(outboundText, isAfterHours(new Date(), businessTimeZone))
 
     try {
       await sendReplyWithRetry({
@@ -2152,6 +2174,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
             modelText: outboundText,
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
             closing: closedStayThisTurn,
+            afterHours: isAfterHours(new Date(), businessTimeZone),
             specialRate: isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content)),
           })
         } catch (err) {
@@ -4091,14 +4114,21 @@ async function sendStayEstimateFollowUpIfDue(args: {
   /** Voucher / certificate / negotiated rate in the thread: the
    *  published-rate total doesn't apply — the team confirms it. */
   specialRate?: boolean
+  /** Hotel attention hours for the "un compañero le confirmará" line. */
+  afterHours?: boolean
 }): Promise<void> {
-  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing, specialRate } = args
+  const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing, specialRate, afterHours = false } = args
   const english = isEnglishText(modelText ?? '')
   const availabilityLine = english ? CLOSE_AVAILABILITY_LINE_EN : CLOSE_AVAILABILITY_LINE
   const availabilityAndTotalLine = english ? CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN : CLOSE_AVAILABILITY_AND_TOTAL_LINE
 
   const sendLine = (contentText: string) =>
-    sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
+    sendMessageToConversation(db, accountId, {
+      conversationId,
+      messageType: 'text',
+      contentText: withAttentionHours(contentText, afterHours),
+      senderType: 'bot',
+    })
 
   if (specialRate) {
     if (closing) await sendLine(availabilityAndTotalLine)

@@ -378,3 +378,16 @@ const SPECIAL_RATE_RE =
 export function isSpecialRateTalk(messages: readonly string[]): boolean {
   return messages.some((m) => SPECIAL_RATE_RE.test(normalizeForMatch(m)))
 }
+
+/**
+ * The guest asks about or wants to use a voucher, "vale", gift card or
+ * gift certificate — a teammate handles it (owner meeting, 2026-10-09).
+ * "vale" only with an article or a qualifier: "¿cuánto vale?" and
+ * "vale, gracias" are not vouchers.
+ */
+const GIFT_VOUCHER_RE =
+  /\b(?:(?:un|el|mi|este|ese|los|unos|mis|del) vales?|vales? (?:de regalo|especial\w*|por|de descuento)|voucher\w*|vaucher\w*|cupon\w*|gift ?card|tarjetas? (?:de )?regalo|certificados? de regalo)\b/
+
+export function isGiftVoucherAsk(message: string | null | undefined): boolean {
+  return GIFT_VOUCHER_RE.test(normalizeForMatch(message ?? ''))
+}

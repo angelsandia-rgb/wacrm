@@ -3281,7 +3281,7 @@ describe('dispatchInboundToAiReply — hotel findings, 20-chat test run 2026-09-
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
-      expect.objectContaining({ contentText: expect.stringContaining('le comunico con alguien del equipo') }),
+      expect.objectContaining({ contentText: expect.stringContaining('un compañero de nuestro equipo le atenderá') }),
     )
     expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -3459,7 +3459,7 @@ describe('dispatchInboundToAiReply — hotel reply claims "queda anotada" withou
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_noted_without_marker:acct-1' }),
     )
-    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Entendido.\n\nEl equipo del hotel se lo confirma por este chat en breve.' }))
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Entendido.\n\nEl equipo del hotel se lo confirma por este chat.') }))
   })
 
   it('does not retry when the reply already carries the marker', async () => {
@@ -3652,7 +3652,7 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
-      expect.objectContaining({ contentText: CLOSE_AVAILABILITY_LINE }),
+      expect.objectContaining({ contentText: expect.stringContaining(CLOSE_AVAILABILITY_LINE.replace(' en breve. 😊', '.')) }),
     )
   })
 
@@ -3676,7 +3676,7 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
-      expect.objectContaining({ contentText: CLOSE_AVAILABILITY_AND_TOTAL_LINE }),
+      expect.objectContaining({ contentText: expect.stringContaining(CLOSE_AVAILABILITY_AND_TOTAL_LINE.replace(' en breve. 😊', '.')) }),
     )
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({
