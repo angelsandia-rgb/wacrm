@@ -19,14 +19,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { readResponseJson } from '@/lib/http/response-json';
 
 type Severity = 'info' | 'warning' | 'critical';
@@ -243,35 +235,27 @@ export function AlertsPanel() {
             {error}
           </div>
         ) : null}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Severidad</TableHead>
-              <TableHead>Fuente</TableHead>
-              <TableHead>Título</TableHead>
-              <TableHead>Empresa</TableHead>
-              <TableHead>Ocurrencias</TableHead>
-              <TableHead>Última vez</TableHead>
-              <TableHead>Watcher</TableHead>
-              <TableHead className="text-right">Acción</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {alerts.map((alert) => (
-              <TableRow key={alert.id}>
-                <TableCell>
-                  <Badge className={SEVERITY_BADGE[alert.severity]}>
-                    {alert.severity === 'critical' ? (
-                      <AlertTriangle className="size-3" />
-                    ) : null}
-                    {SEVERITY_LABEL[alert.severity]}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-muted-foreground font-mono text-xs">
+        <div className="divide-y">
+          {alerts.map((alert) => (
+            <div
+              key={alert.id}
+              className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-4"
+            >
+              <div className="flex shrink-0 items-center gap-2 sm:w-36">
+                <Badge className={SEVERITY_BADGE[alert.severity]}>
+                  {alert.severity === 'critical' ? (
+                    <AlertTriangle className="size-3" />
+                  ) : null}
+                  {SEVERITY_LABEL[alert.severity]}
+                </Badge>
+                <span className="text-muted-foreground font-mono text-xs">
                   {alert.source}
-                </TableCell>
-                <TableCell
-                  className="max-w-72 truncate"
+                </span>
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p
+                  className="truncate text-sm font-medium"
                   title={
                     Object.keys(alert.detail ?? {}).length
                       ? JSON.stringify(alert.detail, null, 2)
@@ -279,50 +263,48 @@ export function AlertsPanel() {
                   }
                 >
                   {alert.title}
-                </TableCell>
-                <TableCell>{accountName(alert) ?? '—'}</TableCell>
-                <TableCell>{alert.occurrences}</TableCell>
-                <TableCell>{formatDateTime(alert.last_seen_at)}</TableCell>
-                <TableCell>
-                  <WatcherCell
-                    run={latestWatcherRun(alert)}
-                    accepting={acceptingId === alert.id}
-                    onAccept={() => void acceptFix(alert)}
-                  />
-                </TableCell>
-                <TableCell className="text-right">
-                  {alert.resolved_at ? (
-                    <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                      <CheckCircle2 className="size-3.5" />
-                      Resuelta
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={resolvingId === alert.id}
-                      onClick={() => void resolve(alert)}
-                    >
-                      {resolvingId === alert.id ? 'Guardando…' : 'Resolver'}
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-            {!loading && alerts.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={8}
-                  className="text-muted-foreground py-8 text-center"
-                >
-                  {showResolved
-                    ? 'No hay alertas registradas.'
-                    : 'No hay alertas abiertas.'}
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  {accountName(alert) ?? 'Sin empresa'} · {alert.occurrences}×
+                  · {formatDateTime(alert.last_seen_at)}
+                </p>
+              </div>
+
+              <div className="sm:w-56 sm:shrink-0">
+                <WatcherCell
+                  run={latestWatcherRun(alert)}
+                  accepting={acceptingId === alert.id}
+                  onAccept={() => void acceptFix(alert)}
+                />
+              </div>
+
+              <div className="shrink-0 sm:text-right">
+                {alert.resolved_at ? (
+                  <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+                    <CheckCircle2 className="size-3.5" />
+                    Resuelta
+                  </span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={resolvingId === alert.id}
+                    onClick={() => void resolve(alert)}
+                  >
+                    {resolvingId === alert.id ? 'Guardando…' : 'Resolver'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {!loading && alerts.length === 0 ? (
+            <p className="text-muted-foreground py-8 text-center text-sm">
+              {showResolved
+                ? 'No hay alertas registradas.'
+                : 'No hay alertas abiertas.'}
+            </p>
+          ) : null}
+        </div>
       </CardContent>
     </Card>
   );
