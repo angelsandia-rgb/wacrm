@@ -21,12 +21,15 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchInboundToAiReply } from './auto-reply'
-import { loadTrailingOutbound } from './human-reply'
+import { loadTrailingOutbound, teammateRepliedRecently, TEAMMATE_QUIET_MS } from './human-reply'
+import { contactMutesAi } from './muted-contact'
 
 const MIN_AGE_MS = 4 * 60_000
 /** Older than this, a late automatic reply would read as odd — leave it
  *  to a human. */
 const MAX_AGE_MS = 60 * 60_000
+// A hotel customer may wait behind the intentional three-hour staff window.
+const HOTEL_MAX_AGE_MS = TEAMMATE_QUIET_MS + MAX_AGE_MS
 const MAX_PER_RUN = 20
 /** Attempts per customer message. More than one because the usual cause
  *  is a provider outage lasting minutes — VSR 2026-10-08: Zernio timed out
@@ -56,16 +59,35 @@ export async function recoverUnansweredInbound(
   const now = opts.now ?? Date.now()
   const dispatch = opts.dispatch ?? dispatchInboundToAiReply
 
-  const { data, error } = await db
-    .from('conversations')
-    .select('id, account_id, contact_id, last_message_at')
-    .eq('status', 'open')
-    .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
-    .gte('last_message_at', new Date(now - MAX_AGE_MS).toISOString())
-    .lte('last_message_at', new Date(now - MIN_AGE_MS).toISOString())
-    .order('last_message_at', { ascending: true })
-    .limit(MAX_PER_RUN * 3)
-  if (error) throw error
+  const oldestRecent = new Date(now - MAX_AGE_MS).toISOString()
+  const newestEligible = new Date(now - MIN_AGE_MS).toISOString()
+  // Keep ordinary recovery in its one-hour window. Scan older hotel
+  // threads separately so stale traffic from other accounts cannot fill
+  // the candidate limit and starve messages waiting behind staff.
+  const [recent, hotelWaiting] = await Promise.all([
+    db.from('conversations')
+      .select('id, account_id, contact_id, last_message_at')
+      .eq('status', 'open')
+      .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
+      .gte('last_message_at', oldestRecent)
+      .lte('last_message_at', newestEligible)
+      .order('last_message_at', { ascending: true })
+      .limit(MAX_PER_RUN * 3),
+    db.from('conversations')
+      .select('id, account_id, contact_id, last_message_at, accounts!inner(industry_vertical)')
+      .eq('accounts.industry_vertical', 'hotel')
+      .eq('status', 'open')
+      .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
+      .gte('last_message_at', new Date(now - HOTEL_MAX_AGE_MS).toISOString())
+      .lte('last_message_at', oldestRecent)
+      .order('last_message_at', { ascending: true })
+      .limit(MAX_PER_RUN * 3),
+  ])
+  if (recent.error) throw recent.error
+  if (hotelWaiting.error) throw hotelWaiting.error
+  const data = [...new Map(
+    [...(recent.data ?? []), ...(hotelWaiting.data ?? [])].map((row) => [row.id, row]),
+  ).values()]
 
   const result: InboundRecoveryResult = { scanned: 0, recovered: 0 }
   for (const conv of (data ?? []) as ConversationRow[]) {
@@ -97,7 +119,35 @@ export async function recoverUnansweredInbound(
     const { rows: repliesAfter } = await loadTrailingOutbound(db, conv.id, null)
     if (repliesAfter.some((r) => r.content_type === 'text')) continue
     const age = now - Date.parse(msg.created_at)
-    if (age < MIN_AGE_MS || age > MAX_AGE_MS) continue
+    if (age < MIN_AGE_MS || age > HOTEL_MAX_AGE_MS) continue
+
+    const { data: account, error: accountError } = await db
+      .from('accounts')
+      .select('owner_user_id, industry_vertical')
+      .eq('id', conv.account_id)
+      .maybeSingle()
+    if (accountError) continue
+    const ownerId = (account as { owner_user_id?: string | null } | null)?.owner_user_id
+    if (!ownerId) continue
+    const isHotel = account?.industry_vertical === 'hotel'
+    if (!isHotel && age > MAX_AGE_MS) continue
+    if (await contactMutesAi(db, conv.contact_id)) continue
+
+    if (isHotel) {
+      try {
+        // Do not spend the recovery attempts while staff still own the thread.
+        // Dispatch repeats this check to handle a human reply arriving mid-sweep.
+        if (await teammateRepliedRecently(db, conv.account_id, conv.id, null, new Date(now))) continue
+        // Only extend the age limit for a message delayed by the staff window.
+        // Ordinary stale inquiries retain the existing one-hour cutoff.
+        if (age > MAX_AGE_MS && !await teammateRepliedRecently(
+          db, conv.account_id, conv.id, null, new Date(now), HOTEL_MAX_AGE_MS,
+        )) continue
+      } catch {
+        // Unknown staff state: leave the conversation alone until the next sweep.
+        continue
+      }
+    }
 
     // A flow owns the conversation (still active) or touched it after this
     // message (advanced or ended): the flow consumed it — flows win over
@@ -121,14 +171,6 @@ export async function recoverUnansweredInbound(
       .eq('input->>message_id', msg.id)
       .limit(MAX_ATTEMPTS)
     if (prior && prior.length >= MAX_ATTEMPTS) continue
-
-    const { data: account } = await db
-      .from('accounts')
-      .select('owner_user_id')
-      .eq('id', conv.account_id)
-      .maybeSingle()
-    const ownerId = (account as { owner_user_id?: string | null } | null)?.owner_user_id
-    if (!ownerId) continue
 
     const { error: claimError } = await db.from('ai_action_log').insert({
       account_id: conv.account_id,
