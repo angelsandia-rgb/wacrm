@@ -133,6 +133,7 @@ export async function recoverUnansweredInbound(
     if (!isHotel && age > MAX_AGE_MS) continue
     if (await contactMutesAi(db, conv.contact_id)) continue
 
+    let staffWindowElapsed = false
     if (isHotel) {
       try {
         // Do not spend the recovery attempts while staff still own the thread.
@@ -140,9 +141,10 @@ export async function recoverUnansweredInbound(
         if (await teammateRepliedRecently(db, conv.account_id, conv.id, null, new Date(now))) continue
         // Only extend the age limit for a message delayed by the staff window.
         // Ordinary stale inquiries retain the existing one-hour cutoff.
-        if (age > MAX_AGE_MS && !await teammateRepliedRecently(
+        staffWindowElapsed = await teammateRepliedRecently(
           db, conv.account_id, conv.id, null, new Date(now), HOTEL_MAX_AGE_MS,
-        )) continue
+        )
+        if (age > MAX_AGE_MS && !staffWindowElapsed) continue
       } catch {
         // Unknown staff state: leave the conversation alone until the next sweep.
         continue
@@ -162,14 +164,17 @@ export async function recoverUnansweredInbound(
 
     // Claim this attempt — a message is re-dispatched at most
     // MAX_ATTEMPTS times, however many sweeps see it unanswered.
-    const { data: prior } = await db
+    let priorQuery = db
       .from('ai_action_log')
       .select('id')
       .eq('account_id', conv.account_id)
       .eq('action', 'inbound_recovery')
       .eq('target_id', conv.id)
       .eq('input->>message_id', msg.id)
-      .limit(MAX_ATTEMPTS)
+    // Earlier versions spent retries during the pause. Give a pending
+    // message a bounded recovery budget AFTER the window has elapsed.
+    if (staffWindowElapsed) priorQuery = priorQuery.eq('input->>staff_window_elapsed', 'true')
+    const { data: prior } = await priorQuery.limit(MAX_ATTEMPTS)
     if (prior && prior.length >= MAX_ATTEMPTS) continue
 
     const { error: claimError } = await db.from('ai_action_log').insert({
@@ -177,7 +182,7 @@ export async function recoverUnansweredInbound(
       actor_user_id: ownerId,
       action: 'inbound_recovery',
       target_id: conv.id,
-      input: { message_id: msg.id, age_seconds: Math.round(age / 1000) },
+      input: { message_id: msg.id, age_seconds: Math.round(age / 1000), staff_window_elapsed: staffWindowElapsed },
       result: { conversation_id: conv.id },
     })
     if (claimError) {

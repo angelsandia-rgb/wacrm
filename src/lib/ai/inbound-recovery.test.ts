@@ -41,6 +41,7 @@ interface Fixture {
   answered?: string[]
   flowTouches?: Record<string, number>
   /** Prior recovery attempts per message id. */
+  claimedAfterStaff?: Record<string, number>
   claimed?: Record<string, number>
 }
 
@@ -88,7 +89,8 @@ function db(fx: Fixture) {
           }
           if (table === 'flow_runs') return resolve({ count: fx.flowTouches?.[filters.conversation_id] ?? 0, error: null })
           if (table === 'ai_action_log') {
-            const n = fx.claimed?.[filters['input->>message_id']] ?? 0
+            const attempts = filters['input->>staff_window_elapsed'] === 'true' ? fx.claimedAfterStaff : fx.claimed
+            const n = attempts?.[filters['input->>message_id']] ?? 0
             return resolve({ data: Array.from({ length: n }, (_, i) => ({ id: `x${i}` })), error: null })
           }
           return resolve({ data: [], error: null })
@@ -181,6 +183,23 @@ describe('hotel staff-window recovery', () => {
   it('leaves answered, excluded and more-than-four-hour-old hotel messages alone', async () => {
     const dispatch = vi.fn()
     const { client, inserts } = db({ hotel: true, recentStaff: ['answered', 'muted', 'old'], muted: ['contact-muted'], answered: ['answered'], conversations: [conv('answered', 175), conv('muted', 175), conv('old', 241)], lastCustomer: { answered: customerText('a', 175), muted: customerText('m', 175), old: customerText('o', 241) } })
+    await recoverUnansweredInbound(client, { now: NOW, dispatch })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(inserts).toHaveLength(0)
+  })
+})
+
+describe('legacy attempts during the hotel pause', () => {
+  it('recovers after the pause even if the old sweep already spent all three attempts', async () => {
+    const dispatch = vi.fn()
+    const { client, inserts } = db({ hotel: true, recentStaff: ['c1'], claimed: { m1: 3 }, conversations: [conv('c1', 175)], lastCustomer: { c1: customerText('m1', 175) } })
+    await recoverUnansweredInbound(client, { now: NOW, dispatch })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(inserts[0]).toMatchObject({ input: { message_id: 'm1', staff_window_elapsed: true } })
+  })
+  it('still limits retries performed after the pause to three', async () => {
+    const dispatch = vi.fn()
+    const { client, inserts } = db({ hotel: true, recentStaff: ['c1'], claimedAfterStaff: { m1: 3 }, conversations: [conv('c1', 175)], lastCustomer: { c1: customerText('m1', 175) } })
     await recoverUnansweredInbound(client, { now: NOW, dispatch })
     expect(dispatch).not.toHaveBeenCalled()
     expect(inserts).toHaveLength(0)
