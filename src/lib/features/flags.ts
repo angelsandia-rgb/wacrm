@@ -8,6 +8,10 @@
 // ============================================================
 
 export const FEATURE_FLAGS = {
+  ai_attention_hours_8_20: {
+    label: 'Atenci\u00f3n autom\u00e1tica de 8:00 a 20:00',
+    description: 'Restringe respuestas, adjuntos y seguimientos autom\u00e1ticos a las 8:00-20:00 en la zona horaria de la empresa. El personal puede responder en cualquier horario.',
+  },
   ai_voice_notes: {
     label: 'Notas de voz para la IA',
     description:
