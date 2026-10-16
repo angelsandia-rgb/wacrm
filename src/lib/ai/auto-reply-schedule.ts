@@ -17,7 +17,7 @@ export function parseAutoReplySchedule(raw: unknown): AutoReplySchedule | null {
   if (typeof raw !== 'object') throw new Error('Invalid AI attention schedule')
   const { timeZone, startHour, endHour } = raw as AutoReplySchedule
   if (typeof timeZone !== 'string' || !Number.isInteger(startHour) || !Number.isInteger(endHour)
-    || startHour < 0 || endHour > 24 || startHour >= endHour) throw new Error('Invalid AI attention schedule')
+    || startHour < 0 || startHour > 23 || endHour < 0 || endHour > 24 || startHour === endHour) throw new Error('Invalid AI attention schedule')
   // Validate the IANA zone instead of silently falling back to the server clock.
   new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0))
   return { timeZone, startHour, endHour }
@@ -28,13 +28,18 @@ export function withinAiAttentionHours(schedule: AutoReplySchedule | null | unde
   const hour = Number(new Intl.DateTimeFormat('en-US', {
     timeZone: schedule.timeZone, hour: '2-digit', hourCycle: 'h23',
   }).format(now))
-  return hour >= schedule.startHour && hour < schedule.endHour
+  return schedule.startHour < schedule.endHour
+    ? hour >= schedule.startHour && hour < schedule.endHour
+    : hour >= schedule.startHour || hour < schedule.endHour
 }
 
 /** The existing per-account flag registry exposes this switch to admins. */
 export function autoReplyScheduleForAccount(account: { feature_flags?: unknown; timezone?: string | null } | null | undefined): AutoReplySchedule | null {
-  if (!hasFeature(account?.feature_flags, 'ai_attention_hours_8_20')) return null
-  return parseAutoReplySchedule({ timeZone: account?.timezone?.trim() || 'America/Guatemala', startHour: 8, endHour: 20 })
+  const daytime = hasFeature(account?.feature_flags, 'ai_attention_hours_8_20')
+  const overnight = hasFeature(account?.feature_flags, 'ai_attention_hours_20_8')
+  if (daytime && overnight) throw new Error('Conflicting AI attention schedules')
+  if (!daytime && !overnight) return null
+  return parseAutoReplySchedule({ timeZone: account?.timezone?.trim() || 'America/Guatemala', startHour: overnight ? 20 : 8, endHour: overnight ? 8 : 20 })
 }
 
 export async function loadAutoReplySchedule(db: SupabaseClient, accountId: string): Promise<AutoReplySchedule | null> {

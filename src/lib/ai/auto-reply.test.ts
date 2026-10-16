@@ -5387,3 +5387,25 @@ describe('account automatic attention window', () => {
     expect(h.upsertReservationRequest).not.toHaveBeenCalled()
   })
 })
+
+
+describe('Villa San Ricardo overnight attention', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.mocked(checkSharedRateLimit).mockReset().mockResolvedValue({ success: true, limit: 100, remaining: 99, reset: Date.now() + 60_000 })
+    h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+    h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplySchedule: { timeZone: 'America/Guatemala', startHour: 20, endHour: 8 } }))
+  })
+  afterEach(() => { vi.useRealTimers() })
+  it.each([
+    ['2026-10-15T13:59:59Z', true],
+    ['2026-10-15T14:00:00Z', false],
+    ['2026-10-16T01:59:59Z', false],
+    ['2026-10-16T02:00:00Z', true],
+  ])('leaves daytime to staff and answers overnight: %s', async (instant, allowed) => {
+    vi.setSystemTime(new Date(instant))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls.length > 0).toBe(allowed)
+    expect(h.engineSendText.mock.calls.length > 0).toBe(allowed)
+  })
+})
