@@ -21,4 +21,4 @@ describe('explicit party already in the message', () => {
 })
 
 it.each(['Le modifico las cantidades', 'Ya he cancelado su reserva', 'Su reserva queda reprogramada'])('blocks the execution claim %s', text => expect(claimsExecutedHotelChange(text)).toBe(true))
-it.each(['El hotel confirmara si es posible cambiar su reserva', 'No puedo cancelar reservas', 'Su reserva sigue pendiente'])('does not mistake a conditional decision for execution: %s', text => expect(claimsExecutedHotelChange(text)).toBe(false))
+it.each(['El hotel confirmara si es posible cambiar su reserva', 'No puedo cancelar reservas', 'Su reserva sigue pendiente', 'He anotado su solicitud de traslado desde el aeropuerto, pendiente del hotel'])('does not mistake a conditional decision for execution: %s', text => expect(claimsExecutedHotelChange(text)).toBe(false))

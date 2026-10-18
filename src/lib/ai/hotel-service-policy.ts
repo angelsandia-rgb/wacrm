@@ -33,7 +33,7 @@ export function explicitGuestCount(text: string): number | undefined {
 /** Block affirmative execution claims even if the model ignores the policy. */
 export function claimsExecutedHotelChange(text: string): boolean {
   const t = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-  return /\b(?:le |te )?(?:modifico|cancelo|reprogramo|reagendo|anulo|traslado)\b/.test(t)
+  return /\b(?:le |te )?(?:modifico|cancelo|reprogramo|reagendo|anulo)\b/.test(t)
     || /\b(?:he|hemos|ya) (?:cancelado|modificado|cambiado|reprogramado|reagendado|anulado|movido)\b/.test(t)
     || /\b(?:reserva|reservacion) (?:ya )?(?:esta |queda |quedo |ha sido )?(?:cancelada|modificada|reprogramada|reagendada|anulada)\b/.test(t)
 }
