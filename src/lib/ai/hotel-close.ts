@@ -238,3 +238,11 @@ export function replyWithoutNotedClaim(text: string): string {
     ? kept
     : `${kept}\n\nYa le pasé su solicitud al equipo del hotel; se la confirman por este chat en breve.`
 }
+
+
+/** Remove unapproved stay-price sentences; retain separately published add-on references. */
+export function withoutUnapprovedStayPrices(text: string): string {
+  return text.split(/(?<=[!?])\s+|\n+|(?<=\.)(?=\s|$)\s*/)
+    .filter(sentence => isAddOnPriceSentence(sentence) || mentionedAmounts(sentence).length === 0)
+    .join(' ').trim()
+}

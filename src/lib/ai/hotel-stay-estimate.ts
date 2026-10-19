@@ -153,7 +153,7 @@ export async function loadHotelStayEstimate(
   // get a partial estimate the team validates (`quote.partial`); other
   // rooms still skip 5+ (Angel, 2026-09-18).
   const quote = priceStay(rates, rr, maxGuests)
-  if (quote.kind !== 'quoted' || quote.nights.length === 0) return null
+  if (quote.kind !== 'quoted' || quote.nights.length === 0 || quote.total <= 0) return null
   const { rooms, occupancy } = quote
 
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
@@ -220,6 +220,7 @@ export async function loadHotelStayEstimate(
 
 export type StayEstimateStatus =
   | { status: 'incomplete' }
+  | { status: 'approval_pending' }
   | { status: 'too_large_group' } // 5+ guests — never auto-priced, by design
   | { status: 'uneven_rooms' } // several rooms, headcount doesn't split evenly — a person prices it
   | { status: 'needs_person' } // a child over 12, or several rooms with children — a person prices it
@@ -286,6 +287,7 @@ export async function computeStayEstimateStatus(
   if (!productId) return { status: 'unpriceable', reason: 'no_product_match' }
 
   const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, productId)
+  if (rates.some(r => r.requires_confirmation && r.date_from && r.date_to && r.date_from < rr.check_out! && r.date_to >= rr.check_in!)) return { status: 'approval_pending' }
   if (rates.length === 0) return { status: 'unpriceable', reason: 'no_rates' }
 
   const quote = priceStay(rates, rr, maxGuests)

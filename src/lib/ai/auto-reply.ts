@@ -1,3 +1,4 @@
+import { withoutUnapprovedStayPrices } from './hotel-close'
 import { loadRecommendedRoomEstimate } from './hotel-recommended-estimate'
 import { hotelStayOperationReason } from './hotel-stay-operations'
 import { HOTEL_DIRECT_SERVICE_POLICY, hotelChangeRequest, hotelChangeConfirmationLine, explicitGuestCount, claimsExecutedHotelChange } from './hotel-service-policy'
@@ -1961,10 +1962,17 @@ For airport transport, record the guest's request in nota on the relevant existi
     let verifiedEstimateInReply: { reservationRequestId: string; total: number } | undefined
     const savedStays = savedReservationProposals.filter((p) => isStayCategoryName(p.category))
     const staffQuotedPrice = messages.some((m) => m.senderType === 'agent' && mentionedAmounts(m.content).length > 0)
-    if (isHotel && savedStays.length === 1 && mentionedAmounts(outboundText).length > 0
+    if (isHotel && (savedStays.length === 1 || activeReservations?.includes('Habitaci')) && mentionedAmounts(outboundText).length > 0
       && !staffQuotedPrice && !isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content))) {
       try {
         const estimate = await computeStayEstimateStatus(db, accountId, conversationId, hotelCurrency, hotelDepositPercent, dateKeyInZone(new Date(), businessTimeZone))
+        if (estimate.status === 'approval_pending') {
+          const kept = withoutUnapprovedStayPrices(outboundText)
+          const pending = isEnglishText(outboundText)
+            ? 'The hotel must confirm the rate for this high season.'
+            : 'La tarifa para esta temporada requiere confirmaci\u00f3n del hotel.'
+          outboundText = withAvailabilityConfirmationTiming([kept, pending].filter(Boolean).join(' '), isAfterHours(new Date(), businessTimeZone), isEnglishText(outboundText))
+        }
         if (estimate.status === 'priced' && hasConflictingAmount(outboundText, estimate.total, estimateDeposit(estimate.total, hotelDepositPercent))) {
           const kept = withoutConflictingStayPrices(outboundText, estimate.total, estimateDeposit(estimate.total, hotelDepositPercent))
           const verifiedText = isEnglishText(outboundText) ? estimate.textEn : estimate.text
