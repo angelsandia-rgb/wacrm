@@ -5001,3 +5001,34 @@ confirmó con Angel antes de tocar código en vez de proceder a ciegas:
   espera de handoff, merge de actividad de 5 fuentes) es riesgo real de
   bug silencioso en números que la empresa usa para decidir.
   **Angel confirmó: no proceder** — queda anotado, no implementado.
+
+---
+
+### 2026-10-19 — Claude Code (seguridad: actualización de dependencias vulnerables)
+
+**Qué cambia.** `npm audit` reportaba 18 vulnerabilidades (2 críticas). Se
+actualizó lo que sí corre en producción:
+
+- `next` 16.3.4 → **16.4.2** (crítica: RCE en `next/og` `ImageResponse` —
+  lo usa `src/app/icon.tsx` —, SSRF en `/_next/image`, envenenamiento de
+  caché SSG/ISR, fugas de información).
+- `nodemailer` ^9.1.1 → **^10.1.7** (alta: DoS en el parser de direcciones y
+  caché DNS compartida entre transportes SMTP). El único cambio incompatible
+  de la v10 es exigir Node ≥20 (el Docker usa Node 24); `src/lib/email/send.ts`
+  no requiere cambios.
+- Override de `sharp` → **^0.35.5** (CVE en librsvg).
+- `npm audit fix` (sin `--force`) para transitivas, y en `mcp-server/`
+  (queda en 0 vulnerabilidades).
+
+**Deliberadamente no se tocó.** `eslint-config-next` sigue en 16.2.12 y
+`eslint-plugin-react-hooks` se fijó en 7.0.1 en el lockfile: las versiones
+nuevas activan reglas del React Compiler (`set-state-in-effect`, etc.) que
+dan 84 errores de lint en ~60 componentes — eso es un PR aparte. Lo que
+`npm audit` sigue reportando (`braces`, `micromatch`, `fast-glob`, `ts-morph`)
+viene del CLI de `shadcn` y de ESLint: solo herramientas de desarrollo; de
+`shadcn` la app solo importa el CSS.
+
+**Validación.** `npm ci`, typecheck, lint (0 errores, igual que `main`),
+2672 tests, `npm run build` y build de `mcp-server` — todo en verde. Se
+verificó que el lockfile conserva los binarios musl (`@next/swc-linux-x64-musl`,
+`@img/sharp-linuxmusl-x64`) que necesita la imagen `node:24-alpine`.
