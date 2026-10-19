@@ -43,25 +43,46 @@ export function ClinicFiles({
   const [uploading, setUploading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const fetchFiles = useCallback(async (): Promise<ClinicFile[]> => {
     try {
       const params = new URLSearchParams()
       if (visitId) params.set('visit_id', visitId)
       else if (patientId) params.set('patient_id', patientId)
       const res = await fetch(`/api/clinic-files?${params.toString()}`)
       const body = await readResponseJson<{ files: ClinicFile[] }>(res)
-      setFiles(res.ok ? body.files ?? [] : [])
+      return res.ok ? body.files ?? [] : []
     } catch {
-      setFiles([])
-    } finally {
-      setLoading(false)
+      return []
     }
   }, [patientId, visitId])
 
+  // Which patient/visit the list on screen belongs to; loading until it matches.
+  const filesKey = `${visitId ?? ''}|${patientId ?? ''}`
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+
+  const applyFiles = useCallback((key: string, next: ClinicFile[]) => {
+    setFiles(next)
+    setLoadedKey(key)
+    setLoading(false)
+  }, [])
+
+  // Reload after an upload / delete.
+  const load = useCallback(async () => {
+    setLoading(true)
+    applyFiles(filesKey, await fetchFiles())
+  }, [applyFiles, filesKey, fetchFiles])
+
   useEffect(() => {
-    void load()
-  }, [load])
+    let cancelled = false
+    void fetchFiles().then((next) => {
+      if (!cancelled) applyFiles(filesKey, next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchFiles, applyFiles, filesKey])
+
+  const showLoading = loading || loadedKey !== filesKey
 
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -128,7 +149,7 @@ export function ClinicFiles({
         </>
       )}
 
-      {loading ? (
+      {showLoading ? (
         <div className="bg-muted/40 h-16 animate-pulse rounded" />
       ) : files.length === 0 ? (
         <p className="text-muted-foreground text-sm">{t('empty')}</p>

@@ -11,7 +11,7 @@ import { readResponseJson } from '@/lib/http/response-json';
 // emailed directly, never uploaded to Supabase Storage first.
 // ============================================================
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Paperclip, X } from 'lucide-react';
 
@@ -49,10 +49,14 @@ export function SupportReportDialog({
 
   // `profile` (source of `defaultName`) can still be loading when the
   // sidebar first mounts this dialog, so the initial `useState` value
-  // alone isn't reliable — re-sync every time the dialog is opened.
-  useEffect(() => {
+  // alone isn't reliable — re-sync every time the dialog is opened (or
+  // the name arrives while it's open). Done while rendering, React's
+  // pattern for reacting to changed inputs.
+  const [syncedFor, setSyncedFor] = useState({ open, defaultName });
+  if (syncedFor.open !== open || syncedFor.defaultName !== defaultName) {
+    setSyncedFor({ open, defaultName });
     if (open) setName(defaultName);
-  }, [open, defaultName]);
+  }
 
   function reset() {
     setName(defaultName);

@@ -40,27 +40,45 @@ export function RescheduleDialog({
   const tz = account?.timezone || 'UTC'
 
   const [date, setDate] = useState('')
-  const [slots, setSlots] = useState<{ start: string; end: string }[]>([])
-  const [loading, setLoading] = useState(false)
+  // Slots tagged with the appointment + date + timezone they answer.
+  const [slotsResult, setSlotsResult] = useState<{
+    target: RescheduleTarget
+    date: string
+    tz: string
+    slots: { start: string; end: string }[]
+  } | null>(null)
   const [slot, setSlot] = useState('')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
+  // A fresh form per appointment — reset while rendering (React's pattern
+  // for reacting to a changed input) rather than in an effect.
+  const [formFor, setFormFor] = useState(target)
+  if (target !== formFor) {
+    setFormFor(target)
     setDate('')
-    setSlots([])
     setSlot('')
     setReason('')
-  }, [target])
+  }
+  // A new date clears the picked slot.
+  const [pickDate, setPickDate] = useState(date)
+  if (date !== pickDate) {
+    setPickDate(date)
+    setSlot('')
+  }
+
+  const slotsCurrent =
+    !!target &&
+    !!date &&
+    slotsResult?.target === target &&
+    slotsResult.date === date &&
+    slotsResult.tz === tz
+  const slots = slotsCurrent ? slotsResult.slots : []
+  const loading = !!target && !!date && !slotsCurrent
 
   useEffect(() => {
-    if (!target || !date) {
-      setSlots([])
-      return
-    }
+    if (!target || !date) return
     let alive = true
-    setLoading(true)
-    setSlot('')
     const [y, m, d] = date.split('-').map(Number)
     const from = localMidnightUTC(y, m, d, tz).toISOString()
     const to = localMidnightUTC(y, m, d + 1, tz).toISOString()
@@ -71,9 +89,11 @@ export function RescheduleDialog({
     if (target.service_id) params.set('service_id', target.service_id)
     fetch(`/api/appointments/slots?${params.toString()}`)
       .then((r) => readResponseJson<{ slots: { start: string; end: string }[] }>(r))
-      .then((b) => alive && setSlots(b.slots ?? []))
-      .catch(() => alive && setSlots([]))
-      .finally(() => alive && setLoading(false))
+      .then((b) => b.slots ?? [])
+      .catch(() => [])
+      .then((next) => {
+        if (alive) setSlotsResult({ target, date, tz, slots: next })
+      })
     return () => {
       alive = false
     }

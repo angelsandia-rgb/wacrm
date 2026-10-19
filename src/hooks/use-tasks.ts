@@ -19,32 +19,54 @@ interface CreateInput {
  * tenancy + the `agent` write gate; this hook keeps a local copy in
  * sync and toasts on failure.
  */
+const NO_TASKS: Task[] = [];
+
+/** The contact's tasks, or null when the request fails (non-blocking —
+ *  the rest of the panel still works). */
+async function fetchTasks(contactId: string): Promise<Task[] | null> {
+  try {
+    const res = await fetch(`/api/tasks?contact_id=${contactId}`);
+    if (!res.ok) throw new Error(String(res.status));
+    const json = (await res.json()) as { tasks: Task[] };
+    return json.tasks ?? [];
+  } catch {
+    return null;
+  }
+}
+
 export function useTasks(contactId: string | null) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [taskState, setTasks] = useState<Task[]>([]);
+  const [reloading, setReloading] = useState(false);
+  // Which contact the stored tasks belong to — another contact's list is
+  // never shown while this one's loads.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const current = !!contactId && loadedFor === contactId;
+  const tasks = current ? taskState : NO_TASKS;
+  const loading = !!contactId && (!current || reloading);
+
+  const applyTasks = useCallback((forContact: string, loaded: Task[] | null) => {
+    if (loaded) setTasks(loaded);
+    setLoadedFor(forContact);
+    setReloading(false);
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (!contactId) {
-      setTasks([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/tasks?contact_id=${contactId}`);
-      if (!res.ok) throw new Error(String(res.status));
-      const json = (await res.json()) as { tasks: Task[] };
-      setTasks(json.tasks ?? []);
-    } catch {
-      // Non-blocking — the rest of the panel still works.
-    } finally {
-      setLoading(false);
-    }
-  }, [contactId]);
+    if (!contactId) return;
+    setReloading(true);
+    applyTasks(contactId, await fetchTasks(contactId));
+  }, [contactId, applyTasks]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!contactId) return;
+    let cancelled = false;
+    void fetchTasks(contactId).then((loaded) => {
+      // A failed first load shows an empty list, never another contact's.
+      if (!cancelled) applyTasks(contactId, loaded ?? []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [contactId, applyTasks]);
 
   const create = useCallback(
     async (input: CreateInput): Promise<Task | null> => {

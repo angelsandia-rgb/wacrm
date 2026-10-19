@@ -115,9 +115,9 @@ export default function PlatformAdminPage() {
   });
   const [savingBank, setSavingBank] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const fetchPlatform = useCallback(async (): Promise<
+    { companies: Company[]; invitations: Invitation[] } | { error: string }
+  > => {
     try {
       const response = await fetch('/api/admin/companies', {
         cache: 'no-store',
@@ -129,23 +129,46 @@ export default function PlatformAdminPage() {
       }>(response);
       if (!response.ok)
         throw new Error(body.error ?? 'No se pudo cargar la plataforma');
-      setCompanies(body.companies);
-      setInvitations(body.invitations);
+      return { companies: body.companies, invitations: body.invitations };
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'No se pudo cargar la plataforma'
-      );
-    } finally {
-      setLoading(false);
+      return {
+        error:
+          cause instanceof Error
+            ? cause.message
+            : 'No se pudo cargar la plataforma',
+      };
     }
   }, []);
 
+  const applyPlatform = useCallback(
+    (result: Awaited<ReturnType<typeof fetchPlatform>>) => {
+      if ('error' in result) {
+        setError(result.error);
+      } else {
+        setCompanies(result.companies);
+        setInvitations(result.invitations);
+      }
+      setLoading(false);
+    },
+    []
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    applyPlatform(await fetchPlatform());
+  }, [fetchPlatform, applyPlatform]);
+
   useEffect(() => {
-    if (isPlatformAdmin) void load();
-    else if (!profileLoading) setLoading(false);
-  }, [isPlatformAdmin, profileLoading, load]);
+    if (!isPlatformAdmin) return;
+    let cancelled = false;
+    void fetchPlatform().then((result) => {
+      if (!cancelled) applyPlatform(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPlatformAdmin, fetchPlatform, applyPlatform]);
 
   useEffect(() => {
     if (!isPlatformAdmin) return;
@@ -164,8 +187,9 @@ export default function PlatformAdminPage() {
     };
   }, [isPlatformAdmin]);
 
-  const loadTickets = useCallback(async () => {
-    setLoadingTickets(true);
+  const fetchTickets = useCallback(async (): Promise<
+    { tickets: Ticket[] } | { error: string }
+  > => {
     try {
       const response = await fetch('/api/admin/tickets', { cache: 'no-store' });
       const body = await readResponseJson<{
@@ -174,22 +198,46 @@ export default function PlatformAdminPage() {
       }>(response);
       if (!response.ok)
         throw new Error(body.error ?? 'No se pudieron cargar los tickets');
-      setTickets(body.tickets);
+      return { tickets: body.tickets };
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'No se pudieron cargar los tickets'
-      );
-    } finally {
-      setLoadingTickets(false);
+      return {
+        error:
+          cause instanceof Error
+            ? cause.message
+            : 'No se pudieron cargar los tickets',
+      };
     }
   }, []);
 
+  const applyTickets = useCallback(
+    (result: Awaited<ReturnType<typeof fetchTickets>>) => {
+      if ('error' in result) setError(result.error);
+      else setTickets(result.tickets);
+      setLoadingTickets(false);
+    },
+    []
+  );
+
+  const loadTickets = useCallback(async () => {
+    setLoadingTickets(true);
+    applyTickets(await fetchTickets());
+  }, [fetchTickets, applyTickets]);
+
   useEffect(() => {
-    if (isPlatformAdmin) void loadTickets();
-    else if (!profileLoading) setLoadingTickets(false);
-  }, [isPlatformAdmin, profileLoading, loadTickets]);
+    if (!isPlatformAdmin) return;
+    let cancelled = false;
+    void fetchTickets().then((result) => {
+      if (!cancelled) applyTickets(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPlatformAdmin, fetchTickets, applyTickets]);
+
+  // Not a platform admin once the profile settles: nothing loads.
+  const showLoading = loading && (isPlatformAdmin || profileLoading);
+  const showLoadingTickets =
+    loadingTickets && (isPlatformAdmin || profileLoading);
 
   const toggleTicketStatus = async (ticket: Ticket) => {
     const nextStatus = ticket.status === 'open' ? 'resolved' : 'open';
@@ -710,9 +758,9 @@ export default function PlatformAdminPage() {
           <Button
             variant="outline"
             onClick={() => void load()}
-            disabled={loading}
+            disabled={showLoading}
           >
-            <RefreshCw className={loading ? 'animate-spin' : ''} />
+            <RefreshCw className={showLoading ? 'animate-spin' : ''} />
             Actualizar
           </Button>
           <Dialog open={open} onOpenChange={setOpen}>
@@ -783,7 +831,7 @@ export default function PlatformAdminPage() {
 
       <CompanyMasterDetail
         companies={companies}
-        loading={loading}
+        loading={showLoading}
         busyIds={{
           suspension: changingId,
           paid: markingPaidId,
@@ -860,7 +908,7 @@ export default function PlatformAdminPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {!loading && invitations.length === 0 ? (
+              {!showLoading && invitations.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={4}
@@ -967,9 +1015,9 @@ export default function PlatformAdminPage() {
             <Button
               variant="outline"
               onClick={() => void loadTickets()}
-              disabled={loadingTickets}
+              disabled={showLoadingTickets}
             >
-              <RefreshCw className={loadingTickets ? 'animate-spin' : ''} />
+              <RefreshCw className={showLoadingTickets ? 'animate-spin' : ''} />
               Actualizar
             </Button>
           </div>
@@ -1047,7 +1095,7 @@ export default function PlatformAdminPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {!loadingTickets && tickets.length === 0 ? (
+              {!showLoadingTickets && tickets.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={7}

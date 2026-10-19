@@ -125,116 +125,208 @@ export function ContactDetailView({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [savingCustom, setSavingCustom] = useState(false);
-  const [loadingCustom, setLoadingCustom] = useState(false);
 
   // Deals tab
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [loadingDeals, setLoadingDeals] = useState(false);
 
+  // One key per time the panel opens on a contact. Each section reads as
+  // loading until its data for the current key lands, so reopening shows
+  // fresh spinners without a setState pass in the load effect.
+  const [openCount, setOpenCount] = useState(0);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setOpenCount((n) => n + 1);
+  }
+  const sessionKey = open && contactId ? `${contactId}#${openCount}` : null;
+  const [loadedFor, setLoadedFor] = useState<{
+    contact?: string;
+    notes?: string;
+    custom?: string;
+    deals?: string;
+  }>({});
+  const markLoaded = useCallback(
+    (section: keyof typeof loadedFor, key: string | null) => {
+      if (key) setLoadedFor((prev) => ({ ...prev, [section]: key }));
+    },
+    []
+  );
+  const pending = (section: keyof typeof loadedFor) =>
+    !!sessionKey && loadedFor[section] !== sessionKey;
+
+  // --- loaders (no state) ---
+  const loadContact = useCallback(
+    async (id: string) => {
+      const { data } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('id', id)
+        .single();
+      return data;
+    },
+    [supabase]
+  );
+
+  const loadTags = useCallback(
+    async (id: string) =>
+      Promise.all([
+        supabase.from('tags').select('*').order('name'),
+        supabase.from('contact_tags').select('tag_id').eq('contact_id', id),
+      ]),
+    [supabase]
+  );
+
+  const loadNotes = useCallback(
+    async (id: string) => {
+      const { data } = await supabase
+        .from('contact_notes')
+        .select('*')
+        .eq('contact_id', id)
+        .order('created_at', { ascending: false });
+      return data;
+    },
+    [supabase]
+  );
+
+  const loadCustomFields = useCallback(
+    async (id: string) =>
+      Promise.all([
+        supabase.from('custom_fields').select('*').order('field_name'),
+        supabase.from('contact_custom_values').select('*').eq('contact_id', id),
+      ]),
+    [supabase]
+  );
+
+  const loadDeals = useCallback(
+    async (id: string) => {
+      const { data } = await supabase
+        .from('deals')
+        .select('*, stage:pipeline_stages(*)')
+        .eq('contact_id', id)
+        .order('created_at', { ascending: false });
+      return (data ?? []) as Deal[];
+    },
+    [supabase]
+  );
+
+  // --- appliers ---
+  const applyContact = useCallback(
+    (key: string | null, data: Awaited<ReturnType<typeof loadContact>>) => {
+      if (data) {
+        setContact(data);
+        setEditName(data.name ?? '');
+        setEditPhone(data.phone);
+        setEditEmail(data.email ?? '');
+        setEditCompany(data.company ?? '');
+        setEditLeadTemperature(data.lead_temperature ?? 'unclassified');
+      }
+      markLoaded('contact', key);
+      setLoading(false);
+    },
+    [markLoaded]
+  );
+
+  const applyTags = useCallback(
+    ([tagsRes, contactTagsRes]: Awaited<ReturnType<typeof loadTags>>) => {
+      if (tagsRes.data) setAllTags(tagsRes.data);
+      if (contactTagsRes.data) {
+        setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
+      }
+    },
+    []
+  );
+
+  const applyNotes = useCallback(
+    (key: string | null, data: Awaited<ReturnType<typeof loadNotes>>) => {
+      if (data) setNotes(data);
+      markLoaded('notes', key);
+      setLoadingNotes(false);
+    },
+    [markLoaded]
+  );
+
+  const applyCustomFields = useCallback(
+    (
+      key: string | null,
+      [fieldsRes, valuesRes]: Awaited<ReturnType<typeof loadCustomFields>>
+    ) => {
+      if (fieldsRes.data) setCustomFields(fieldsRes.data);
+      if (valuesRes.data) {
+        const map: Record<string, string> = {};
+        valuesRes.data.forEach((v) => {
+          map[v.custom_field_id] = v.value ?? '';
+        });
+        setCustomValues(map);
+      }
+      markLoaded('custom', key);
+    },
+    [markLoaded]
+  );
+
+  const applyDeals = useCallback(
+    (key: string | null, data: Deal[]) => {
+      setDeals(data);
+      markLoaded('deals', key);
+    },
+    [markLoaded]
+  );
+
+  // --- reloads used by the action handlers ---
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
     setLoading(true);
-
-    const { data } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('id', contactId)
-      .single();
-
-    if (data) {
-      setContact(data);
-      setEditName(data.name ?? '');
-      setEditPhone(data.phone);
-      setEditEmail(data.email ?? '');
-      setEditCompany(data.company ?? '');
-      setEditLeadTemperature(data.lead_temperature ?? 'unclassified');
-    }
-    setLoading(false);
-  }, [contactId, supabase]);
-
-  const fetchTags = useCallback(async () => {
-    if (!contactId) return;
-
-    const [tagsRes, contactTagsRes] = await Promise.all([
-      supabase.from('tags').select('*').order('name'),
-      supabase
-        .from('contact_tags')
-        .select('tag_id')
-        .eq('contact_id', contactId),
-    ]);
-
-    if (tagsRes.data) setAllTags(tagsRes.data);
-    if (contactTagsRes.data) {
-      setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
-    }
-  }, [contactId, supabase]);
+    applyContact(sessionKey, await loadContact(contactId));
+  }, [contactId, sessionKey, loadContact, applyContact]);
 
   const fetchNotes = useCallback(async () => {
     if (!contactId) return;
     setLoadingNotes(true);
-
-    const { data } = await supabase
-      .from('contact_notes')
-      .select('*')
-      .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-
-    if (data) setNotes(data);
-    setLoadingNotes(false);
-  }, [contactId, supabase]);
-
-  const fetchCustomFields = useCallback(async () => {
-    if (!contactId) return;
-    setLoadingCustom(true);
-
-    const [fieldsRes, valuesRes] = await Promise.all([
-      supabase.from('custom_fields').select('*').order('field_name'),
-      supabase
-        .from('contact_custom_values')
-        .select('*')
-        .eq('contact_id', contactId),
-    ]);
-
-    if (fieldsRes.data) setCustomFields(fieldsRes.data);
-    if (valuesRes.data) {
-      const map: Record<string, string> = {};
-      valuesRes.data.forEach((v) => {
-        map[v.custom_field_id] = v.value ?? '';
-      });
-      setCustomValues(map);
-    }
-    setLoadingCustom(false);
-  }, [contactId, supabase]);
-
-  const fetchDeals = useCallback(async () => {
-    if (!contactId) return;
-    setLoadingDeals(true);
-    const { data } = await supabase
-      .from('deals')
-      .select('*, stage:pipeline_stages(*)')
-      .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-    setDeals((data ?? []) as Deal[]);
-    setLoadingDeals(false);
-  }, [contactId, supabase]);
+    applyNotes(sessionKey, await loadNotes(contactId));
+  }, [contactId, sessionKey, loadNotes, applyNotes]);
 
   useEffect(() => {
-    if (open && contactId) {
-      fetchContact();
-      fetchTags();
-      fetchNotes();
-      fetchCustomFields();
-      fetchDeals();
-    }
+    if (!sessionKey || !contactId) return;
+    let cancelled = false;
+    const live =
+      <T,>(apply: (value: T) => void) =>
+      (value: T) => {
+        if (!cancelled) apply(value);
+      };
+    void loadContact(contactId).then(
+      live((data) => applyContact(sessionKey, data))
+    );
+    void loadTags(contactId).then(live(applyTags));
+    void loadNotes(contactId).then(
+      live((data) => applyNotes(sessionKey, data))
+    );
+    void loadCustomFields(contactId).then(
+      live((data) => applyCustomFields(sessionKey, data))
+    );
+    void loadDeals(contactId).then(
+      live((data) => applyDeals(sessionKey, data))
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [
-    open,
+    sessionKey,
     contactId,
-    fetchContact,
-    fetchTags,
-    fetchNotes,
-    fetchCustomFields,
-    fetchDeals,
+    loadContact,
+    applyContact,
+    loadTags,
+    applyTags,
+    loadNotes,
+    applyNotes,
+    loadCustomFields,
+    applyCustomFields,
+    loadDeals,
+    applyDeals,
   ]);
+
+  const showLoading = loading || pending('contact');
+  const showLoadingNotes = loadingNotes || pending('notes');
+  const showLoadingCustom = pending('custom');
+  const showLoadingDeals = pending('deals');
 
   async function copyPhone() {
     if (!contact?.phone) return;
@@ -487,7 +579,7 @@ export function ContactDetailView({
           side="right"
           className="bg-popover border-border text-popover-foreground w-full p-0 sm:max-w-lg"
         >
-          {loading || !contact ? (
+          {showLoading || !contact ? (
             <div className="flex h-full items-center justify-center">
               <Loader2 className="text-primary size-6 animate-spin" />
             </div>
@@ -838,7 +930,7 @@ export function ContactDetailView({
                   </div>
 
                   <div className="flex-1 space-y-2 overflow-y-auto">
-                    {loadingNotes ? (
+                    {showLoadingNotes ? (
                       <div className="flex items-center justify-center py-8">
                         <Loader2 className="text-muted-foreground size-5 animate-spin" />
                       </div>
@@ -886,7 +978,7 @@ export function ContactDetailView({
                   value="custom"
                   className="flex-1 overflow-y-auto px-4 py-3"
                 >
-                  {loadingCustom ? (
+                  {showLoadingCustom ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="text-muted-foreground size-5 animate-spin" />
                     </div>
@@ -938,7 +1030,7 @@ export function ContactDetailView({
                   value="deals"
                   className="flex-1 overflow-y-auto px-4 py-3"
                 >
-                  {loadingDeals ? (
+                  {showLoadingDeals ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="text-primary size-5 animate-spin" />
                     </div>

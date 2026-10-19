@@ -31,29 +31,44 @@ const STATUS: Record<HealthStatus, { label: string; dot: string }> = {
 
 const SENDER: Record<string, string> = { customer: 'Cliente', agent: 'Equipo', bot: 'Bot' };
 
+
+async function fetchWeeklyHealth(): Promise<{ companies: Company[] } | { error: string }> {
+  try {
+    const response = await fetch('/api/admin/weekly-health', { cache: 'no-store' });
+    const body = await readResponseJson<{ error?: string; companies: Company[] }>(response);
+    if (!response.ok) throw new Error(body.error ?? 'No se pudo cargar la salud semanal');
+    return { companies: body.companies };
+  } catch (cause) {
+    return { error: cause instanceof Error ? cause.message : 'No se pudo cargar la salud semanal' };
+  }
+}
+
 export function WeeklyHealthPanel() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const applyHealth = useCallback((result: Awaited<ReturnType<typeof fetchWeeklyHealth>>) => {
+    if ('error' in result) setError(result.error);
+    else setCompanies(result.companies);
+    setLoading(false);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const response = await fetch('/api/admin/weekly-health', { cache: 'no-store' });
-      const body = await readResponseJson<{ error?: string; companies: Company[] }>(response);
-      if (!response.ok) throw new Error(body.error ?? 'No se pudo cargar la salud semanal');
-      setCompanies(body.companies);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'No se pudo cargar la salud semanal');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    applyHealth(await fetchWeeklyHealth());
+  }, [applyHealth]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void fetchWeeklyHealth().then((result) => {
+      if (!cancelled) applyHealth(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyHealth]);
 
   return (
     <Card id="weekly-health" className="scroll-mt-6">

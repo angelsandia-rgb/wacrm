@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { IconUserHeart, IconSearch, IconAlertTriangle } from '@tabler/icons-react'
@@ -43,7 +43,6 @@ export default function PatientsPage() {
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
   const [rows, setRows] = useState<PatientListRow[]>([])
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const reqId = useRef(0)
 
@@ -52,35 +51,31 @@ export default function PatientsPage() {
     return () => clearTimeout(h)
   }, [search])
 
-  const load = useCallback(async () => {
-    const mine = ++reqId.current
-    setLoading(true)
-    setError(false)
-    try {
-      const params = new URLSearchParams({ filter })
-      if (debounced) params.set('search', debounced)
-      const res = await fetch(`/api/patients?${params.toString()}`)
-      const data = await readResponseJson<ApiResult>(res)
-      if (mine !== reqId.current) return
-      if (!res.ok) {
-        setError(true)
-        setRows([])
-      } else {
-        setRows(data.rows ?? [])
-      }
-    } catch {
-      if (mine === reqId.current) {
-        setError(true)
-        setRows([])
-      }
-    } finally {
-      if (mine === reqId.current) setLoading(false)
-    }
-  }, [filter, debounced])
+  // Which filter + search the rows on screen answer; loading until it matches.
+  const queryKey = `${filter}|${debounced}`
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
   useEffect(() => {
-    void load()
-  }, [load])
+    const mine = ++reqId.current
+    void (async () => {
+      let next: PatientListRow[] | null = null // null = error
+      try {
+        const params = new URLSearchParams({ filter })
+        if (debounced) params.set('search', debounced)
+        const res = await fetch(`/api/patients?${params.toString()}`)
+        const data = await readResponseJson<ApiResult>(res)
+        if (res.ok) next = data.rows ?? []
+      } catch {
+        /* reported below as an error */
+      }
+      if (mine !== reqId.current) return // superseded by a newer query
+      setError(next === null)
+      setRows(next ?? [])
+      setLoadedKey(`${filter}|${debounced}`)
+    })()
+  }, [filter, debounced])
+
+  const loading = loadedKey !== queryKey
 
   const dateFmt = useMemo(
     () => new Intl.DateTimeFormat('es-GT', { day: '2-digit', month: 'short', year: 'numeric', timeZone: tz }),

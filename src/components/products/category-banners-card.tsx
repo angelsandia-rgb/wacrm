@@ -43,10 +43,8 @@ export function CategoryBannersCard() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isHotel) {
-      setLoading(false);
-      return;
-    }
+    // Non-hotel accounts render nothing, so there is nothing to load.
+    if (!isHotel) return;
     let on = true;
     (async () => {
       try {

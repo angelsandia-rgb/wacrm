@@ -18,23 +18,38 @@ export function useSavedViews(resource: SavedViewResource) {
   const [views, setViews] = useState<SavedView[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
+  // null = the request failed.
+  const fetchViews = useCallback(async (): Promise<SavedView[] | null> => {
     try {
       const res = await fetch(`/api/saved-views?resource=${resource}`);
       if (!res.ok) throw new Error(String(res.status));
       const json = (await res.json()) as { saved_views: SavedView[] };
-      setViews(json.saved_views ?? []);
+      return json.saved_views ?? [];
     } catch {
       // A views bar that fails to load shouldn't block the page —
       // stay silent, the "Todos" tab still works.
-    } finally {
-      setLoading(false);
+      return null;
     }
   }, [resource]);
 
+  const applyViews = useCallback((loaded: SavedView[] | null) => {
+    if (loaded) setViews(loaded);
+    setLoading(false);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    applyViews(await fetchViews());
+  }, [fetchViews, applyViews]);
+
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    void fetchViews().then((loaded) => {
+      if (!cancelled) applyViews(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchViews, applyViews]);
 
   const create = useCallback(
     async (name: string, config: ContactsViewConfig): Promise<SavedView | null> => {

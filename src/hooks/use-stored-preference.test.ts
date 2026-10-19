@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { readStoredBoolean, writeStoredBoolean } from './use-stored-boolean';
+import {
+  readStored,
+  readStoredBoolean,
+  writeStored,
+  writeStoredBoolean,
+} from './use-stored-preference';
 
 function fakeStorage(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
@@ -55,5 +60,19 @@ describe('writeStoredBoolean', () => {
     expect(readStoredBoolean(fakeStorage({ k5: 'false' }), 'k5', true)).toBe(
       false
     );
+  });
+});
+
+describe('readStored / writeStored', () => {
+  it('round-trips a string value', () => {
+    const storage = fakeStorage();
+    expect(readStored(storage, 'k6')).toBeNull();
+    writeStored(storage, 'k6', 'week');
+    expect(readStored(storage, 'k6')).toBe('week');
+  });
+
+  it('remembers the value in memory when storage throws', () => {
+    writeStored(throwing, 'k7', 'month');
+    expect(readStored(throwing, 'k7')).toBe('month');
   });
 });

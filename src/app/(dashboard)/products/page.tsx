@@ -94,10 +94,13 @@ export default function ProductsPage() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
 
-  const fetchProducts = useCallback(async () => {
-    setLoadingProducts(true);
-    // Via the API so each product carries its `rates` + `price_options`
-    // (migrations 075 / 106) — the export needs them.
+  // Via the API so each product carries its `rates` + `price_options`
+  // (migrations 075 / 106) — the export needs them. Categories are kept
+  // as-is when only their request fails.
+  const loadProducts = useCallback(async (): Promise<{
+    products?: Product[];
+    categories?: ProductCategory[];
+  }> => {
     try {
       const [pRes, cRes] = await Promise.all([
         fetch('/api/products', { cache: 'no-store' }),
@@ -105,19 +108,36 @@ export default function ProductsPage() {
       ]);
       if (!pRes.ok) throw new Error('products');
       const pData = await readResponseJson<{ products?: Product[] }>(pRes);
-      setProducts(pData.products ?? []);
+      const loaded: { products: Product[]; categories?: ProductCategory[] } = {
+        products: pData.products ?? [],
+      };
       if (cRes.ok) {
         const cData = await readResponseJson<{ categories?: ProductCategory[] }>(cRes);
-        setCategories(cData.categories ?? []);
+        loaded.categories = cData.categories ?? [];
       }
+      return loaded;
     } catch {
       toast.error(t('toastFailedLoadProducts'));
+      return {};
     }
-    setLoadingProducts(false);
   }, [t]);
 
-  const fetchQuotes = useCallback(async () => {
-    setLoadingQuotes(true);
+  const applyProducts = useCallback(
+    (loaded: Awaited<ReturnType<typeof loadProducts>>) => {
+      if (loaded.products) setProducts(loaded.products);
+      if (loaded.categories) setCategories(loaded.categories);
+      setLoadingProducts(false);
+    },
+    []
+  );
+
+  const fetchProducts = useCallback(async () => {
+    setLoadingProducts(true);
+    applyProducts(await loadProducts());
+  }, [loadProducts, applyProducts]);
+
+  // null = the query failed (after a toast); the list on screen stays.
+  const loadQuotes = useCallback(async (): Promise<QuoteWithContact[] | null> => {
     const supabase = createClient();
     const { data, error } = await supabase
       .from('quotes')
@@ -125,16 +145,33 @@ export default function ProductsPage() {
       .order('created_at', { ascending: false });
     if (error) {
       toast.error(t('toastFailedLoadQuotes'));
-    } else {
-      setQuotes((data as QuoteWithContact[]) ?? []);
+      return null;
     }
-    setLoadingQuotes(false);
+    return (data as QuoteWithContact[]) ?? [];
   }, [t]);
 
+  const applyQuotes = useCallback((loaded: QuoteWithContact[] | null) => {
+    if (loaded) setQuotes(loaded);
+    setLoadingQuotes(false);
+  }, []);
+
+  const fetchQuotes = useCallback(async () => {
+    setLoadingQuotes(true);
+    applyQuotes(await loadQuotes());
+  }, [loadQuotes, applyQuotes]);
+
   useEffect(() => {
-    fetchProducts();
-    fetchQuotes();
-  }, [fetchProducts, fetchQuotes]);
+    let cancelled = false;
+    void loadProducts().then((loaded) => {
+      if (!cancelled) applyProducts(loaded);
+    });
+    void loadQuotes().then((loaded) => {
+      if (!cancelled) applyQuotes(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProducts, applyProducts, loadQuotes, applyQuotes]);
 
   function openAddForm() {
     setEditProduct(null);
