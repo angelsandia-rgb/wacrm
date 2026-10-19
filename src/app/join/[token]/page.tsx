@@ -196,6 +196,7 @@ export default function JoinPage() {
       toast.success('Welcome to the team');
       // Full reload (not router.push) so AuthProvider re-fetches
       // the profile with the new account_id and account_role.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload on purpose (see above).
       window.location.href = '/dashboard';
     } catch (err) {
       console.error('[join] redeem error:', err);
