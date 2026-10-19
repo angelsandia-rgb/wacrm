@@ -163,8 +163,11 @@ export function ContactSidebar({
   const [phoneDraft, setPhoneDraft] = useState('');
   const [savingPhone, setSavingPhone] = useState(false);
 
-  const fetchContactData = useCallback(async () => {
-    if (!contact) return;
+  // Split in two so the mount/contact-change effect can drop a stale
+  // response (fast contact switching) while the action handlers below
+  // keep a single awaitable `fetchContactData()` to refresh after a save.
+  const loadContactData = useCallback(async () => {
+    if (!contact) return null;
 
     const supabase = createClient();
 
@@ -190,13 +193,12 @@ export function ContactSidebar({
         .eq('contact_id', contact.id)
         .order('created_at', { ascending: false }),
     ]);
-    if (quotesRes.data) setQuotes(quotesRes.data);
 
+    // Load every stage of every pipeline these deals belong to, so
+    // the "move stage" picker and the "is there a won stage at all"
+    // check don't need a round-trip per deal.
+    let stagesByPipeline: Record<string, PipelineStage[]> = {};
     if (dealsRes.data) {
-      setDeals(dealsRes.data);
-      // Load every stage of every pipeline these deals belong to, so
-      // the "move stage" picker and the "is there a won stage at all"
-      // check don't need a round-trip per deal.
       const pipelineIds = [...new Set(dealsRes.data.map((d) => d.pipeline_id))];
       if (pipelineIds.length > 0) {
         const { data: stages } = await supabase
@@ -208,14 +210,20 @@ export function ContactSidebar({
         for (const stage of stages ?? []) {
           (grouped[stage.pipeline_id] ??= []).push(stage);
         }
-        setStagesByPipeline(grouped);
-      } else {
-        setStagesByPipeline({});
+        stagesByPipeline = grouped;
       }
-    } else {
-      setDeals([]);
-      setStagesByPipeline({});
     }
+
+    return { contact, dealsRes, notesRes, tagsRes, quotesRes, stagesByPipeline };
+  }, [contact]);
+
+  type ContactData = NonNullable<Awaited<ReturnType<typeof loadContactData>>>;
+
+  const applyContactData = useCallback((data: ContactData) => {
+    const { contact, dealsRes, notesRes, tagsRes, quotesRes } = data;
+    if (quotesRes.data) setQuotes(quotesRes.data);
+    setDeals(dealsRes.data ?? []);
+    setStagesByPipeline(data.stagesByPipeline);
     if (notesRes.data) setNotes(notesRes.data);
     if (tagsRes.data) {
       const mapped = tagsRes.data
@@ -228,11 +236,22 @@ export function ContactSidebar({
     );
     setPhone(contact.phone ?? null);
     setPhoneEditing(false);
-  }, [contact]);
+  }, []);
+
+  const fetchContactData = useCallback(async () => {
+    const data = await loadContactData();
+    if (data) applyContactData(data);
+  }, [loadContactData, applyContactData]);
 
   useEffect(() => {
-    fetchContactData();
-  }, [fetchContactData]);
+    let cancelled = false;
+    void loadContactData().then((data) => {
+      if (!cancelled && data) applyContactData(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadContactData, applyContactData]);
 
   // Account-level pipelines, loaded once (not per-contact) so the
   // "New deal" quick-create has a pipeline/stage picker ready even

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { CalendarClock, Check, Loader2, X } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
@@ -41,37 +41,38 @@ export function InboxReservationsCard({ conversationId }: { conversationId: stri
   const canAct = useCan('manage-products')
   const isHotel = (account?.industry_vertical ?? 'generic') === 'hotel'
 
-  const [rows, setRows] = useState<ReservationRow[]>([])
-  const [checked, setChecked] = useState(false)
+  // Tagged with the conversation it answers, so switching threads reads
+  // as "not checked yet" until that thread's pending list lands.
+  const [result, setResult] = useState<{
+    conversationId: string
+    rows: ReservationRow[]
+  } | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  const load = useCallback(async (cid: string, alive: () => boolean) => {
-    setChecked(false)
-    try {
-      const res = await fetch(
-        `/api/reservations?conversation_id=${encodeURIComponent(cid)}&status=pending`,
-      )
-      const body = await readResponseJson<{ reservations: ReservationRow[] }>(res)
-      if (alive()) setRows(body?.reservations ?? [])
-    } catch {
-      if (alive()) setRows([])
-    } finally {
-      if (alive()) setChecked(true)
-    }
-  }, [])
-
   useEffect(() => {
-    if (!isHotel || !conversationId) {
-      setRows([])
-      setChecked(true)
-      return
-    }
+    if (!isHotel || !conversationId) return
     let on = true
-    void load(conversationId, () => on)
+    void (async () => {
+      let rows: ReservationRow[] = []
+      try {
+        const res = await fetch(
+          `/api/reservations?conversation_id=${encodeURIComponent(conversationId)}&status=pending`,
+        )
+        const body = await readResponseJson<{ reservations: ReservationRow[] }>(res)
+        rows = body?.reservations ?? []
+      } catch {
+        rows = []
+      } finally {
+        if (on) setResult({ conversationId, rows })
+      }
+    })()
     return () => {
       on = false
     }
-  }, [isHotel, conversationId, load])
+  }, [isHotel, conversationId])
+
+  const checked = !!conversationId && result?.conversationId === conversationId
+  const rows = checked ? result.rows : []
 
   async function decide(id: string, status: 'approved' | 'denied') {
     setBusyId(id)
@@ -86,7 +87,9 @@ export function InboxReservationsCard({ conversationId }: { conversationId: stri
         console.error('[reservations] status update failed:', body)
         return
       }
-      setRows((prev) => prev.filter((r) => r.id !== id))
+      setResult((prev) =>
+        prev ? { ...prev, rows: prev.rows.filter((r) => r.id !== id) } : prev,
+      )
     } finally {
       setBusyId(null)
     }

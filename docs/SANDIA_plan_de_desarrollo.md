@@ -5059,3 +5059,37 @@ reglas del React Compiler que daban 84 errores de lint:
 
 **Validación.** Lint 0 errores (81 warnings de la regla bajada), typecheck,
 2672 tests y `npm run build` en verde.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (inbox: refactor de `set-state-in-effect`)
+
+**Qué cambia.** Se eliminan los 12 avisos de `react-hooks/set-state-in-effect`
+del inbox (incluidas las tarjetas de clínica y hotel que viven en él). Quedan
+69 en el resto de la app. Patrones usados:
+
+- **Paneles del inbox (`localStorage`)** → nuevo hook
+  `src/hooks/use-stored-boolean.ts` sobre `useSyncExternalStore`: el servidor
+  sigue renderizando el valor por defecto (sin error de hidratación) y el
+  valor guardado entra tras hidratar, sin un render extra. Sincroniza entre
+  pestañas y, si `localStorage` falla, recuerda el valor en memoria. Con tests.
+- **Estado "atado" a una conversación** (borrador de respuesta, pausa
+  optimista de la IA, último mensaje del cliente, tarjetas de clínica y
+  hotel) → el estado se guarda junto con la conversación/contacto al que
+  pertenece y se lee con esa comprobación — el mismo patrón que ya usaba el
+  visor de medios (`openMedia`). Cambiar de hilo invalida el valor sin un
+  efecto que lo resetee.
+- **Contact sidebar** → la carga se separa en `loadContactData` (pura) y
+  `applyContactData`; el efecto descarta respuestas viejas. **Corrige un bug
+  real:** al cambiar rápido de contacto podía pintarse la información
+  (negocios, notas, etiquetas) del contacto anterior.
+- **Grabación de voz** → el tope de 5 min se revisa en el propio tick del
+  temporizador, no en un efecto que observa los segundos.
+- **Respuestas rápidas** → la lista vive en un subcomponente que se monta con
+  cada apertura del diálogo, así empieza en "cargando" sin `setLoading(true)`.
+- **Reacciones** → se filtran por `conversation_id` al agruparlas en vez de
+  vaciar la lista en un efecto.
+
+**Validación.** Lint 0 errores (69 avisos, todos fuera del inbox), typecheck,
+2677 tests y `npm run build` en verde. No se pudo probar en navegador desde la
+sesión (requiere login real); conviene un recorrido manual del inbox.

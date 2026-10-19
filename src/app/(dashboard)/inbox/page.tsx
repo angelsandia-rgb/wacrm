@@ -16,6 +16,7 @@ import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
+import { useStoredBoolean } from "@/hooks/use-stored-boolean";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -64,61 +65,19 @@ function InboxPageInner() {
   const [resyncToken, setResyncToken] = useState(0);
 
   /**
-   * Whether the desktop contact sidebar (tags / deals / notes) is shown.
-   * Defaults to `true` (the historical behaviour) and is restored from
-   * localStorage after mount. We deliberately do NOT read localStorage in
-   * the initializer: the server renders with `true`, so reading a stored
-   * `false` synchronously would produce a hydration mismatch. The effect
-   * below reconciles to the stored value right after mount instead.
+   * Whether the desktop contact sidebar (tags / deals / notes) and the
+   * conversation list are shown. Both default to `true` (the historical
+   * layout) and are restored from localStorage after hydration — see
+   * `useStoredBoolean` for why the server render always uses the default.
    */
-  const [contactPanelOpen, setContactPanelOpen] = useState(true);
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
-      if (stored !== null) setContactPanelOpen(stored === "true");
-    } catch {
-      // localStorage can throw in private-browsing / sandboxed contexts.
-    }
-  }, []);
-
-  const handleToggleContactPanel = useCallback(() => {
-    setContactPanelOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(CONTACT_PANEL_STORAGE_KEY, String(next));
-      } catch {
-        // Persistence is best-effort; ignore storage failures.
-      }
-      return next;
-    });
-  }, []);
-
-  /**
-   * Same pattern as the contact panel above, for the conversation list.
-   * Defaults to `true` (unchanged historical layout) and is reconciled
-   * from localStorage post-mount to avoid a hydration mismatch.
-   */
-  const [listPanelOpen, setListPanelOpen] = useState(true);
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(LIST_PANEL_STORAGE_KEY);
-      if (stored !== null) setListPanelOpen(stored === "true");
-    } catch {
-      // localStorage can throw in private-browsing / sandboxed contexts.
-    }
-  }, []);
-
-  const handleToggleListPanel = useCallback(() => {
-    setListPanelOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(LIST_PANEL_STORAGE_KEY, String(next));
-      } catch {
-        // Persistence is best-effort; ignore storage failures.
-      }
-      return next;
-    });
-  }, []);
+  const [contactPanelOpen, handleToggleContactPanel] = useStoredBoolean(
+    CONTACT_PANEL_STORAGE_KEY,
+    true
+  );
+  const [listPanelOpen, handleToggleListPanel] = useStoredBoolean(
+    LIST_PANEL_STORAGE_KEY,
+    true
+  );
 
   // Fire the deep-link auto-select exactly once per URL — subsequent
   // list refreshes (realtime, manual refetch) must not snap the user
