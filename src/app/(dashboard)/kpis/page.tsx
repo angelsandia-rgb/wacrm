@@ -73,54 +73,80 @@ export default function KpisPage() {
 
   const granularity = granularityForRangeDays(range)
 
-  const load = useCallback(() => {
-    if (isHotel || isClinic) {
-      setLoading(false)
-      return // hotel/clinic accounts render their own KPI view
-    }
-    setLoading(true)
+  // Resolves to whatever loaded: the dataset can land even if the
+  // per-period CAC counts then fail (same as before, after a toast).
+  const fetchKpis = useCallback(async (): Promise<{
+    dataset?: KpiDataset
+    cacHistory?: CacHistoryPoint[]
+  }> => {
     const db = createClient()
     const window = windowFor(range)
     const previousWindow = previousWindowFor(range)
+    let ds: KpiDataset | undefined
+    try {
+      ds = await loadKpiDataset(db, window, previousWindow, granularity)
+      if (ds.spendHistory.length === 0) return { dataset: ds, cacHistory: [] }
+      // CAC per saved period needs that period's own won-deal count,
+      // not just the currently-viewed window's — a small bounded
+      // set of extra queries (one per spend entry an admin has ever
+      // logged), fetched after the main dataset.
+      const history = ds.spendHistory
+      const counts = await Promise.all(
+        history.map((entry) =>
+          countWonDealsInWindow(db, {
+            start: new Date(`${entry.period_start}T00:00:00`),
+            end: new Date(`${entry.period_end}T00:00:00`),
+          }),
+        ),
+      )
+      return {
+        dataset: ds,
+        cacHistory: history.map((entry, i) => ({
+          label: formatDateRangeLabel(new Date(`${entry.period_start}T00:00:00`), new Date(`${entry.period_end}T00:00:00`)),
+          spend: entry.amount,
+          cac: cac(entry.amount, counts[i]),
+        })),
+      }
+    } catch (err) {
+      console.error('[kpis] load failed:', err)
+      toast.error(t('loadFailed'))
+      return { dataset: ds }
+    }
+  }, [range, granularity, t])
 
-    loadKpiDataset(db, window, previousWindow, granularity)
-      .then(async (ds) => {
-        setDataset(ds)
-        if (ds.spendHistory.length === 0) {
-          setCacHistory([])
-          return
-        }
-        // CAC per saved period needs that period's own won-deal count,
-        // not just the currently-viewed window's — a small bounded
-        // set of extra queries (one per spend entry an admin has ever
-        // logged), fetched after the main dataset so it never blocks
-        // the rest of the page from rendering.
-        const counts = await Promise.all(
-          ds.spendHistory.map((entry) =>
-            countWonDealsInWindow(db, {
-              start: new Date(`${entry.period_start}T00:00:00`),
-              end: new Date(`${entry.period_end}T00:00:00`),
-            }),
-          ),
-        )
-        setCacHistory(
-          ds.spendHistory.map((entry, i) => ({
-            label: formatDateRangeLabel(new Date(`${entry.period_start}T00:00:00`), new Date(`${entry.period_end}T00:00:00`)),
-            spend: entry.amount,
-            cac: cac(entry.amount, counts[i]),
-          })),
-        )
-      })
-      .catch((err) => {
-        console.error('[kpis] load failed:', err)
-        toast.error(t('loadFailed'))
-      })
-      .finally(() => setLoading(false))
-  }, [range, granularity, t, isHotel, isClinic])
+  // Which range the on-screen dataset belongs to; loading until it matches.
+  const requestKey = `${range}|${granularity}`
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+
+  const applyKpis = useCallback(
+    (key: string, result: Awaited<ReturnType<typeof fetchKpis>>) => {
+      if (result.dataset) setDataset(result.dataset)
+      if (result.cacHistory) setCacHistory(result.cacHistory)
+      setLoadedKey(key)
+      setLoading(false)
+    },
+    [],
+  )
+
+  // Reload after saving spend.
+  const load = useCallback(() => {
+    if (isHotel || isClinic) return // hotel/clinic accounts render their own KPI view
+    setLoading(true)
+    void fetchKpis().then((result) => applyKpis(requestKey, result))
+  }, [isHotel, isClinic, fetchKpis, applyKpis, requestKey])
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (isHotel || isClinic) return // hotel/clinic accounts render their own KPI view
+    let cancelled = false
+    void fetchKpis().then((result) => {
+      if (!cancelled) applyKpis(requestKey, result)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isHotel, isClinic, fetchKpis, applyKpis, requestKey])
+
+  const showLoading = !isHotel && !isClinic && (loading || loadedKey !== requestKey)
 
   const handleSaveSpend = useCallback(
     async (amount: number) => {
@@ -254,7 +280,7 @@ export default function KpisPage() {
             variant="outline"
             size="sm"
             onClick={handleExport}
-            disabled={exporting || loading || !dataset}
+            disabled={exporting || showLoading || !dataset}
           >
             {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
             {t('downloadExcel')}
@@ -270,7 +296,7 @@ export default function KpisPage() {
 
       {/* Metric cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {loading || !dataset || !derived ? (
+        {showLoading || !dataset || !derived ? (
           Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
         ) : (
           <>
@@ -309,16 +335,16 @@ export default function KpisPage() {
 
       {/* Trend charts */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartSection title={t('charts.leadsGenerated')} description={t('charts.leadsGeneratedDesc')} loading={loading} empty={dataset ? derived!.leadsCount === 0 : false}>
+        <ChartSection title={t('charts.leadsGenerated')} description={t('charts.leadsGeneratedDesc')} loading={showLoading} empty={dataset ? derived!.leadsCount === 0 : false}>
           {derived && <KpiLineChart data={derived.leadsSeries} granularity={granularity} color="blue" />}
         </ChartSection>
-        <ChartSection title={t('charts.qualifiedLeads')} description={t('charts.qualifiedLeadsDesc')} loading={loading} empty={dataset ? derived!.qualifiedCount === 0 : false}>
+        <ChartSection title={t('charts.qualifiedLeads')} description={t('charts.qualifiedLeadsDesc')} loading={showLoading} empty={dataset ? derived!.qualifiedCount === 0 : false}>
           {derived && <KpiLineChart data={derived.qualifiedSeries} granularity={granularity} color="amber" />}
         </ChartSection>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartSection title={t('charts.conversionRate')} description={t('charts.conversionRateDesc')} loading={loading} empty={dataset ? derived!.leadsCount === 0 : false}>
+        <ChartSection title={t('charts.conversionRate')} description={t('charts.conversionRateDesc')} loading={showLoading} empty={dataset ? derived!.leadsCount === 0 : false}>
           {derived && (
             <KpiLineChart
               data={derived.conversionSeries}
@@ -331,7 +357,7 @@ export default function KpisPage() {
         <ChartSection
           title={t('charts.temperature')}
           description={t('charts.temperatureDesc')}
-          loading={loading}
+          loading={showLoading}
           empty={dataset ? derived!.leadsCount === 0 : false}
           bodyClassName="p-5 pb-2"
         >
@@ -346,10 +372,10 @@ export default function KpisPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartSection title={t('charts.funnel')} description={t('charts.funnelDesc')} loading={loading} empty={dataset ? derived!.leadsCount === 0 : false}>
+        <ChartSection title={t('charts.funnel')} description={t('charts.funnelDesc')} loading={showLoading} empty={dataset ? derived!.leadsCount === 0 : false}>
           {derived && <KpiFunnelChart stages={derived.funnel} />}
         </ChartSection>
-        <ChartSection title={t('charts.comparison')} description={t('charts.comparisonDesc')} loading={loading} empty={dataset ? derived!.leadsCount === 0 && derived!.wonCount === 0 : false}>
+        <ChartSection title={t('charts.comparison')} description={t('charts.comparisonDesc')} loading={showLoading} empty={dataset ? derived!.leadsCount === 0 && derived!.wonCount === 0 : false}>
           {derived && (
             <BarChart
               data={derived.comparison}
@@ -371,7 +397,7 @@ export default function KpisPage() {
           <p className="mt-1 text-sm text-muted-foreground">{t('trial.description')}</p>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {loading || !dataset ? (
+          {showLoading || !dataset ? (
             Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)
           ) : (
             <>
@@ -450,7 +476,7 @@ export default function KpisPage() {
         <ChartSection
           title={t('charts.cacHistory')}
           description={t('charts.cacHistoryDesc')}
-          loading={loading}
+          loading={showLoading}
           empty={cacHistory.length === 0}
           emptyHint={t('charts.cacHistoryEmptyHint')}
         >

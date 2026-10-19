@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { toast } from 'sonner'
 import { Loader2, Search } from 'lucide-react'
@@ -60,8 +60,11 @@ export function AppointmentDialog({
   const [doctorId, setDoctorId] = useState('')
   const [serviceId, setServiceId] = useState('')
   const [date, setDate] = useState('')
-  const [slots, setSlots] = useState<{ start: string; end: string }[]>([])
-  const [slotsLoading, setSlotsLoading] = useState(false)
+  // Slots tagged with the doctor/date/service query they answer.
+  const [slotsResult, setSlotsResult] = useState<{
+    key: string
+    slots: { start: string; end: string }[]
+  } | null>(null)
   const [slot, setSlot] = useState('')
 
   const [patientQuery, setPatientQuery] = useState('')
@@ -76,22 +79,29 @@ export function AppointmentDialog({
   const [count, setCount] = useState('4')
   const [saving, setSaving] = useState(false)
 
-  // reset on open
+  // Reset on open — while rendering (React's pattern for reacting to a
+  // changed input), so the previous booking never flashes in.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setDoctorId('')
+      setServiceId('')
+      setDate('')
+      setSlot('')
+      setPatientQuery('')
+      setPatientResults([])
+      setPatient(null)
+      setAmount('')
+      setNotes('')
+      setNeedsConfirmation(true)
+      setRepeat(false)
+      setCount('4')
+    }
+  }
+
   useEffect(() => {
     if (!open) return
-    setDoctorId('')
-    setServiceId('')
-    setDate('')
-    setSlots([])
-    setSlot('')
-    setPatientQuery('')
-    setPatientResults([])
-    setPatient(null)
-    setAmount('')
-    setNotes('')
-    setNeedsConfirmation(true)
-    setRepeat(false)
-    setCount('4')
     Promise.all([
       fetch('/api/doctors').then((r) => readResponseJson<{ doctors: Doctor[] }>(r)),
       fetch('/api/products').then((r) => readResponseJson<{ products: Service[] }>(r)),
@@ -113,45 +123,53 @@ export function AppointmentDialog({
 
   const service = useMemo(() => services.find((s) => s.id === serviceId) ?? null, [services, serviceId])
 
-  useEffect(() => {
+  // Picking a service pre-fills its price (still editable).
+  const [pricedService, setPricedService] = useState(service)
+  if (service !== pricedService) {
+    setPricedService(service)
     if (service) setAmount(String(service.price ?? ''))
-  }, [service])
+  }
 
-  // load slots when doctor + date set
-  const loadSlots = useCallback(async () => {
-    if (!doctorId || !date) {
-      setSlots([])
-      return
-    }
-    setSlotsLoading(true)
+  // Load slots when doctor + date are set; a new query clears the pick.
+  const slotsKey = doctorId && date ? JSON.stringify([doctorId, date, serviceId, tz]) : null
+  const [slotsKeyForPick, setSlotsKeyForPick] = useState(slotsKey)
+  if (slotsKey !== slotsKeyForPick) {
+    setSlotsKeyForPick(slotsKey)
     setSlot('')
-    try {
-      const [y, m, d] = date.split('-').map(Number)
-      const from = localMidnightUTC(y, m, d, tz).toISOString()
-      const to = localMidnightUTC(y, m, d + 1, tz).toISOString()
-      const params = new URLSearchParams({ doctor_id: doctorId, from, to })
-      if (serviceId) params.set('service_id', serviceId)
-      const res = await fetch(`/api/appointments/slots?${params.toString()}`)
-      const body = await readResponseJson<{ slots: { start: string; end: string }[] }>(res)
-      setSlots(res.ok ? body.slots ?? [] : [])
-    } catch {
-      setSlots([])
-    } finally {
-      setSlotsLoading(false)
-    }
-  }, [doctorId, date, serviceId, tz])
+  }
+  const slots = slotsKey && slotsResult?.key === slotsKey ? slotsResult.slots : []
+  const slotsLoading = !!slotsKey && slotsResult?.key !== slotsKey
 
   useEffect(() => {
-    void loadSlots()
-  }, [loadSlots])
+    if (!slotsKey) return
+    let cancelled = false
+    void (async () => {
+      let next: { start: string; end: string }[] = []
+      try {
+        const [y, m, d] = date.split('-').map(Number)
+        const from = localMidnightUTC(y, m, d, tz).toISOString()
+        const to = localMidnightUTC(y, m, d + 1, tz).toISOString()
+        const params = new URLSearchParams({ doctor_id: doctorId, from, to })
+        if (serviceId) params.set('service_id', serviceId)
+        const res = await fetch(`/api/appointments/slots?${params.toString()}`)
+        const body = await readResponseJson<{ slots: { start: string; end: string }[] }>(res)
+        if (res.ok) next = body.slots ?? []
+      } catch {
+        /* no slots */
+      }
+      if (!cancelled) setSlotsResult({ key: slotsKey, slots: next })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [slotsKey, doctorId, date, serviceId, tz])
 
   // patient search
+  // Results only show for a 2+ character query.
+  const visiblePatientResults = patientQuery.trim().length >= 2 ? patientResults : []
   useEffect(() => {
     const q = patientQuery.trim()
-    if (q.length < 2) {
-      setPatientResults([])
-      return
-    }
+    if (q.length < 2) return
     const h = setTimeout(() => {
       fetch(`/api/patients?search=${encodeURIComponent(q)}&limit=8`)
         .then((r) => readResponseJson<{ rows: { id: string; name: string | null; phone: string | null }[] }>(r))
@@ -297,9 +315,9 @@ export function AppointmentDialog({
                   placeholder={t('patientSearch')}
                   className="pl-8"
                 />
-                {patientResults.length > 0 && (
+                {visiblePatientResults.length > 0 && (
                   <ul className="border-border bg-popover absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border shadow-md">
-                    {patientResults.map((p) => (
+                    {visiblePatientResults.map((p) => (
                       <li key={p.id}>
                         <button
                           type="button"

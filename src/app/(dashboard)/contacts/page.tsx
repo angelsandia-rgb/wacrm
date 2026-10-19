@@ -97,6 +97,9 @@ interface ContactWithTags extends Contact {
   tags?: Tag[];
 }
 
+// Shared empty selection; every updater copies before changing it.
+const NO_SELECTION = new Set<string>();
+
 export default function ContactsPage() {
   const t = useTranslations('Contacts.page');
   const supabase = createClient();
@@ -169,8 +172,32 @@ export default function ContactsPage() {
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // Identifies the current page/search/filter/sort. The selection and
+  // the "loaded" marker below are tagged with it, so changing any of
+  // these drops a stale selection and shows the spinner without a
+  // setState pass in the fetch effect.
+  const queryKey = JSON.stringify([page, search, selectedTagIds, sort]);
+
   // Bulk selection (page-scoped — only the loaded rows are selectable)
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selection, setSelection] = useState<{
+    key: string;
+    ids: Set<string>;
+  }>({ key: queryKey, ids: new Set() });
+  const selected = selection.key === queryKey ? selection.ids : NO_SELECTION;
+  const setSelected = useCallback(
+    (next: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+      setSelection((prev) => {
+        const base = prev.key === queryKey ? prev.ids : NO_SELECTION;
+        return {
+          key: queryKey,
+          ids: typeof next === 'function' ? next(base) : next,
+        };
+      });
+    },
+    [queryKey]
+  );
+  // Query whose rows are on screen (null until the first load lands).
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   // All tags for display
@@ -182,28 +209,35 @@ export default function ContactsPage() {
   // earlier request resolve last and render stale rows.
   const fetchSeq = useRef(0);
 
-  const fetchTags = useCallback(async () => {
+  const loadTagsMap = useCallback(async () => {
     const { data } = await supabase.from('tags').select('*');
-    if (data) {
-      const map: Record<string, Tag> = {};
-      data.forEach((t) => (map[t.id] = t));
-      setTagsMap(map);
-      // Drop any filter selections whose tag no longer exists (e.g. a tag
-      // deleted elsewhere) so it can't linger invisibly in the query.
-      setSelectedTagIds((prev) => {
-        const pruned = prev.filter((id) => map[id]);
-        return pruned.length === prev.length ? prev : pruned;
-      });
-    }
+    if (!data) return null;
+    const map: Record<string, Tag> = {};
+    data.forEach((t) => (map[t.id] = t));
+    return map;
   }, [supabase]);
 
-  const fetchContacts = useCallback(async () => {
+  const applyTagsMap = useCallback((map: Record<string, Tag> | null) => {
+    if (!map) return;
+    setTagsMap(map);
+    // Drop any filter selections whose tag no longer exists (e.g. a tag
+    // deleted elsewhere) so it can't linger invisibly in the query.
+    setSelectedTagIds((prev) => {
+      const pruned = prev.filter((id) => map[id]);
+      return pruned.length === prev.length ? prev : pruned;
+    });
+  }, []);
+
+  const fetchTags = useCallback(async () => {
+    applyTagsMap(await loadTagsMap());
+  }, [loadTagsMap, applyTagsMap]);
+
+  // Resolves to the rows for the current query, 'error' (after a toast),
+  // or null when a newer load superseded this one.
+  const loadContacts = useCallback(async (): Promise<
+    { contacts: ContactWithTags[]; totalCount: number } | 'error' | null
+  > => {
     const seq = ++fetchSeq.current;
-    setLoading(true);
-    // The visible rows are about to change — drop any selection that
-    // referred to the old page/search results so the bulk bar can't
-    // act on rows the user can no longer see.
-    setSelected(new Set());
 
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
@@ -224,11 +258,10 @@ export default function ContactsPage() {
         p_offset: from,
         p_sort: sort,
       });
-      if (seq !== fetchSeq.current) return; // superseded by a newer fetch
+      if (seq !== fetchSeq.current) return null; // superseded by a newer fetch
       if (error) {
         toast.error(t('toastFailedLoad'));
-        setLoading(false);
-        return;
+        return 'error';
       }
       const rows = (data ?? []) as { contact: Contact; total_count: number }[];
       contactRows = rows.map((r) => r.contact);
@@ -245,23 +278,16 @@ export default function ContactsPage() {
       }
 
       const { data, count: exactCount, error } = await query;
-      if (seq !== fetchSeq.current) return; // superseded by a newer fetch
+      if (seq !== fetchSeq.current) return null; // superseded by a newer fetch
       if (error) {
         toast.error(t('toastFailedLoad'));
-        setLoading(false);
-        return;
+        return 'error';
       }
       contactRows = data ?? [];
       count = exactCount ?? 0;
     }
 
-    setTotalCount(count);
-
-    if (contactRows.length === 0) {
-      setContacts([]);
-      setLoading(false);
-      return;
-    }
+    if (contactRows.length === 0) return { contacts: [], totalCount: count };
 
     // Fetch tags for these contacts
     const contactIds = contactRows.map((c) => c.id);
@@ -269,7 +295,7 @@ export default function ContactsPage() {
       .from('contact_tags')
       .select('contact_id, tag_id')
       .in('contact_id', contactIds);
-    if (seq !== fetchSeq.current) return; // superseded by a newer fetch
+    if (seq !== fetchSeq.current) return null; // superseded by a newer fetch
 
     const tagsByContact: Record<string, string[]> = {};
     contactTags?.forEach((ct) => {
@@ -284,9 +310,32 @@ export default function ContactsPage() {
         .filter(Boolean),
     }));
 
-    setContacts(enriched);
-    setLoading(false);
+    return { contacts: enriched, totalCount: count };
   }, [supabase, page, search, selectedTagIds, sort, tagsMap, t]);
+
+  const applyContacts = useCallback(
+    (key: string, result: Awaited<ReturnType<typeof loadContacts>>) => {
+      if (result === null) return; // a newer load owns the screen
+      if (result !== 'error') {
+        setTotalCount(result.totalCount);
+        setContacts(result.contacts);
+      }
+      setLoadedKey(key);
+      setLoading(false);
+    },
+    []
+  );
+
+  // Reload after a mutation (delete, import, …): spinner on, and drop the
+  // selection since the visible rows are about to change.
+  const fetchContacts = useCallback(async () => {
+    setLoading(true);
+    setSelected(new Set());
+    applyContacts(queryKey, await loadContacts());
+  }, [setSelected, applyContacts, queryKey, loadContacts]);
+
+  const showLoading = loading || loadedKey !== queryKey;
+
 
   /** Exports every contact matching the CURRENT search + tag filters —
    *  not just the loaded page — to Excel. Mirrors fetchContacts' two
@@ -356,12 +405,24 @@ export default function ContactsPage() {
   // synchronously in the effect body, so the cascade the lint rule
   // warns about doesn't apply here.
   useEffect(() => {
-    fetchTags();
-  }, [fetchTags]);
+    let cancelled = false;
+    void loadTagsMap().then((map) => {
+      if (!cancelled) applyTagsMap(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTagsMap, applyTagsMap]);
 
   useEffect(() => {
-    fetchContacts();
-  }, [fetchContacts]);
+    let cancelled = false;
+    void loadContacts().then((result) => {
+      if (!cancelled) applyContacts(queryKey, result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadContacts, applyContacts, queryKey]);
 
   function openAddForm() {
     setEditContact(null);
@@ -754,7 +815,7 @@ export default function ContactsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
+            {showLoading ? (
               <TableRow className="border-border">
                 <TableCell colSpan={9} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">

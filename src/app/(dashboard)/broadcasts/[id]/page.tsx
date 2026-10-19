@@ -169,7 +169,14 @@ export default function BroadcastDetailPage() {
     'pending' | 'failed' | null
   >(null);
 
-  const fetchData = useCallback(async () => {
+  // The broadcast can load even when its recipients then fail, so each
+  // part is optional in the result.
+  const loadData = useCallback(async () => {
+    const result: {
+      broadcast?: Broadcast;
+      recipients?: BroadcastRecipient[];
+      error?: string;
+    } = {};
     try {
       const supabase = createClient();
 
@@ -180,7 +187,7 @@ export default function BroadcastDetailPage() {
         .single();
 
       if (bcError) throw bcError;
-      setBroadcast(bc);
+      result.broadcast = bc;
 
       const { data: recs, error: recsError } = await supabase
         .from('broadcast_recipients')
@@ -189,17 +196,36 @@ export default function BroadcastDetailPage() {
         .order('created_at', { ascending: false });
 
       if (recsError) throw recsError;
-      setRecipients(recs ?? []);
+      result.recipients = recs ?? [];
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('notFound'));
-    } finally {
-      setLoading(false);
+      result.error = err instanceof Error ? err.message : t('notFound');
     }
+    return result;
   }, [broadcastId, t]);
 
+  const applyData = useCallback(
+    (result: Awaited<ReturnType<typeof loadData>>) => {
+      if (result.broadcast) setBroadcast(result.broadcast);
+      if (result.recipients) setRecipients(result.recipients);
+      if (result.error) setError(result.error);
+      setLoading(false);
+    },
+    []
+  );
+
+  const fetchData = useCallback(async () => {
+    applyData(await loadData());
+  }, [loadData, applyData]);
+
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    let cancelled = false;
+    void loadData().then((result) => {
+      if (!cancelled) applyData(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadData, applyData]);
 
   const filteredRecipients = useMemo(() => {
     if (statusFilter === 'all') return recipients;

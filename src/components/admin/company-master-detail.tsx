@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Bot,
   Building2,
@@ -187,35 +187,53 @@ export function CompanyMasterDetail({
     companies.find((company) => company.id === selectedId) ??
     companies[0] ??
     null;
-  const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('GTQ');
-  const [vertical, setVertical] = useState('generic');
-  // Draft set of HIDDEN sidebar sections for the selected company.
-  const [hiddenDraft, setHiddenDraft] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!selected) return;
-    // Reset the editable draft when the operator selects another company.
-    setAmount(selected.subscriptionAmount?.toString() ?? '');
-    setCurrency(selected.subscriptionCurrency || 'GTQ');
-    setVertical(selected.industryVertical || 'generic');
-    setHiddenDraft(
-      resolveHiddenNavKeys({
-        hidden_nav_keys: selected.hiddenNavKeys,
-        industry_vertical: selected.industryVertical,
-      })
-    );
-    // Narrow deps on purpose: re-sync the draft only when the selected
-    // company or its subscription fields change, not on every re-render
-    // that produces a fresh `selected` object.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    selected?.id,
-    selected?.subscriptionAmount,
-    selected?.subscriptionCurrency,
-    selected?.industryVertical,
-    selected?.hiddenNavKeys,
-  ]);
+  // Editable draft for the selected company, tagged with the company and
+  // the server fields it started from: selecting another company — or a
+  // save changing any of those fields — drops every unsaved edit, the same
+  // reset the old sync effect did.
+  const draftBase = selected
+    ? JSON.stringify([
+        selected.id,
+        selected.subscriptionAmount,
+        selected.subscriptionCurrency,
+        selected.industryVertical,
+        selected.hiddenNavKeys,
+      ])
+    : '';
+  const [edits, setEdits] = useState<{
+    base: string;
+    amount?: string;
+    currency?: string;
+    vertical?: string;
+    // Draft set of HIDDEN sidebar sections for the selected company.
+    hidden?: string[];
+  } | null>(null);
+  const current = edits?.base === draftBase ? edits : null;
+  const amount =
+    current?.amount ?? selected?.subscriptionAmount?.toString() ?? '';
+  const currency =
+    current?.currency ?? (selected?.subscriptionCurrency || 'GTQ');
+  const vertical =
+    current?.vertical ?? (selected?.industryVertical || 'generic');
+  const hiddenDraft =
+    current?.hidden ??
+    (selected
+      ? resolveHiddenNavKeys({
+          hidden_nav_keys: selected.hiddenNavKeys,
+          industry_vertical: selected.industryVertical,
+        })
+      : []);
+  const edit = (patch: Omit<NonNullable<typeof edits>, 'base'>) =>
+    setEdits((prev) => ({
+      ...(prev?.base === draftBase ? prev : null),
+      ...patch,
+      base: draftBase,
+    }));
+  const setAmount = (value: string) => edit({ amount: value });
+  const setCurrency = (value: string) => edit({ currency: value });
+  const setVertical = (value: string) => edit({ vertical: value });
+  const setHiddenDraft = (update: (prev: string[]) => string[]) =>
+    edit({ hidden: update(hiddenDraft) });
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();

@@ -16,7 +16,7 @@ import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
-import { useStoredBoolean } from "@/hooks/use-stored-boolean";
+import { useStoredBoolean } from "@/hooks/use-stored-preference";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).

@@ -67,6 +67,16 @@ const TONE_CLASS: Record<StatusTone, string> = {
   info: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
 }
 
+async function fetchProfile(patientId: string): Promise<ProfileResponse | null> {
+  try {
+    const res = await fetch(`/api/patients/${patientId}`)
+    const body = await readResponseJson<ProfileResponse>(res)
+    return res.ok ? body : null
+  } catch {
+    return null
+  }
+}
+
 export default function PatientProfilePage() {
   const t = useTranslations('Clinic.profile')
   const params = useParams<{ id: string }>()
@@ -81,34 +91,38 @@ export default function PatientProfilePage() {
   const [notFound, setNotFound] = useState(false)
   const [visitDraft, setVisitDraft] = useState<VisitDraft | null>(null)
 
-  const load = useCallback(async (patientId: string, alive: () => boolean) => {
-    setLoading(true)
-    setNotFound(false)
-    try {
-      const res = await fetch(`/api/patients/${patientId}`)
-      const body = await readResponseJson<ProfileResponse>(res)
-      if (!alive()) return
-      if (res.ok) setData(body)
-      else setNotFound(true)
-    } catch {
-      if (alive()) setNotFound(true)
-    } finally {
-      if (alive()) setLoading(false)
-    }
-  }, [])
+  // Which patient the on-screen profile belongs to; loading until it matches.
+  const [loadedId, setLoadedId] = useState<string | null>(null)
+
+  // null = not found (or the request failed).
+  const applyProfile = useCallback(
+    (patientId: string, body: ProfileResponse | null) => {
+      if (body) setData(body)
+      setNotFound(!body)
+      setLoadedId(patientId)
+      setLoading(false)
+    },
+    [],
+  )
 
   const reload = useCallback(() => {
-    if (id) void load(id, () => true)
-  }, [id, load])
+    if (!id) return
+    setLoading(true)
+    void fetchProfile(id).then((body) => applyProfile(id, body))
+  }, [id, applyProfile])
 
   useEffect(() => {
     if (!id) return
     let on = true
-    void load(id, () => on)
+    void fetchProfile(id).then((body) => {
+      if (on) applyProfile(id, body)
+    })
     return () => {
       on = false
     }
-  }, [id, load])
+  }, [id, applyProfile])
+
+  const showLoading = loading || (!!id && loadedId !== id)
 
   const dateFmt = useMemo(
     () => new Intl.DateTimeFormat('es-GT', { day: '2-digit', month: 'long', year: 'numeric', timeZone: tz }),
@@ -128,7 +142,7 @@ export default function PatientProfilePage() {
   )
   const day = (d: string) => dateFmt.format(new Date(`${d}T12:00:00`))
 
-  if (loading) {
+  if (showLoading) {
     return <div className="bg-muted/40 h-96 animate-pulse rounded-lg" />
   }
   if (notFound || !data) {

@@ -5125,3 +5125,42 @@ de `src/components/settings/` (17 archivos). Quedan 45 en el resto de la app.
 **Validación.** Lint 0 errores (45 avisos, todos fuera de Configuración),
 typecheck, 2677 tests y `npm run build` en verde. Sin prueba en navegador
 desde la sesión (requiere login real).
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (refactor de los últimos `set-state-in-effect` + regla de vuelta a error)
+
+**Qué cambia.** Se eliminan los 45 avisos restantes de
+`react-hooks/set-state-in-effect` (35 archivos: páginas del dashboard,
+panel de admin, clínica, contactos, productos, difusiones, flujos, hooks
+compartidos) y la regla **vuelve a ser error** en `eslint.config.mjs` (se
+quita el override a `warn` del PR #284). El lint queda en 0 problemas.
+
+Patrones (los mismos de #285/#286):
+
+- **Cargadores** → consulta pura + aplicación en el `.then` con cancelación;
+  las recargas tras guardar siguen igual. Donde la carga depende de filtros o
+  de un id (contactos, citas, pacientes, KPIs, archivos de clínica, alertas,
+  tareas), el "cargando" se deriva de la clave para la que llegaron los
+  datos en vez de prenderse en el efecto.
+- **Formularios que se rellenan o resetean** al abrir o al cambiar una prop
+  (diálogos de citas/visitas/reprogramación, formularios de contacto y
+  producto, cotizador, catálogo, reporte de soporte, deep link
+  `?patient=`) → ajuste durante el render (patrón recomendado por React),
+  sin un render intermedio con datos viejos.
+- **Borradores ligados al valor del servidor** (detalle de empresa en
+  /admin, enlace/banner del catálogo) → como en Configuración.
+- **Preferencias en `localStorage`** → `src/hooks/use-stored-boolean.ts` se
+  renombra a `use-stored-preference.ts` y suma `useStoredChoice` (vista del
+  calendario). La demo de IA de /admin restaura su borrador con
+  `useSyncExternalStore` y solo guarda lo que el operador edita.
+
+**Bugs corregidos de paso.**
+- Audiencia de difusiones: el conteo estimado no se cancelaba; una respuesta
+  lenta de una selección anterior podía pisar el número de la actual.
+- Tareas de un contacto: si la carga fallaba al cambiar de contacto, podían
+  quedar visibles las del contacto anterior.
+
+**Validación.** Lint 0 problemas (regla en error), typecheck, 2679 tests y
+`npm run build` en verde. Sin prueba en navegador desde la sesión (requiere
+login real).

@@ -114,21 +114,36 @@ export function OnboardingCompanySection({ companyId, industryVertical }: { comp
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const fetchIntakes = useCallback(async (): Promise<{ intakes: Intake[] } | { error: string }> => {
     try {
       const response = await fetch(`/api/admin/companies/${companyId}/onboarding`, { cache: 'no-store' });
       const body = await readResponseJson<{ error?: string; intakes: Intake[] }>(response);
       if (!response.ok) throw new Error(body.error ?? 'No se pudo cargar');
-      setIntakes(body.intakes);
+      return { intakes: body.intakes };
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'No se pudo cargar');
+      return { error: cause instanceof Error ? cause.message : 'No se pudo cargar' };
     }
   }, [companyId]);
 
+  const applyIntakes = useCallback((result: Awaited<ReturnType<typeof fetchIntakes>>) => {
+    if ('error' in result) setError(result.error);
+    else setIntakes(result.intakes);
+  }, []);
+
+  const load = useCallback(async () => {
+    applyIntakes(await fetchIntakes());
+  }, [fetchIntakes, applyIntakes]);
+
   // The parent keys this section by company, so state starts fresh per company.
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void fetchIntakes().then((result) => {
+      if (!cancelled) applyIntakes(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchIntakes, applyIntakes]);
 
   const createLink = async () => {
     setBusy('link');

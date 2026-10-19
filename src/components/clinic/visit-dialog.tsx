@@ -83,8 +83,11 @@ export function VisitDialog({
     }
   }, [tz])
 
-  useEffect(() => {
-    if (!draft) return
+  // Seed the form from each new draft — while rendering (React's pattern
+  // for reacting to a changed input) rather than in an effect.
+  const [seededFrom, setSeededFrom] = useState<{ draft: typeof draft; today: string } | null>(null)
+  if (draft && (seededFrom?.draft !== draft || seededFrom.today !== todayLocal)) {
+    setSeededFrom({ draft, today: todayLocal })
     setDoctorId(draft.doctor_id ?? '')
     setServiceId(draft.service_id ?? '')
     setDate(draft.visit_date ?? todayLocal)
@@ -92,6 +95,10 @@ export function VisitDialog({
     setNotes(draft.notes ?? '')
     setObservations(draft.observations ?? '')
     setFollowUp(draft.follow_up_date ?? '')
+  }
+
+  useEffect(() => {
+    if (!draft) return
     Promise.all([
       fetch('/api/doctors').then((r) => readResponseJson<{ doctors: Doctor[] }>(r)),
       fetch('/api/products').then((r) => readResponseJson<{ products: Service[] }>(r)),
@@ -103,15 +110,16 @@ export function VisitDialog({
         setTemplates(tpl.templates ?? [])
       })
       .catch(() => {})
-  }, [draft, todayLocal])
+  }, [draft])
 
-  // prefill amount from the picked service on create
-  useEffect(() => {
-    if (isEdit || !serviceId) return
-    const svc = services.find((s) => s.id === serviceId)
+  // Prefill amount from the picked service on create (when still empty),
+  // once per service pick / services load.
+  const [pricedFor, setPricedFor] = useState<{ serviceId: string; services: Service[] } | null>(null)
+  if (pricedFor?.serviceId !== serviceId || pricedFor.services !== services) {
+    setPricedFor({ serviceId, services })
+    const svc = !isEdit && serviceId ? services.find((s) => s.id === serviceId) : undefined
     if (svc && amount.trim() === '') setAmount(String(svc.price ?? ''))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceId, services])
+  }
 
   const insertTemplate = (id: string) => {
     const tpl = templates.find((x) => x.id === id)

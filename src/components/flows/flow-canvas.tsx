@@ -350,11 +350,15 @@ function FlowCanvasInner() {
     return nodes;
   }, [builderNodes, entryNodeId, flashKey, autoLayoutPositions]);
 
+  // Local copy React-Flow mutates while dragging; re-synced whenever the
+  // derived nodes change — while rendering, React's pattern for reacting
+  // to a changed input.
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
-
-  useEffect(() => {
+  const [syncedNodes, setSyncedNodes] = useState(derivedRfNodes);
+  if (syncedNodes !== derivedRfNodes) {
+    setSyncedNodes(derivedRfNodes);
     setRfNodes(derivedRfNodes);
-  }, [derivedRfNodes]);
+  }
 
   const rfEdges = useMemo(() => {
     const canvasEdges = deriveCanvasEdges(builderNodes);

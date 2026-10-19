@@ -91,6 +91,32 @@ function formatDateTime(iso: string): string {
   });
 }
 
+
+async function fetchAlerts(
+  includeResolved: boolean,
+): Promise<{ alerts: SystemAlert[] } | { error: string }> {
+  try {
+    const response = await fetch(
+      `/api/admin/alerts${includeResolved ? '?resolved=1' : ''}`,
+      { cache: 'no-store' },
+    );
+    const body = await readResponseJson<{
+      error?: string;
+      alerts: SystemAlert[];
+    }>(response);
+    if (!response.ok)
+      throw new Error(body.error ?? 'No se pudieron cargar las alertas');
+    return { alerts: body.alerts };
+  } catch (cause) {
+    return {
+      error:
+        cause instanceof Error
+          ? cause.message
+          : 'No se pudieron cargar las alertas',
+    };
+  }
+}
+
 export function AlertsPanel() {
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,35 +125,47 @@ export function AlertsPanel() {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
-  const load = useCallback(async (includeResolved: boolean) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(
-        `/api/admin/alerts${includeResolved ? '?resolved=1' : ''}`,
-        { cache: 'no-store' },
-      );
-      const body = await readResponseJson<{
-        error?: string;
-        alerts: SystemAlert[];
-      }>(response);
-      if (!response.ok)
-        throw new Error(body.error ?? 'No se pudieron cargar las alertas');
-      setAlerts(body.alerts);
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'No se pudieron cargar las alertas',
-      );
-    } finally {
+  // Which list (open vs. including resolved) is on screen; loading until
+  // it matches the toggle.
+  const [loadedFor, setLoadedFor] = useState<boolean | null>(null);
+
+  const applyAlerts = useCallback(
+    (
+      includeResolved: boolean,
+      result: Awaited<ReturnType<typeof fetchAlerts>>,
+    ) => {
+      if ('error' in result) {
+        setError(result.error);
+      } else {
+        setAlerts(result.alerts);
+        setError(null);
+      }
+      setLoadedFor(includeResolved);
       setLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
+
+  const load = useCallback(
+    async (includeResolved: boolean) => {
+      setLoading(true);
+      setError(null);
+      applyAlerts(includeResolved, await fetchAlerts(includeResolved));
+    },
+    [applyAlerts],
+  );
 
   useEffect(() => {
-    void load(showResolved);
-  }, [load, showResolved]);
+    let cancelled = false;
+    void fetchAlerts(showResolved).then((result) => {
+      if (!cancelled) applyAlerts(showResolved, result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyAlerts, showResolved]);
+
+  const showLoading = loading || loadedFor !== showResolved;
 
   // Live updates: a fresh alert (or one bumping its occurrence count)
   // shows up without waiting for a manual refresh. The RLS policy on
@@ -229,9 +267,9 @@ export function AlertsPanel() {
               variant="outline"
               size="sm"
               onClick={() => void load(showResolved)}
-              disabled={loading}
+              disabled={showLoading}
             >
-              <RefreshCw className={loading ? 'animate-spin' : ''} />
+              <RefreshCw className={showLoading ? 'animate-spin' : ''} />
               Actualizar
             </Button>
           </div>
@@ -309,7 +347,7 @@ export function AlertsPanel() {
                 </TableCell>
               </TableRow>
             ))}
-            {!loading && alerts.length === 0 ? (
+            {!showLoading && alerts.length === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={8}
