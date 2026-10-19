@@ -450,6 +450,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     channel
       .on('broadcast', { event: KICKED_EVENT }, () => {
         supabase.auth.signOut({ scope: 'local' }).finally(() => {
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload drops all in-memory session state after sign-out.
           window.location.href = '/login?reason=other_device';
         });
       })
@@ -472,13 +473,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setProfile(null);
     setAccount(null);
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload drops all in-memory session state after sign-out.
     window.location.href = '/login';
   }, []);
 
+  const currentUserId = user?.id;
   const refreshProfile = useCallback(async () => {
-    if (!user?.id) return;
-    await fetchProfile(user.id);
-  }, [user?.id, fetchProfile]);
+    if (!currentUserId) return;
+    await fetchProfile(currentUserId);
+  }, [currentUserId, fetchProfile]);
 
   // Derive the role booleans once per profile change rather than on
   // every consumer render. Cheap regardless, but the memo also gives
@@ -552,6 +555,7 @@ export function useAuth(): AuthContextValue {
       loading: false,
       profileLoading: false,
       signOut: async () => {
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload drops all in-memory session state after sign-out.
         window.location.href = '/login';
       },
       refreshProfile: async () => {},

@@ -57,6 +57,13 @@ function detailEntries(input: Record<string, unknown>): [string, string][] {
     });
 }
 
+/** ISO due date `hours` from now, or null for a missing/non-positive offset. */
+function dueAtFromHours(hours: number): string | null {
+  return Number.isFinite(hours) && hours > 0
+    ? new Date(Date.now() + hours * 3_600_000).toISOString()
+    : null;
+}
+
 export function AiAssistant() {
   const { user } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -155,11 +162,7 @@ export function AiAssistant() {
           'Rule saved as a draft in Automations — review and activate it there.'
         );
       } else if (action === 'create_task') {
-        const hours = Number(actionInput.dueInHours);
-        const dueAt =
-          Number.isFinite(hours) && hours > 0
-            ? new Date(Date.now() + hours * 3_600_000).toISOString()
-            : null;
+        const dueAt = dueAtFromHours(Number(actionInput.dueInHours));
         const res = await fetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -5032,3 +5032,30 @@ viene del CLI de `shadcn` y de ESLint: solo herramientas de desarrollo; de
 2672 tests, `npm run build` y build de `mcp-server` — todo en verde. Se
 verificó que el lockfile conserva los binarios musl (`@next/swc-linux-x64-musl`,
 `@img/sharp-linuxmusl-x64`) que necesita la imagen `node:24-alpine`.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (lint: subir `eslint-config-next` a 16.4.2)
+
+**Qué cambia.** Se alinea `eslint-config-next` con `next` 16.4.2 (y con ello
+`eslint-plugin-react-hooks` 7.0.1 → 7.1.1). Las versiones nuevas activaban
+reglas del React Compiler que daban 84 errores de lint:
+
+- `react-hooks/set-state-in-effect` (81) — se baja a **warning** en
+  `eslint.config.mjs`. Son efectos que hoy funcionan (carga de datos al
+  montar, reinicio de formularios al cambiar una prop, lectura de
+  `localStorage`); reescribirlos es un refactor de comportamiento que se hace
+  por área y probando en navegador, no dentro de un bump de lint. La regla
+  queda visible para que el código nuevo evite el patrón.
+- `react-hooks/purity` (1, `ai-assistant.tsx`) — falso positivo (`Date.now()`
+  dentro de un handler); se extrajo a `dueAtFromHours()` a nivel de módulo.
+- `react-hooks/preserve-manual-memoization` (2, `message-thread.tsx` y
+  `use-auth.tsx`) — se saca `user?.id` a una constante antes del
+  `useCallback` para que la dependencia declarada coincida con la inferida.
+  Sin efecto en runtime (el React Compiler no está activo).
+- `@next/next/no-location-assign-relative-destination` (5 avisos) — son
+  recargas completas intencionales tras cerrar sesión / unirse a una cuenta;
+  se documentan con `eslint-disable-next-line` y su motivo.
+
+**Validación.** Lint 0 errores (81 warnings de la regla bajada), typecheck,
+2672 tests y `npm run build` en verde.
