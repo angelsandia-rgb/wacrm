@@ -293,7 +293,13 @@ export function MessageThread({
       refreshTimerRef.current = null;
     }, 700);
   }, [isRefreshing, onRefresh]);
-  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  // Paired with the conversation it was started in (same idea as
+  // `openMedia` below): a quote pulled from conversation A must not bleed
+  // into conversation B, and reading it back through that check drops it
+  // on a thread switch without a reset effect.
+  const [replyDraft, setReplyTo] = useState<
+    (ReplyDraft & { conversationId?: string }) | null
+  >(null);
   // Which attachment the media viewer is showing. Lives here rather than in
   // the bubble so the viewer can page through every image/video in the
   // thread (issue #373). Paired with the conversation it belongs to and read
@@ -378,6 +384,10 @@ export function MessageThread({
   const lastConversationIdRef = useRef<string | undefined>(undefined);
 
   const conversationId = conversation?.id;
+  const replyTo =
+    replyDraft && replyDraft.conversationId === conversationId
+      ? replyDraft
+      : null;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
 
   // The 24h session timer below needs the true last customer message,
@@ -386,19 +396,20 @@ export function MessageThread({
   // push the last customer message past the most recent
   // MESSAGES_PAGE_SIZE rows. Fetched separately (cheap: one row) so
   // the timer stays correct regardless of how much history is loaded.
-  const [lastCustomerMessageAt, setLastCustomerMessageAt] = useState<
-    string | null
-  >(null);
-  const [lastCustomerMessageLoaded, setLastCustomerMessageLoaded] =
-    useState(false);
+  // Tagged with the conversation + resync it answers, so the timer reads
+  // as "not loaded" until the fetch for the current thread lands.
+  const [lastCustomerFetch, setLastCustomerFetch] = useState<{
+    conversationId: string;
+    resyncToken: number;
+    createdAt: string | null;
+  } | null>(null);
+  const lastCustomerMessageLoaded =
+    !!conversationId &&
+    lastCustomerFetch?.conversationId === conversationId &&
+    lastCustomerFetch.resyncToken === resyncToken;
   useEffect(() => {
-    if (!conversationId) {
-      setLastCustomerMessageAt(null);
-      setLastCustomerMessageLoaded(false);
-      return;
-    }
+    if (!conversationId) return;
     let cancelled = false;
-    setLastCustomerMessageLoaded(false);
     const supabase = createClient();
     supabase
       .from('messages')
@@ -411,12 +422,15 @@ export function MessageThread({
         if (cancelled) return;
         if (error) {
           console.error('Failed to fetch last customer message:', error);
-        } else {
-          setLastCustomerMessageAt(
-            (data as { created_at: string }[] | null)?.[0]?.created_at ?? null
-          );
         }
-        setLastCustomerMessageLoaded(true);
+        setLastCustomerFetch({
+          conversationId,
+          resyncToken,
+          createdAt: error
+            ? null
+            : ((data as { created_at: string }[] | null)?.[0]?.created_at ??
+              null),
+        });
       });
     return () => {
       cancelled = true;
@@ -426,21 +440,30 @@ export function MessageThread({
   // Keeps the timer live for a customer message that arrives over
   // realtime while the thread is open — those land straight in
   // `messages` via onNewMessage and never go through the dedicated
-  // fetch above. Only ever moves the timestamp forward: the loaded
-  // window can lag behind the authoritative single-row fetch (e.g.
-  // right after opening a thread with 50+ agent-only messages after
-  // the last customer one), and this must never regress that.
-  useEffect(() => {
-    const latestCustomerMsg = [...messages]
+  // fetch above. Takes the later of the two: the loaded window can lag
+  // behind the authoritative single-row fetch (e.g. right after opening
+  // a thread with 50+ agent-only messages after the last customer one),
+  // and this must never regress that.
+  const lastCustomerMessageAt = useMemo(() => {
+    const fetched = lastCustomerMessageLoaded
+      ? (lastCustomerFetch?.createdAt ?? null)
+      : null;
+    const latestLoaded = [...messages]
       .reverse()
-      .find((m) => m.sender_type === 'customer');
-    if (!latestCustomerMsg) return;
-    setLastCustomerMessageAt((prev) =>
-      !prev || new Date(latestCustomerMsg.created_at) > new Date(prev)
-        ? latestCustomerMsg.created_at
-        : prev
-    );
-  }, [messages]);
+      .find(
+        (m) =>
+          m.sender_type === 'customer' && m.conversation_id === conversationId
+      )?.created_at;
+    if (!latestLoaded) return fetched;
+    return !fetched || new Date(latestLoaded) > new Date(fetched)
+      ? latestLoaded
+      : fetched;
+  }, [
+    lastCustomerMessageLoaded,
+    lastCustomerFetch,
+    messages,
+    conversationId,
+  ]);
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
@@ -609,10 +632,7 @@ export function MessageThread({
   // refetches the rows without also tearing down and rebuilding the
   // realtime channel.
   useEffect(() => {
-    if (!conversationId) {
-      setReactions([]);
-      return;
-    }
+    if (!conversationId) return;
     const supabase = createClient();
     let cancelled = false;
 
@@ -705,12 +725,6 @@ export function MessageThread({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversationId]);
-
-  // Clear any in-progress reply draft when the active conversation changes —
-  // a quote pulled from conversation A shouldn't bleed into conversation B.
-  useEffect(() => {
-    setReplyTo(null);
   }, [conversationId]);
 
   // Reset the server-side unread_count to 0 whenever an unread count
@@ -1080,12 +1094,14 @@ export function MessageThread({
   const reactionsByMessageId = useMemo(() => {
     const map = new Map<string, MessageReaction[]>();
     for (const r of reactions) {
+      // Rows from the previous thread linger until its refetch lands.
+      if (r.conversation_id !== conversationId) continue;
       const bucket = map.get(r.message_id);
       if (bucket) bucket.push(r);
       else map.set(r.message_id, [r]);
     }
     return map;
-  }, [reactions]);
+  }, [reactions, conversationId]);
 
   const contactDisplayName =
     contact?.name ||
@@ -1109,9 +1125,10 @@ export function MessageThread({
         id: msg.id,
         authorLabel: authorLabelFor(msg),
         preview: buildReplyPreview(msg, tQuote),
+        conversationId,
       });
     },
-    [authorLabelFor, tQuote]
+    [authorLabelFor, tQuote, conversationId]
   );
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.

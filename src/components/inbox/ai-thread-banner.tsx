@@ -90,11 +90,21 @@ export function AiThreadBanner({
   const botIgnoresAssignment = account?.industry_vertical === 'hotel';
   const [autoReplyOn, setAutoReplyOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
-  // Optimistic local mirror of the pause flag so the banner flips
-  // instantly on click; re-seeds whenever the thread (or its server
-  // state via realtime) changes.
-  const [paused, setPaused] = useState(disabled);
-  useEffect(() => setPaused(disabled), [conversationId, disabled]);
+  // Optimistic local value of the pause flag so the banner flips
+  // instantly on click. Paired with the thread and server value it was
+  // set against, so it drops out as soon as either changes (switching
+  // threads, or realtime delivering the server state).
+  const [pausedOverride, setPausedOverride] = useState<{
+    conversationId: string;
+    disabled: boolean;
+    paused: boolean;
+  } | null>(null);
+  const paused =
+    pausedOverride &&
+    pausedOverride.conversationId === conversationId &&
+    pausedOverride.disabled === disabled
+      ? pausedOverride.paused
+      : disabled;
 
   useEffect(() => {
     if (!accountId) return;
@@ -122,7 +132,7 @@ export function AiThreadBanner({
           toast.error(j?.error ?? t('updateError'));
           return;
         }
-        setPaused(paused);
+        setPausedOverride({ conversationId, disabled, paused });
         onChange?.({
           ai_autoreply_disabled: paused,
           // Take over assigns to the acting agent; resume releases only
@@ -141,7 +151,7 @@ export function AiThreadBanner({
         setBusy(false);
       }
     },
-    [conversationId, currentUserId, onChange, t]
+    [conversationId, currentUserId, disabled, onChange, t]
   );
 
   // Account has no auto-reply → nothing to show. (Still loading → nothing.)
