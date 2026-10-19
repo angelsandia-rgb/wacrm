@@ -70,7 +70,7 @@ const h = vi.hoisted(() => ({
     quickReplyRow: null as { id: string; content_text: string } | null,
     /** Account's active `products` rows, for the create_quote_chat item-matching
      *  and send_photo product-name lookups. */
-    products: [] as { id: string; name: string; image_url?: string | null; image_urls?: string[] | null; category_id?: string | null }[],
+    products: [] as { id: string; name: string; description?: string; max_guests?: number; image_url?: string | null; image_urls?: string[] | null; category_id?: string | null }[],
     /** `reservation_requests` row `sendHotelBookingNudge`/`sendQuoteFollowUp`
      *  look up (the in-progress booking for this conversation/product), or
      *  null when there isn't one yet. */
@@ -426,7 +426,7 @@ vi.mock('./admin-client', () => ({
             Promise.resolve({ data: h.state.products, error: null }).then(onFulfilled),
           maybeSingle: () =>
             Promise.resolve({
-              data: h.state.products[0] ? { category_id: h.state.products[0].category_id ?? null } : null,
+              data: h.state.products[0] ? { category_id: h.state.products[0].category_id ?? null, description: h.state.products[0].description ?? null, max_guests: h.state.products[0].max_guests ?? null } : null,
               error: null,
             }),
         }
@@ -5662,4 +5662,18 @@ describe('Richard room recommendation with an estimate', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText.mock.calls[0]?.[0]?.text).not.toContain('1,940')
   })
+})
+
+
+it('does not send a model price from an explicitly unapproved high-season table', async () => {
+  h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
+  h.state.products = [{ id: 'classic', name: 'Suite Clasica', description: 'Tarifas de temporada alta pendientes de confirmacion del hotel.' }]
+  h.state.reservationRow = { id: 'rr-1', category: 'habitaciones', service_name: 'Suite Clasica', product_id: 'classic', guests: 2, check_in: '2027-12-27', check_out: '2027-12-29' }
+  h.state.productRates = [{ day_of_week: 'mon', occupancy: 'couple', price: 425, date_from: '2027-12-20', date_to: '2028-01-02' }]
+  h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Cuanto cuesta la Suite Clasica para dos del 27 al 29 de diciembre?' }])
+  h.generateReply.mockResolvedValue({ text: 'El total seria Q850 por dos noches.', handoff: false, markDealWon: false, moveToStageName: null, reservationProposals: [{ category: 'habitaciones', fields: { servicio: 'Suite Clasica', personas: '2', entrada: '2027-12-27', salida: '2027-12-29' }, confirmed: false }] })
+  await dispatchInboundToAiReply(ARGS)
+  const text = h.engineSendText.mock.calls[0]?.[0]?.text
+  expect(text).not.toContain('850')
+  expect(text).toContain('requiere confirmaci\u00f3n del hotel')
 })

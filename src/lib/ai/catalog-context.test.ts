@@ -174,3 +174,16 @@ describe('loadCatalogContext — room capacity and child rate (migration 160)', 
     expect(lines?.[0]).toContain('capacidad máx. 5 personas (adultos + niños)')
   })
 })
+
+
+it('keeps hotel restrictions beyond the old 80-character cutoff and hides disputed season amounts', async () => {
+ const rates = [
+  { product_id: 'r1', day_of_week: 'sun', occupancy: 'couple', price: 600, date_from: null, date_to: null },
+  { product_id: 'r1', day_of_week: 'sun', occupancy: 'couple', price: 425, date_from: '2026-12-21', date_to: '2027-01-03' },
+ ]
+ const result = await loadCatalogContext(makeDb([{ id: 'r1', name: 'Junior Suite Familiar', price: 600, description: 'Habitacion familiar. '.repeat(6) + 'Desayuno incluido para los ni\u00f1os. Cama adicional solo en Junior. Tarifas de temporada alta pendientes de confirmacion del hotel.' }], 'GTQ', { vertical: 'hotel', rates }), 'acct-1')
+ expect(result?.[0]).toContain('Desayuno incluido')
+ expect(result?.[0]).toContain('Cama adicional')
+ expect(result?.[0]).not.toContain('425')
+ expect(result?.[0]).toContain('TEMPORADA ALTA: precio pendiente')
+})

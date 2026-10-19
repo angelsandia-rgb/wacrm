@@ -1,3 +1,4 @@
+import { markPendingSeasonRates } from '@/lib/products/rate-approval'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   hasChildRates,
@@ -225,10 +226,11 @@ export async function loadStayPricingInputs(
       .select('day_of_week, occupancy, price, date_from, date_to')
       .eq('account_id', accountId)
       .eq('product_id', productId),
-    db.from('products').select('max_guests').eq('account_id', accountId).eq('id', productId).maybeSingle(),
+    db.from('products').select('max_guests, description').eq('account_id', accountId).eq('id', productId).maybeSingle(),
   ])
-  const raw = productErr ? null : (product as { max_guests?: number | null } | null)?.max_guests
-  return { rates: (rateRows ?? []) as ProductRate[], maxGuests: raw && raw > 0 ? raw : null }
+  if (productErr) return { rates: [], maxGuests: null }
+  const raw = (product as { max_guests?: number | null } | null)?.max_guests
+  return { rates: markPendingSeasonRates((rateRows ?? []) as ProductRate[], product?.description), maxGuests: raw && raw > 0 ? raw : null }
 }
 
 /**

@@ -53,6 +53,8 @@ export const TIER_GUESTS: Record<Occupancy, number> = { standard: 1, couple: 2, 
 /** A row of `product_rates`, request-body or DB shape (only the fields
  *  the resolver needs). */
 export interface ProductRate {
+  /** Runtime approval guard; disputed published rows remain stored for audit. */
+  requires_confirmation?: boolean
   day_of_week: DayOfWeek
   occupancy: RateTier
   price: number
@@ -173,6 +175,7 @@ export function resolveNightlyRate(
 ): number | null {
   if (occupancy === null) return null
   const day = dayOfWeekOf(nightISO)
+  if (rates.some(r => r.requires_confirmation && r.day_of_week === day && seasonContains(r, nightISO))) return null
   const valid = (r: ProductRate) => r.day_of_week === day && Number.isFinite(r.price) && r.price > 0
   // A season that prices THIS night (any tier) owns it entirely: a tier
   // it leaves out must never borrow the cheaper always-on rate. Real
