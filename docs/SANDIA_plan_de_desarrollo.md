@@ -5093,3 +5093,35 @@ del inbox (incluidas las tarjetas de clínica y hotel que viven en él). Quedan
 **Validación.** Lint 0 errores (69 avisos, todos fuera del inbox), typecheck,
 2677 tests y `npm run build` en verde. No se pudo probar en navegador desde la
 sesión (requiere login real); conviene un recorrido manual del inbox.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (Configuración: refactor de `set-state-in-effect`)
+
+**Qué cambia.** Se eliminan los 24 avisos de `react-hooks/set-state-in-effect`
+de `src/components/settings/` (17 archivos). Quedan 45 en el resto de la app.
+
+- **Cargadores** (API keys, webhooks y su log de entregas, miembros, push,
+  respuestas rápidas, médicos y plantillas de notas de la clínica, etiquetas,
+  plantillas de WhatsApp) → la consulta se separa en una función pura que
+  devuelve los datos; el efecto los aplica desde el `.then` y descarta
+  respuestas viejas. Las recargas tras guardar siguen usando la función de
+  siempre (`load`, `fetchTags`, …), que muestra el spinner.
+- **Integraciones** (Facebook, Instagram, Google Calendar, Google Sheets,
+  WhatsApp) → la carga devuelve un "snapshot" del estado y una función lo
+  aplica; se mantiene la guarda de "una vez por cuenta" (sin cancelación, para
+  no dejar el spinner pegado si el efecto se re-ejecuta). El "cargando" para un
+  usuario sin sesión se deriva en vez de apagarse en el efecto. El chequeo de
+  salud de WhatsApp sí descarta resultados viejos al cambiar de número.
+- **Borradores ligados al valor del servidor** (nombre de empresa y moneda en
+  Negocios, nombre y correo en Perfil) → la edición se guarda junto con el
+  valor del que partió; si el servidor cambia (perfil cargado o guardado) se
+  descarta, igual que antes, sin efecto de sincronización. Zona horaria y
+  enfriamiento de leads derivan "cargando" de la cuenta para la que llegaron
+  los datos.
+- **Plantillas** → `body_samples` se redimensiona al leer (`useMemo`) en vez de
+  reescribir el estado en un efecto.
+
+**Validación.** Lint 0 errores (45 avisos, todos fuera de Configuración),
+typecheck, 2677 tests y `npm run build` en verde. Sin prueba en navegador
+desde la sesión (requiere login real).

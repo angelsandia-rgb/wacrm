@@ -91,6 +91,17 @@ interface ConfigSummary {
  * shipped alongside migration 050; this used to be a single-connection
  * form (one row per account was a DB-level UNIQUE constraint).
  */
+/** Live connection check for one number; null when the request fails. */
+async function checkHealth(id: string): Promise<WhatsAppApiPayload | null> {
+  try {
+    const res = await fetch(`/api/whatsapp/config/${id}`, { method: 'GET' });
+    return await readResponseJson<WhatsAppApiPayload>(res);
+  } catch (err) {
+    console.error('Health check failed:', err);
+    return null;
+  }
+}
+
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
   const { user, accountId, loading: authLoading, profileLoading } = useAuth();
@@ -103,36 +114,56 @@ export function WhatsAppConfig() {
   const [requestNumberOpen, setRequestNumberOpen] = useState(false);
   const loadedAccountIdRef = useRef<string | null>(null);
 
-  const fetchConfigs = useCallback(async () => {
-    setLoadingList(true);
+  // numberLimit is undefined when the request failed (keep the current one).
+  const loadConfigs = useCallback(async (): Promise<{
+    configs: ConfigSummary[];
+    numberLimit?: number;
+  }> => {
     try {
       const res = await fetch('/api/whatsapp/config');
       const data = await readResponseJson<{
         configs?: ConfigSummary[];
         numberLimit?: number;
       }>(res);
-      setConfigs(Array.isArray(data?.configs) ? data.configs : []);
-      setNumberLimit(data?.numberLimit ?? 1);
+      return {
+        configs: Array.isArray(data?.configs) ? data.configs : [],
+        numberLimit: data?.numberLimit ?? 1,
+      };
     } catch (err) {
       console.error('Failed to load WhatsApp connections:', err);
       toast.error(t('loadFailed'));
-      setConfigs([]);
-    } finally {
-      setLoadingList(false);
+      return { configs: [] };
     }
   }, [t]);
+
+  const applyConfigs = useCallback(
+    (loaded: Awaited<ReturnType<typeof loadConfigs>>) => {
+      setConfigs(loaded.configs);
+      if (loaded.numberLimit !== undefined) setNumberLimit(loaded.numberLimit);
+      setLoadingList(false);
+    },
+    []
+  );
+
+  const fetchConfigs = useCallback(async () => {
+    setLoadingList(true);
+    applyConfigs(await loadConfigs());
+  }, [loadConfigs, applyConfigs]);
 
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoadingList(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchConfigs();
-  }, [authLoading, profileLoading, user, accountId, fetchConfigs]);
+    void loadConfigs().then(applyConfigs);
+  }, [authLoading, profileLoading, user, accountId, loadConfigs, applyConfigs]);
+
+  // Signed out (or no account) once auth settles: nothing to load.
+  const showLoadingList =
+    loadingList && (authLoading || profileLoading || (!!user && !!accountId));
 
   async function handleSetDefault(id: string) {
     try {
@@ -258,7 +289,7 @@ export function WhatsAppConfig() {
         </div>
       </div>
 
-      {loadingList ? (
+      {showLoadingList ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="text-primary size-6 animate-spin" />
         </div>
@@ -421,36 +452,46 @@ function ConnectionForm({
       ? `${window.location.origin}/api/whatsapp/webhook${provider === 'zernio' ? '/zernio' : ''}`
       : '';
 
-  const runHealthCheck = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/whatsapp/config/${id}`, { method: 'GET' });
-      const payload = await readResponseJson<WhatsAppApiPayload>(res);
-      if (payload.connected) {
-        setConnectionStatus('connected');
-        setResetReason(null);
-        setStatusMessage('');
-      } else {
-        setConnectionStatus('disconnected');
-        setResetReason(
-          payload.needs_reset
-            ? 'token_corrupted'
-            : payload.reason === 'meta_api_error'
-              ? 'meta_api_error'
-              : payload.reason === 'zernio_api_error'
-                ? 'zernio_api_error'
-                : null
-        );
-        setStatusMessage(payload.message || '');
-      }
-    } catch (err) {
-      console.error('Health check failed:', err);
+  // null = the check itself failed; reason/message shown before are kept.
+  const applyHealth = useCallback((payload: WhatsAppApiPayload | null) => {
+    if (payload?.connected) {
+      setConnectionStatus('connected');
+      setResetReason(null);
+      setStatusMessage('');
+    } else if (payload) {
+      setConnectionStatus('disconnected');
+      setResetReason(
+        payload.needs_reset
+          ? 'token_corrupted'
+          : payload.reason === 'meta_api_error'
+            ? 'meta_api_error'
+            : payload.reason === 'zernio_api_error'
+              ? 'zernio_api_error'
+              : null
+      );
+      setStatusMessage(payload.message || '');
+    } else {
       setConnectionStatus('disconnected');
     }
   }, []);
 
+  const runHealthCheck = useCallback(
+    async (id: string) => {
+      applyHealth(await checkHealth(id));
+    },
+    [applyHealth]
+  );
+
   useEffect(() => {
-    if (configId) runHealthCheck(configId);
-  }, [configId, runHealthCheck]);
+    if (!configId) return;
+    let cancelled = false;
+    void checkHealth(configId).then((payload) => {
+      if (!cancelled) applyHealth(payload);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [configId, applyHealth]);
 
   async function handleSave() {
     if (provider === 'zernio') {

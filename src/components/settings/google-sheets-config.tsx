@@ -86,34 +86,43 @@ export function GoogleSheetsConfig() {
   const loadedAccountIdRef = useRef<string | null>(null);
   const consumedRedirectRef = useRef(false);
 
-  const fetchStatus = useCallback(async () => {
-    setLoading(true);
+  const loadStatus = useCallback(async (): Promise<ConfigPayload> => {
     try {
       const res = await fetch('/api/google-sheets/config');
-      const payload = await readResponseJson<ConfigPayload>(res);
-      setCfg(payload);
-      if (payload.spreadsheet_id) setSpreadsheetInput(payload.spreadsheet_id);
-      if (payload.sheet_tab) setSheetTab(payload.sheet_tab);
-      if (payload.events && payload.events.length) setEvents(payload.events);
+      return await readResponseJson<ConfigPayload>(res);
     } catch (err) {
       console.error('[google-sheets] status fetch failed:', err);
-      setCfg({ connected: false });
-    } finally {
-      setLoading(false);
+      return { connected: false };
     }
   }, []);
+
+  const applyStatus = useCallback((payload: ConfigPayload) => {
+    setCfg(payload);
+    if (payload.spreadsheet_id) setSpreadsheetInput(payload.spreadsheet_id);
+    if (payload.sheet_tab) setSheetTab(payload.sheet_tab);
+    if (payload.events && payload.events.length) setEvents(payload.events);
+    setLoading(false);
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true);
+    applyStatus(await loadStatus());
+  }, [loadStatus, applyStatus]);
 
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoading(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchStatus();
-  }, [authLoading, profileLoading, user, accountId, fetchStatus]);
+    void loadStatus().then(applyStatus);
+  }, [authLoading, profileLoading, user, accountId, loadStatus, applyStatus]);
+
+  // Signed out (or no account) once auth settles: nothing to load.
+  const showLoading =
+    loading && (authLoading || profileLoading || (!!user && !!accountId));
 
   useEffect(() => {
     if (consumedRedirectRef.current) return;
@@ -123,12 +132,12 @@ export function GoogleSheetsConfig() {
     consumedRedirectRef.current = true;
     if (connected) {
       toast.success('Google Sheets conectado');
-      fetchStatus();
+      void loadStatus().then(applyStatus);
     } else if (error) {
       toast.error(`No se pudo conectar Google Sheets: ${error}`);
     }
     router.replace(`${pathname}?tab=google-sheets`);
-  }, [searchParams, router, pathname, fetchStatus]);
+  }, [searchParams, router, pathname, loadStatus, applyStatus]);
 
   const sheetableEvents = cfg?.sheetable_events ?? Object.keys(EVENT_LABELS);
   const isConnected = Boolean(cfg?.connected);
@@ -211,7 +220,7 @@ export function GoogleSheetsConfig() {
     }
   }
 
-  if (loading) {
+  if (showLoading) {
     return (
       <section className="animate-in fade-in-50 duration-200">
         <SettingsPanelHead title="Google Sheets" description="Envía reportes del CRM a una hoja de cálculo." />
