@@ -34,8 +34,14 @@ export function PushNotificationsCard() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    void getPushState().then((next) => {
+      if (!cancelled) setState(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Nothing to show if the browser can't do push at all, or the server
   // has no VAPID keys configured.

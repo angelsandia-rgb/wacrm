@@ -192,49 +192,61 @@ export function TemplateManager() {
     [form.header_format, form.header_content]
   );
 
-  // Resize body_samples so it always has exactly bodyVarCount entries.
-  // (We mutate via setForm in an effect so React owns the state.)
-  useEffect(() => {
-    setForm((prev) => {
-      if (prev.body_samples.length === bodyVarCount) return prev;
-      const next = prev.body_samples.slice(0, bodyVarCount);
-      while (next.length < bodyVarCount) next.push('');
-      return { ...prev, body_samples: next };
-    });
-  }, [bodyVarCount]);
+  // body_samples sized to exactly bodyVarCount entries, read through
+  // this instead of resizing the stored array in an effect.
+  const bodySamples = useMemo(() => {
+    const next = form.body_samples.slice(0, bodyVarCount);
+    while (next.length < bodyVarCount) next.push('');
+    return next;
+  }, [form.body_samples, bodyVarCount]);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
+    if (authLoading || !user) return;
+    let cancelled = false;
+    void loadTemplates(user.id).then((loaded) => {
+      if (cancelled) return;
+      if (loaded) setTemplates(loaded);
       setLoading(false);
-      return;
-    }
-    fetchTemplates(user.id);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id]);
 
-  async function fetchTemplates(userId: string) {
+  // Signed out once auth settles: nothing to load.
+  const showLoading = loading && (authLoading || !!user);
+
+  /** The user's templates, or null (after a toast) when the query fails. */
+  async function loadTemplates(
+    userId: string
+  ): Promise<MessageTemplate[] | null> {
     try {
-      setLoading(true);
       const { data, error } = await supabase
         .from('message_templates')
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
       if (error) throw error;
-      setTemplates(data || []);
+      return data || [];
     } catch (err) {
       console.error('Failed to fetch templates:', err);
       toast.error(t('toastLoadFailed'));
-    } finally {
-      setLoading(false);
+      return null;
     }
+  }
+
+  async function fetchTemplates(userId: string) {
+    setLoading(true);
+    const loaded = await loadTemplates(userId);
+    if (loaded) setTemplates(loaded);
+    setLoading(false);
   }
 
   function buildSubmitPayload() {
     const sample_values: TemplateSampleValues = {};
-    if (form.body_samples.some((v) => v.trim())) {
-      sample_values.body = form.body_samples.map((v) => v.trim());
+    if (bodySamples.some((v) => v.trim())) {
+      sample_values.body = bodySamples.map((v) => v.trim());
     }
     if (form.header_format === 'text' && form.header_sample.trim()) {
       sample_values.header = [form.header_sample.trim()];
@@ -509,7 +521,7 @@ export function TemplateManager() {
     }));
   }
 
-  if (loading) {
+  if (showLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="text-primary size-6 animate-spin" />
@@ -955,7 +967,7 @@ export function TemplateManager() {
                   <Label className="text-muted-foreground text-[11px]">
                     {t('sampleValues')}
                   </Label>
-                  {form.body_samples.map((val, i) => {
+                  {bodySamples.map((val, i) => {
                     const inputId = `template-body-sample-${i}`;
                     return (
                       <Input
@@ -967,7 +979,7 @@ export function TemplateManager() {
                         })}
                         value={val}
                         onChange={(e) => {
-                          const next = [...form.body_samples];
+                          const next = [...bodySamples];
                           next[i] = e.target.value;
                           setForm({ ...form, body_samples: next });
                         }}

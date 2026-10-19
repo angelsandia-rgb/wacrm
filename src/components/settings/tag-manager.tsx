@@ -57,18 +57,25 @@ export function TagManager() {
   const [selectedColor, setSelectedColor] = useState(PRESET_COLORS[3].value);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
+    if (authLoading || !user) return;
+    let cancelled = false;
+    void loadTags(user.id).then((loaded) => {
+      if (cancelled) return;
+      if (loaded) setTags(loaded);
       setLoading(false);
-      return;
-    }
-    fetchTags(user.id);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id]);
 
-  async function fetchTags(userId: string) {
+  // Signed out once auth settles: nothing to load.
+  const showLoading = loading && (authLoading || !!user);
+
+  /** The user's tags, or null (after a toast) when the query fails. */
+  async function loadTags(userId: string): Promise<Tag[] | null> {
     try {
-      setLoading(true);
       const { data, error } = await supabase
         .from('tags')
         .select('*')
@@ -76,13 +83,19 @@ export function TagManager() {
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setTags(data || []);
+      return data || [];
     } catch (err) {
       console.error('Failed to fetch tags:', err);
       toast.error(t('failedToLoadTags'));
-    } finally {
-      setLoading(false);
+      return null;
     }
+  }
+
+  async function fetchTags(userId: string) {
+    setLoading(true);
+    const loaded = await loadTags(userId);
+    if (loaded) setTags(loaded);
+    setLoading(false);
   }
 
   async function handleCreate() {
@@ -162,7 +175,7 @@ export function TagManager() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {loading ? (
+        {showLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="size-6 animate-spin text-primary" />
           </div>
