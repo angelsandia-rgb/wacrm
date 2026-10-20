@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/ai/admin-client';
 import { sendPushToUser } from '@/lib/push/send';
+import { notificationPushPayload } from '@/lib/push/notification-payload';
+import { isPushConfigured } from '@/lib/push/vapid';
 
 /**
  * POST /api/push/fanout  (called by the `on_notification_push_fanout`
@@ -51,13 +53,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ sent: 0, pruned: 0 });
   }
 
-  const url = n.conversation_id ? `/inbox?c=${n.conversation_id}` : '/notifications';
-  const result = await sendPushToUser(admin, n.user_id as string, {
-    title: (n.title as string) || 'Chat Sandía',
-    body: (n.body as string | null) ?? undefined,
-    url,
-    tag: n.id as string,
-  });
+  if (!isPushConfigured()) {
+    return NextResponse.json({ error: 'Push is not configured on this server' }, { status: 503 });
+  }
+  let contactName: string | null = null;
+  if (n.type === 'ai_handoff' && n.conversation_id) {
+    const { data: conversation } = await admin.from('conversations')
+      .select('contact:contacts(name)').eq('id', n.conversation_id).maybeSingle();
+    const contact = conversation?.contact as { name?: string | null } | null;
+    contactName = contact?.name ?? null;
+  }
+  const result = await sendPushToUser(admin, n.user_id as string, notificationPushPayload(n, contactName));
 
   return NextResponse.json(result);
 }

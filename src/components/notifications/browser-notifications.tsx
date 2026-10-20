@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import type { Notification } from "@/types";
+import { notificationPushPayload } from "@/lib/push/notification-payload";
 
 /**
  * BrowserNotifications — headless, mounted once in the dashboard shell
@@ -25,12 +26,7 @@ export function BrowserNotifications() {
     if (!accountId) return;
     if (typeof window === "undefined" || !("Notification" in window)) return;
 
-    // Ask once per browser profile. Chrome remembers the answer, so this
-    // is a no-op on every later mount once the user has granted or
-    // denied it; only 'default' (never asked) prompts.
-    if (Notification.permission === "default") {
-      void Notification.requestPermission();
-    }
+    // Permission is requested by the explicit Settings action.
 
     const supabase = createClient();
     const channel = supabase
@@ -43,10 +39,17 @@ export function BrowserNotifications() {
           const row = payload.new as Notification;
           if (row.type !== "conversation_assigned" && row.type !== "ai_handoff") return;
 
-          const n = new Notification(row.title, {
-            body: row.body ?? undefined,
-            tag: row.id,
-          });
+          const push = notificationPushPayload(row);
+          let n: globalThis.Notification;
+          try {
+            n = new Notification(push.title, { body: push.body, tag: row.id });
+          } catch {
+            // Mobile browsers require the service-worker notification API.
+            void navigator.serviceWorker?.ready.then((reg) => reg.showNotification(push.title, {
+              body: push.body, tag: row.id, data: { url: push.url },
+            })).catch(() => {});
+            return;
+          }
           n.onclick = () => {
             window.focus();
             if (row.conversation_id) {

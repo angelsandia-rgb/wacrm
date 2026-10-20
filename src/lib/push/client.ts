@@ -22,18 +22,31 @@ export function pushSupported(): boolean {
   );
 }
 
-const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+async function publicKey(): Promise<string | null> {
+  // Runtime config also works when deployment keys were absent at build time.
+  const res = await fetch('/api/push/vapid-public-key', { cache: 'no-store' });
+  if (!res.ok) throw new Error('Push configuration unavailable');
+  const data = await res.json() as { key?: string | null; configured?: boolean };
+  return data.configured === false ? null : data.key || null;
+}
 
-export function pushConfigured(): boolean {
-  return pushSupported() && Boolean(VAPID_PUBLIC_KEY);
+export async function pushConfigured(): Promise<boolean> {
+  if (!pushSupported()) return false;
+  try { return Boolean(await publicKey()); } catch { return false; }
 }
 
 async function readyRegistration(): Promise<ServiceWorkerRegistration | null> {
   if (!pushSupported()) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await navigator.serviceWorker.ready;
+    return await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 10_000); }),
+    ]);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -50,14 +63,17 @@ export async function currentPushSubscription(): Promise<PushSubscription | null
  */
 export async function subscribeToPush(): Promise<boolean> {
   const reg = await readyRegistration();
-  if (!reg || !VAPID_PUBLIC_KEY) return false;
+  let key: string | null;
+  try { key = await publicKey(); } catch { return false; }
+  if (!reg || !key) return false;
 
-  let sub = await reg.pushManager.getSubscription();
+  let sub: PushSubscription | null;
+  try { sub = await reg.pushManager.getSubscription(); } catch { return false; }
   if (!sub) {
     try {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        applicationServerKey: urlBase64ToUint8Array(key),
       });
     } catch {
       return false;
@@ -91,13 +107,16 @@ export async function unsubscribeFromPush(): Promise<void> {
   await sub.unsubscribe().catch(() => {});
 }
 
-export type PushState = 'unsupported' | 'unconfigured' | 'denied' | 'off' | 'on';
+export type PushState = 'unsupported' | 'unconfigured' | 'denied' | 'off' | 'on' | 'error';
 
 export async function getPushState(): Promise<PushState> {
   if (!pushSupported()) return 'unsupported';
-  if (!VAPID_PUBLIC_KEY) return 'unconfigured';
+  try { if (!await publicKey()) return 'unconfigured'; } catch { return 'error'; }
   if (Notification.permission === 'denied') return 'denied';
-  const sub = await currentPushSubscription();
-  if (Notification.permission === 'granted' && sub) return 'on';
+  try {
+    const sub = await currentPushSubscription();
+    // A local subscription alone doesn't prove the server can send to it.
+    if (Notification.permission === 'granted' && sub) return await subscribeToPush() ? 'on' : 'error';
+  } catch { return 'error'; }
   return 'off';
 }

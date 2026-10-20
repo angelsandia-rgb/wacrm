@@ -21,10 +21,9 @@ export function PushSubscriptionSync() {
 
   useEffect(() => {
     if (!user) return;
-    if (!pushConfigured()) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
 
-    void subscribeToPush();
+    void pushConfigured().then((configured) => configured && subscribeToPush());
   }, [user]);
 
   return null;

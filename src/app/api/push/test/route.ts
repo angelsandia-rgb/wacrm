@@ -22,7 +22,7 @@ export async function POST() {
 
     const result = await sendPushToUser(supabase, userId, {
       title: 'Chat Sandía',
-      body: 'Las notificaciones push están funcionando en este dispositivo. ✅',
+      body: 'Prueba de Chat Sandía: si ves este aviso, este dispositivo recibe notificaciones push.',
       url: '/notifications',
       tag: 'push-test',
     });
