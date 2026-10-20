@@ -43,11 +43,8 @@ export function PushNotificationsCard() {
     };
   }, []);
 
-  // Nothing to show if the browser can't do push at all, or the server
-  // has no VAPID keys configured.
-  if (state === 'unsupported' || state === 'unconfigured') return null;
-
   const enabled = state === 'on';
+  const unavailable = state === 'unsupported' || state === 'unconfigured';
 
   const onToggle = async (next: boolean) => {
     setBusy(true);
@@ -88,7 +85,7 @@ export function PushNotificationsCard() {
     try {
       const res = await fetch('/api/push/test', { method: 'POST' });
       if (res.ok) {
-        toast.success('Enviada. Debería llegar a este dispositivo en unos segundos.');
+        toast.success('El servicio push aceptó la prueba. Comprobá que aparezca en tu dispositivo.');
       } else {
         const data = await readResponseJson<{ error?: string }>(res);
         toast.error(data?.error ?? 'No se pudo enviar la prueba.');
@@ -108,8 +105,8 @@ export function PushNotificationsCard() {
           Notificaciones push
         </CardTitle>
         <CardDescription>
-          Recibí un aviso en este dispositivo cuando te asignen una conversación o
-          entre un mensaje — aunque tengas la app cerrada. Se configura por dispositivo.
+          Recibí avisos de conversaciones asignadas y consultas que la IA deja
+          pendientes para el equipo, aunque tengas la app cerrada. Se configura por dispositivo.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -124,6 +121,15 @@ export function PushNotificationsCard() {
                 Cambialo en los ajustes del sitio y volvé a intentar.
               </p>
             )}
+            {state === 'unsupported' && (
+              <p className="mt-0.5 text-xs text-muted-foreground">Este navegador no permite push. Abrí Chat Sandía en un navegador o una instalación de la app que permita notificaciones.</p>
+            )}
+            {state === 'unconfigured' && (
+              <p className="mt-0.5 text-xs text-muted-foreground">El servidor aún no tiene configurado el envío push. Contactá al administrador.</p>
+            )}
+            {state === 'error' && (
+              <p className="mt-0.5 text-xs text-muted-foreground">No se pudo verificar el registro de este dispositivo. Revisá la conexión y volvé a activar las notificaciones.</p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {(busy || state === 'loading') && (
@@ -131,7 +137,7 @@ export function PushNotificationsCard() {
             )}
             <Switch
               checked={enabled}
-              disabled={busy || state === 'loading' || state === 'denied'}
+              disabled={busy || state === 'loading' || state === 'denied' || unavailable}
               onCheckedChange={onToggle}
               aria-label="Activar notificaciones push"
             />
