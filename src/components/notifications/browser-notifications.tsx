@@ -37,7 +37,6 @@ export function BrowserNotifications() {
         (payload) => {
           if (Notification.permission !== "granted") return;
           const row = payload.new as Notification;
-          if (row.type !== "conversation_assigned" && row.type !== "ai_handoff") return;
 
           const push = notificationPushPayload(row);
           let n: globalThis.Notification;

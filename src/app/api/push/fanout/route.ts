@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Push is not configured on this server' }, { status: 503 });
   }
   let contactName: string | null = null;
-  if (n.type === 'ai_handoff' && n.conversation_id) {
+  if ((n.type === 'ai_handoff' || n.type === 'conversation_assigned') && n.conversation_id) {
     const { data: conversation } = await admin.from('conversations')
       .select('contact:contacts(name)').eq('id', n.conversation_id).maybeSingle();
     const contact = conversation?.contact as { name?: string | null } | null;

@@ -1,6 +1,8 @@
 # Push delivery and handoff information
 
-AI handoff push messages lead with the contact name and the actual handoff reason/latest customer message, rather than internal routing boilerplate. Tapping opens the corresponding inbox conversation. The full internal note remains in the inbox. Payloads are bounded to 300 body characters; other notification types preserve their titles and navigation.
+AI handoff push messages lead with the contact name and the actual handoff reason/latest customer message, rather than internal routing boilerplate. Tapping opens the corresponding inbox conversation. The full internal note remains in the inbox. Payloads are bounded to 300 body characters.
+
+All six current business notification types use shared Spanish titles and action text in push, foreground alerts and the notification history. Historical English rows are presented in Spanish without rewriting their stored content, timestamps or read status. Literal customer quotes, contact names, amounts and user-authored task names retain their original wording. Unknown notification types receive a Spanish fallback rather than exposing arbitrary internal English text. The history uses Spanish relative dates and wraps titles/bodies instead of truncating them to one line. Existing navigation is preserved.
 
 Device configuration reads runtime server configuration, so missing build-time public keys no longer hide a correctly configured deployment. The settings card exposes unsupported, missing server configuration, blocked permission and registration failures. It reports enabled only after saving the local subscription to the server. Service-worker readiness is bounded, and permission is requested through the user's explicit settings action.
 
