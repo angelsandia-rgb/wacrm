@@ -249,7 +249,7 @@ export default function NotificationsPage() {
                     <div className="flex items-center gap-2">
                       <span
                         className={cn(
-                          "break-words text-sm font-semibold",
+                          "min-w-0 flex-1 break-words text-sm font-semibold",
                           isUnread ? "text-foreground" : "text-muted-foreground",
                         )}
                       >
