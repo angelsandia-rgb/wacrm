@@ -9,6 +9,8 @@ const NEW_INQUIRY = /\b(hospedaje|alojamiento|habitacion\w*|suite|paquete|masaje
 
 export const HOTEL_RECEPTION_PENDING_PREFIX = '🤝 Pendiente de recepción.'
 
+export const HOTEL_FAMILY_LODGING_POLICY = 'FAMILY LODGING PRIORITY: Headcount alone, including more than six guests or several rooms, does not make an inquiry a group/event quotation. Continue ordinary family lodging intake. Use dates and child ages already provided; clarify alternative adult counts such as six or seven and the desired room distribution before estimating. Offer suitable room combinations only from approved rates and published capacities. The hotel confirms availability and the final price within the authorized window. Negotiated group rates, corporate agreements, events, payments and existing booking/quote changes still follow their reception rules. Do not reopen an already handed-off message without a new customer inbound.'
+
 /** Only application-created reception notes qualify; manual takeovers use a different summary. */
 export function isHotelReceptionPending(summary: string | null | undefined): boolean {
   return summary?.startsWith(HOTEL_RECEPTION_PENDING_PREFIX) ?? false
@@ -57,10 +59,20 @@ export function hotelReceptionReason(messages: ChatMessage[]): string | null {
     || (/\b(cambiar|modificar|mover|cambio)\b/.test(text) && /\b(mi reserva|nuestra reserva|la reserva|mi reservacion|my booking)\b/.test(text))) return 'Recepción debe revisar un cambio de reserva.'
   if (/\b(mi factura|necesito (?:una |la )?factura|envie\w* (?:la |mi )?factura|factura a nombre|my invoice)\b/.test(text)) return 'Recepción debe revisar la facturación solicitada.'
   if (/\b(ya (?:llene|complete|envie|llenamos|completamos) el formulario|mi cotizacion|nuestra cotizacion|la cotizacion|mi reserva esta confirmada|confirmad[oa] mi|estado de mi reserva)\b/.test(text)) return 'El cliente da seguimiento a una gestión pendiente del hotel.'
-  const group = /\b(grupos?|eventos?|bodas?|salon|delegacion|excursion|empresas?|group|wedding|event)\b/.test(text)
-    || Array.from(text.matchAll(/\b(\d+)\s*(?:personas|adultos|huespedes|people|guests)\b/g)).some((m) => Number(m[1]) > 6)
-  if (group && /\b(cotiz\w*|presupuesto|precio\w*|tarifa\w*|cuanto|quote|price)\b/.test(text)) return 'Recepción debe preparar la cotización de grupo o evento.'
+  // A family needing several rooms is ordinary lodging intake. Headcount
+  // alone is not a request for negotiated group rates or event services.
+  const group = /\b(eventos?|bodas?|salon|delegacion|excursion|empresas?|corporativ\w*|corporate|wedding|event)\b/.test(text)
+    || /\b(?:tarifas?|precios?|descuentos?|cotiz\w*|presupuesto)\s+(?:especial(?:es)?\s+)?(?:para |de )?(?:un |el |nuestro )?grupos?\b|\bgroup\s+(?:rates?|discounts?|quotes?)\b|\btarifas?\s+grupal(?:es)?\b/.test(text)
+  if (group && /\b(cotiz\w*|presupuesto|precio\w*|tarifa\w*|cuanto|quote|prices?|rates?|discounts?)\b/.test(text)) return 'Recepción debe preparar la cotización de grupo o evento.'
   return null
+}
+
+/** Reclassification must not replay a customer request already left to reception. */
+export function isAlreadyHandedOffRequest(messages: ChatMessage[], handoffAt?: string | null): boolean {
+  const handedOff = Date.parse(handoffAt ?? '')
+  const latest = messages.findLast(m => m.role === 'user')?.createdAt
+  const received = Date.parse(latest ?? '')
+  return Number.isFinite(handedOff) && Number.isFinite(received) && received <= handedOff
 }
 
 /** After the three-hour window, staff business stays with staff. Only

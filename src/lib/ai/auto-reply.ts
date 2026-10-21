@@ -6,7 +6,7 @@ import { hotelEventTriage, EVENT_TRIAGE_QUESTION, eventFollowupLine } from './ho
 import { roomBannerVariant } from './hotel-room-banner'
 import { withinAiAttentionHours, OutsideAiAttentionHours } from './auto-reply-schedule'
 import { repairHotelPartyFields } from './hotel-party'
-import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, HOTEL_RECEPTION_PENDING_PREFIX } from './hotel-assistance'
+import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest, HOTEL_RECEPTION_PENDING_PREFIX, HOTEL_FAMILY_LODGING_POLICY } from './hotel-assistance'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { waitForQuietPeriod } from './debounce'
@@ -806,6 +806,9 @@ export async function dispatchInboundToAiReply(
     // Deterministic reception routing precedes rate-limit/provider fallbacks:
     // an operation that belongs to staff must not produce a guest message.
     const receptionPending = neverSelfPause && isHotelReceptionPending(conv.ai_handoff_summary)
+    // Wait for a new inbound, including when a policy update makes an old
+    // reception case newly eligible. Never replay that old message on recovery.
+    if (receptionPending && isAlreadyHandedOffRequest(messages, conv.ai_handoff_at)) return
     const requestMessages = receptionPending ? hotelCurrentRequest(messages, conv.ai_handoff_at) : messages
     if (neverSelfPause && hotelChangeRequest(requestMessages)) {
       const alreadyAcknowledged = receptionPending || previousAssistantMessage(messages).includes('le confirmar\u00e1 si es posible realizarla')
@@ -1108,7 +1111,7 @@ export async function dispatchInboundToAiReply(
       : ''
     const confirmationNote = isHotel ? `HOTEL AVAILABILITY COMMITMENT: When sharing a lodging reference or computed estimate, clearly say it depends on hotel availability. Use this follow-up window: ${availabilityConfirmationLine(isAfterHours(new Date(), businessTimeZone))} Never promise availability or a confirmed booking. Do not repeat the window in consecutive messages when already stated.` : ''
     const eventNote = newEvent ? 'EVENT NEW QUOTATION: The guest explicitly requests a NEW event quotation. Continue assisting and collect only missing event type, date, guest count and service needs. Do not route merely because this is an event or group quotation. Never invent prices, capacity or confirmed availability. Existing quotes and quote numbers belong to hotel staff. Do not send lodging banners for event inquiries.' : ''
-    const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : ''].filter(Boolean).join('\n\n')
+    const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : '', isHotel ? HOTEL_FAMILY_LODGING_POLICY : ''].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {
