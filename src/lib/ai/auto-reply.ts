@@ -4389,7 +4389,7 @@ async function sendStayEstimateFollowUpIfDue(args: {
   const sendLine = (contentText: string) => {
     const text = conciseAvailabilityNotice(contentText, afterHours, english, {
       alreadyExplained: Boolean(args.availabilityAlreadyExplained),
-      requireNotice: mentionedAmounts(contentText).length > 0,
+      requireNotice: mentionedAmounts(contentText).length > 0 || !args.availabilityAlreadyExplained,
     })
     if (!text) return Promise.resolve()
     return sendMessageToConversation(db, accountId, {

@@ -3693,7 +3693,7 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
     expect(h.sendMessageToConversation).toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
-      expect.objectContaining({ contentText: expect.stringContaining(CLOSE_AVAILABILITY_LINE.replace(' en breve. 😊', '.')) }),
+      expect.objectContaining({ contentText: expect.stringContaining('El hotel le confirmar\u00e1 la disponibilidad en un m\u00e1ximo de 2 horas.') }),
     )
   })
 
