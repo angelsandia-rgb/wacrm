@@ -267,6 +267,10 @@ function selectManyChain(getData: () => unknown) {
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
+      if (table === 'ai_configs') {
+        const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { handoff_agent_id: null }, error: null }) }
+        return chain
+      }
       if (table === 'deals') {
         // .select().eq().eq().eq().order().limit().maybeSingle() → most
         // recently updated open deal for the contact — scoped to a
@@ -477,6 +481,8 @@ vi.mock('./admin-client', () => ({
             h.state.reservationRequestUpdates.push(patch)
             const updateChain: Record<string, unknown> = {
               eq: () => updateChain,
+              is: () => updateChain,
+              select: async () => ({ data: [{ id: 'rr-1' }], error: null }),
               then: (onFulfilled: (v: unknown) => unknown) =>
                 Promise.resolve({ error: null }).then(onFulfilled),
             }
@@ -531,6 +537,7 @@ vi.mock('./admin-client', () => ({
         const readChain = {
           select: () => readChain,
           eq: () => readChain,
+          order: () => readChain,
           neq: () => readChain,
           gt: () => readChain,
           limit: () => readChain,
@@ -547,8 +554,9 @@ vi.mock('./admin-client', () => ({
       }
       // conversations
       return {
-        select: (cols: string) => ({
-          eq: () => ({
+        select: (cols: string) => {
+          const readChain = {
+            eq: () => readChain,
             maybeSingle: () => {
               // Simulate "code deployed ahead of its migration": the full
               // eligibility select (which names the newest column) 42703s,
@@ -564,8 +572,9 @@ vi.mock('./admin-client', () => ({
               }
               return Promise.resolve({ data: h.state.conv, error: null })
             },
-          }),
-        }),
+          }
+          return readChain
+        },
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
           // Chainable + thenable: `handOffToHuman` awaits `.update().eq()`
@@ -1034,7 +1043,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
         user_id: 'user-1',
         type: 'ai_handoff',
         conversation_id: 'conv-1',
-        title: 'AI needs a human',
+        title: 'Requiere atención del equipo',
       }),
       expect.objectContaining({
         account_id: 'acct-1',
@@ -5245,14 +5254,15 @@ describe('hotel automatic reception topic recovery', () => {
     expect(h.state.messageInserts).toEqual([])
     expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('older reception case remains pending')
   })
-  it.each(['¿Ya cancelaron mi reserva?', 'Le mando el comprobante', 'Sí', 'Muchas gracias', '¿Y eso?'])('keeps the operation or ambiguous follow-up silent with no repeated internal note: %s', async (content) => {
+  it.each(['¿Ya cancelaron mi reserva?', 'Le mando el comprobante', 'Sí', 'Muchas gracias', '¿Y eso?'])('keeps guest silence but alerts reception about new actionable follow-ups: %s', async (content) => {
     h.buildConversationContext.mockResolvedValue([old, fresh(content)])
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.sendMessageToConversation).not.toHaveBeenCalled()
-    expect(h.state.messageInserts).toEqual([])
-    expect(h.state.notificationInserts).toEqual([])
+    const actionable = !['Sí', 'Muchas gracias'].includes(content)
+    expect(h.state.messageInserts).toHaveLength(actionable ? 1 : 0)
+    expect(h.state.notificationInserts).toHaveLength(actionable ? 2 : 0)
   })
   it('does not release an informational question during the three-hour staff window', async () => {
     h.teammateRepliedRecently.mockResolvedValue(true)
@@ -5277,7 +5287,8 @@ describe('hotel automatic reception topic recovery', () => {
     await dispatchInboundToAiReply({ ...ARGS, skipDebounce: true })
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.state.messageInserts).toEqual([])
+    expect(h.state.messageInserts).toHaveLength(1)
+    expect(h.state.notificationInserts).toHaveLength(2)
   })
   it('does not release a manual takeover even if it follows an automatic pending case', async () => {
     h.state.conv!.ai_autoreply_disabled = true
@@ -5312,7 +5323,8 @@ it('does not reactivate a pending reception case for an uncaptioned customer pho
   await dispatchInboundToAiReply(ARGS)
   expect(h.generateReply).not.toHaveBeenCalled()
   expect(h.engineSendText).not.toHaveBeenCalled()
-  expect(h.state.messageInserts).toEqual([])
+  expect(h.state.messageInserts).toHaveLength(1)
+    expect(h.state.notificationInserts).toHaveLength(2)
 })
 
 
@@ -5662,6 +5674,15 @@ describe('hotel reception notifications for assigned chats', () => {
     h.state.recoveryUpdateRows = []
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.notificationInserts).toEqual([])
+  })
+  it('never lets an autonomous stage marker discard a prospect', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero una habitación para mañana' }])
+    h.state.pipeline = { id: 'rooms' }
+    h.state.stages = [{ id: 'quote', name: 'Cotizando' }, { id: 'pending', name: 'Pendiente de confirmación' }, { id: 'won', name: 'Visita confirmada', is_won: true }, { id: 'lost', name: 'Descarte' }]
+    h.generateReply.mockResolvedValue({ text: 'Con gusto, ¿para cuántas personas?', handoff: false, markDealWon: false, moveToStageName: 'Descarte' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.moveDeal).not.toHaveBeenCalled()
+    expect(h.state.dealInserts).toEqual([])
   })
 })
 

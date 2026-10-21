@@ -1,4 +1,5 @@
 "use client";
+import { hotelStageDescription } from "@/lib/pipelines/hotel-stages";
 
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Plus } from "lucide-react";
@@ -127,6 +128,7 @@ export function PipelineBoardMobile({
       </div>
 
       {/* Deals — plain vertical list */}
+      {hotelStageDescription(activeStage.name) && <p className="px-1 text-xs text-muted-foreground">{hotelStageDescription(activeStage.name)}</p>}
       <div className="flex flex-col gap-2">
         {activeDeals.length === 0 ? (
           <div className="rounded-xl border-2 border-dashed border-border py-10 text-center text-xs text-muted-foreground">

@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/ai/admin-client';
 import { sendPushToUser } from '@/lib/push/send';
 import { notificationPushPayload } from '@/lib/push/notification-payload';
 import { isPushConfigured } from '@/lib/push/vapid';
+import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/alerts';
 
 /**
  * POST /api/push/fanout  (called by the `on_notification_push_fanout`
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
   const admin = supabaseAdmin();
   const { data: n, error } = await admin
     .from('notifications')
-    .select('id, user_id, title, body, conversation_id, type')
+    .select('id, account_id, user_id, title, body, conversation_id, type')
     .eq('id', id)
     .maybeSingle();
 
@@ -64,6 +65,18 @@ export async function POST(request: Request) {
     contactName = contact?.name ?? null;
   }
   const result = await sendPushToUser(admin, n.user_id as string, notificationPushPayload(n, contactName));
+  if (n.type === 'ai_handoff') {
+    const dedupKey = `push_delivery:${n.account_id}:${n.user_id}`;
+    if (result.sent === 0) {
+      await dispatchSystemAlert({ severity: 'warning', source: 'push_delivery',
+        title: 'No se pudo entregar una alerta de atención al hotel',
+        accountId: n.account_id, dedupKey, throttleMinutes: 60,
+        detail: { user_id: n.user_id, notification_id: n.id, conversation_id: n.conversation_id, pruned_devices: result.pruned,
+          action: 'Revisar dispositivos registrados, permisos de notificaciones y conexión del servicio push. El aviso permanece en el panel.' } });
+    } else {
+      await resolveSystemAlert(dedupKey);
+    }
+  }
 
   return NextResponse.json(result);
 }

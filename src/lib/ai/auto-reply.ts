@@ -1,3 +1,5 @@
+import { latestCustomerTimestamp, hasNewReceptionRequest } from './reception-alert'
+import { attentionBody, attentionNotificationId } from '@/lib/push/hotel-attention'
 import { withoutUnapprovedStayPrices } from './hotel-close'
 import { loadRecommendedRoomEstimate } from './hotel-recommended-estimate'
 import { hotelStayOperationReason } from './hotel-stay-operations'
@@ -616,6 +618,7 @@ export async function dispatchInboundToAiReply(
             alreadyAssigned: Boolean(conv.assigned_agent_id),
             summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + reason + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages: pending, replyCount: conv.ai_reply_count ?? 0 }),
             hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(pending),
           })
           return
         }
@@ -823,6 +826,7 @@ export async function dispatchInboundToAiReply(
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: HOTEL_RECEPTION_PENDING_PREFIX + ' El hotel debe evaluar si es posible la cancelaci\u00f3n o el cambio solicitado. La IA no modific\u00f3 ninguna reserva.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
         hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
       })
       return
     }
@@ -847,6 +851,7 @@ export async function dispatchInboundToAiReply(
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: HOTEL_RECEPTION_PENDING_PREFIX + ' Seguimiento de cotizaci\u00f3n de evento existente. Se inform\u00f3 al cliente el plazo de seguimiento.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
         hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
       })
       return
     }
@@ -862,6 +867,7 @@ export async function dispatchInboundToAiReply(
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + (receptionReason ?? 'El cliente continúa una gestión pendiente de recepción.') + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
         hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
       })
       return
     }
@@ -1073,6 +1079,7 @@ export async function dispatchInboundToAiReply(
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + (receptionReason ?? 'El cliente continúa una gestión pendiente de recepción.') + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
         hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
       })
       return
     }
@@ -1268,6 +1275,7 @@ For airport transport, record the guest's request in nota on the relevant existi
         alreadyAssigned: Boolean(conv.assigned_agent_id),
         summary: HOTEL_RECEPTION_PENDING_PREFIX + ' La IA bloque\u00f3 una afirmaci\u00f3n de cambio o cancelaci\u00f3n no autorizada. El hotel debe revisar la solicitud; no se ejecutaron acciones.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
         hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
       })
       return
     }
@@ -1599,6 +1607,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           alreadyAssigned: Boolean(conv.assigned_agent_id),
           summary: HOTEL_RECEPTION_PENDING_PREFIX + ' Esta solicitud requiere atención del equipo. La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
           hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
         })
         return
       }
@@ -2894,9 +2903,11 @@ async function handOffToHuman(args: {
   /** Hotel operation: silence on this topic, without a whole-thread pause. */
   hotelReceptionPending?: boolean
   previousSummary?: string | null
+  previousHandoffAt?: string | null
+  customerAt?: string | null
 }): Promise<void> {
   const { db, accountId, conversationId, handoffAgentId, alreadyAssigned, summary, transient = false, hotelReceptionPending = false, previousSummary = null } = args
-  if (hotelReceptionPending && isHotelReceptionPending(previousSummary)) return
+  if (hotelReceptionPending && isHotelReceptionPending(previousSummary) && !hasNewReceptionRequest(args.previousHandoffAt, args.customerAt)) return
   const fullSummary = await appendActiveReservationsRecap(db, accountId, conversationId, summary)
   // Hotel vertical (owner's rule, 2026-09-26): ordinary technical handoffs keep the bot eligible.
   // A reception-owned operation records a pending topic, not a whole-thread pause.
@@ -2925,6 +2936,7 @@ async function handOffToHuman(args: {
   if (hotelReceptionPending) {
     if (previousSummary === null) pendingClaim.is('ai_handoff_summary', null)
     else pendingClaim.eq('ai_handoff_summary', previousSummary)
+    if (args.previousHandoffAt) pendingClaim.eq('ai_handoff_at', args.previousHandoffAt)
   }
   const result = hotelReceptionPending ? await pendingClaim.select('id') : await updateQuery
   const updError = result.error
@@ -3061,17 +3073,30 @@ async function notifyHandoffTeam(
       .eq('account_id', accountId)
       .in('account_role', ['owner', 'admin', 'agent'])
     if (!recipients || recipients.length === 0) return
+    const { data: config } = await db.from('ai_configs').select('handoff_agent_id').eq('account_id', accountId).maybeSingle()
+    const configured = recipients.filter(r => r.user_id === config?.handoff_agent_id)
+    const targets = configured.length ? configured : recipients
+    const { data: conversation } = await db.from('conversations').select('contacts(name, phone)').eq('id', conversationId).eq('account_id', accountId).maybeSingle()
+    const contact = conversation?.contacts as unknown as { name?: string; phone?: string } | null
+    const { data: account } = await db.from('accounts').select('default_currency, industry_vertical').eq('id', accountId).maybeSingle()
+    const title = `Requiere atención${contact?.name || contact?.phone ? ': ' + (contact.name || contact.phone) : account?.industry_vertical === 'hotel' ? ' del hotel' : ' del equipo'}`
+    const { current } = await loadActiveReservationsSummary(db, accountId, conversationId, account?.default_currency || 'GTQ')
+    const body = account?.industry_vertical === 'hotel' ? attentionBody(summary, current) : summary
 
-    const { error } = await db.from('notifications').insert(
-      recipients.map((r) => ({
+    const { data: inbound } = await db.from('messages').select('whatsapp_message_id').eq('conversation_id', conversationId).eq('sender_type', 'customer').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const sourceId = account?.industry_vertical === 'hotel' ? inbound?.whatsapp_message_id : null
+    const rows = targets.map((r) => ({
+        ...(sourceId ? { id: attentionNotificationId(accountId, sourceId, r.user_id as string) } : {}),
         account_id: accountId,
         user_id: r.user_id as string,
         type: 'ai_handoff',
         conversation_id: conversationId,
-        title: 'AI needs a human',
-        body: summary,
-      })),
-    )
+        title,
+        body,
+      }))
+    const { error } = sourceId
+      ? await db.from('notifications').upsert(rows, { onConflict: 'id', ignoreDuplicates: true })
+      : await db.from('notifications').insert(rows)
     if (error) {
       console.error('[ai auto-reply] failed to insert ai_handoff notifications:', error)
     }
@@ -4678,13 +4703,19 @@ async function handOffIfReservationComplete(args: {
   // reset done before the next test case, despite the reset's own
   // dialog promising reservations are never affected. Best-effort:
   // never let this block the handoff itself.
-  const { error: confirmMarkError } = await db
+  const { data: confirmedRows, error: confirmMarkError } = await db
     .from('reservation_requests')
     .update({ guest_confirmed_at: new Date().toISOString() })
     .eq('id', (rawRow as { id: string }).id)
+    .eq('account_id', accountId)
+    .is('guest_confirmed_at', null)
+    .select('id')
   if (confirmMarkError) {
     console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
+    return false
   }
+  if (!confirmedRows?.length) return false
+  await dispatchWebhookEvent(db, accountId, 'reservation.updated', { reservation_id: (rawRow as { id: string }).id, source: 'auto_reply_autonomous' })
 
   // No canned closing line: the model's own reply — always non-empty by
   // this point (an empty one takes the continuity-fallback path and never
