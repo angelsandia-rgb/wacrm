@@ -36,8 +36,8 @@ export async function loadRecommendedRoomEstimate(args: {
     const amount = formatCurrency(total, currency)
     const nights = quote.nights.length
     const text = english
-      ? `As a reference, ${product.name} for ${stay.guests} guests from ${stay.check_in} to ${stay.check_out} (${nights} ${nights === 1 ? 'night' : 'nights'}) has an estimated total of ${amount}, subject to hotel availability and final rate confirmation.`
-      : `Como referencia, la ${product.name} para ${stay.guests} personas del ${formatDateEs(stay.check_in)} al ${formatDateEs(stay.check_out)}, por ${nights} ${nights === 1 ? 'noche' : 'noches'}, tiene un total estimado de ${amount}, sujeto a disponibilidad y confirmaci\u00f3n de la tarifa final del hotel.`
+      ? `As a reference, ${product.name} for ${stay.guests} guests from ${stay.check_in} to ${stay.check_out} (${nights} ${nights === 1 ? 'night' : 'nights'}) has an estimated total of ${amount}, subject to availability.`
+      : `Como referencia, la ${product.name} para ${stay.guests} personas del ${formatDateEs(stay.check_in)} al ${formatDateEs(stay.check_out)}, por ${nights} ${nights === 1 ? 'noche' : 'noches'}, tiene un total estimado de ${amount}, sujeto a disponibilidad.`
     return { text, total, productName: product.name, question: english ? `Would you prefer the ${product.name}?` : `\u00bfPrefiere la ${product.name}?` }
   }
   return null

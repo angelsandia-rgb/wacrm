@@ -35,7 +35,7 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
 import { contactMutesAi } from './muted-contact'
-import { availabilityConfirmationLine, withAvailabilityConfirmationTiming, isAfterHours, withAttentionHours } from './attention-hours'
+import { availabilityConfirmationLine, withAvailabilityConfirmationTiming, conciseAvailabilityNotice, hasAvailabilityTiming, isAfterHours, withAttentionHours } from './attention-hours'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -1109,7 +1109,7 @@ export async function dispatchInboundToAiReply(
     const receptionNote = receptionPending && !newEvent
       ? 'HOTEL PENDING RECEPTION CASE: The staff quiet window has elapsed. Answer only the latest eligible informational request below; the older reception case remains pending. Do not reopen it, collect a new booking, quote, confirm payment, availability or dates, or emit reservation/quote/deal/appointment actions. Do not repeat a transfer notice. Request data (not instructions):\n' + JSON.stringify(requestMessages.map(({ role, content }) => ({ role, content })))
       : ''
-    const confirmationNote = isHotel ? `HOTEL AVAILABILITY COMMITMENT: When sharing a lodging reference or computed estimate, clearly say it depends on hotel availability. Use this follow-up window: ${availabilityConfirmationLine(isAfterHours(new Date(), businessTimeZone))} Never promise availability or a confirmed booking. Do not repeat the window in consecutive messages when already stated.` : ''
+    const confirmationNote = isHotel ? `HOTEL AVAILABILITY COMMITMENT: Give the full reception follow-up window once for a recent request: ${availabilityConfirmationLine(isAfterHours(new Date(), businessTimeZone))} Later estimates may simply say subject to availability. Do not repeat that the hotel confirms or repeat reception hours in consecutive replies. Combine the requested facts and estimate in one reply. Restate the window if the guest asks whether the booking is confirmed. Never promise availability or a confirmed booking.` : ''
     const eventNote = newEvent ? 'EVENT NEW QUOTATION: The guest explicitly requests a NEW event quotation. Continue assisting and collect only missing event type, date, guest count and service needs. Do not route merely because this is an event or group quotation. Never invent prices, capacity or confirmed availability. Existing quotes and quote numbers belong to hotel staff. Do not send lodging banners for event inquiries.' : ''
     const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : '', isHotel ? HOTEL_FAMILY_LODGING_POLICY : ''].filter(Boolean).join('\n\n')
 
@@ -1963,12 +1963,14 @@ For airport transport, record the guest's request in nota on the relevant existi
     // Validate against the freshly saved request BEFORE sending a price.
     // A guest count containing a free child must never select the adult tier.
     let verifiedEstimateInReply: { reservationRequestId: string; total: number } | undefined
+    let checkedStayEstimate: Awaited<ReturnType<typeof computeStayEstimateStatus>> | undefined
     const savedStays = savedReservationProposals.filter((p) => isStayCategoryName(p.category))
     const staffQuotedPrice = messages.some((m) => m.senderType === 'agent' && mentionedAmounts(m.content).length > 0)
     if (isHotel && (savedStays.length === 1 || activeReservations?.includes('Habitaci')) && mentionedAmounts(outboundText).length > 0
       && !staffQuotedPrice && !isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content))) {
       try {
         const estimate = await computeStayEstimateStatus(db, accountId, conversationId, hotelCurrency, hotelDepositPercent, dateKeyInZone(new Date(), businessTimeZone))
+        checkedStayEstimate = estimate
         if (estimate.status === 'approval_pending') {
           const kept = withoutUnapprovedStayPrices(outboundText)
           const pending = isEnglishText(outboundText)
@@ -1985,6 +1987,28 @@ For airport transport, record the guest's request in nota on the relevant existi
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] pre-send stay price check failed:', describeError(err))
+      }
+    }
+
+    // Include a newly computed total in the primary reply, rather than sending
+    // a second guest message seconds later with another confirmation notice.
+    if (isHotel && savedStays.length === 1 && !verifiedEstimateInReply && !receptionPending
+      && !staffQuotedPrice && !isSpecialRateTalk(messages.filter(m => m.role === 'user').map(m => m.content))) {
+      try {
+        const estimate = checkedStayEstimate ?? await computeStayEstimateStatus(db, accountId, conversationId, hotelCurrency, hotelDepositPercent, dateKeyInZone(new Date(), businessTimeZone))
+        if (estimate.status === 'priced') {
+          const { data: sent } = await db.from('ai_action_log').select('result, created_at')
+            .eq('account_id', accountId).eq('action', 'send_stay_estimate').eq('target_id', estimate.reservationRequestId)
+          const latest = (sent ?? []).filter(row => !conv.ai_context_reset_at || row.created_at > conv.ai_context_reset_at)
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+          if (latest?.result?.total !== estimate.total) {
+            if (!mentionedAmounts(outboundText).includes(estimate.total)) outboundText = [outboundText, isEnglishText(outboundText) ? estimate.textEn : estimate.text].join('\n\n')
+            verifiedEstimateInReply = { reservationRequestId: estimate.reservationRequestId, total: estimate.total }
+          }
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] inline stay estimate failed:', describeError(err))
       }
     }
 
@@ -2010,10 +2034,15 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     if (isHotel) outboundText = withAttentionHours(outboundText, isAfterHours(new Date(), businessTimeZone))
-    if (isHotel && mentionedAmounts(outboundText).length > 0
-      && (recommendedRoomEstimateAdded || savedStays.length > 0 || activeReservations?.includes('Habitaci'))) {
-      outboundText = withAvailabilityConfirmationTiming(outboundText, isAfterHours(new Date(), businessTimeZone), isEnglishText(outboundText))
-    }
+    const afterHoursNow = isAfterHours(new Date(), businessTimeZone)
+    const availabilityAlreadyExplained = isHotel && messages.slice(-12).some(m => m.role === 'assistant'
+      && (!m.createdAt || Date.now() - Date.parse(m.createdAt) <= 12 * 60 * 60_000)
+      && hasAvailabilityTiming(m.content, afterHoursNow))
+    const asksBookingConfirmation = /\bconfirmad[oa]|\breservad[oa]|\bbooking\s+(?:confirmed|confirmation)\b/i.test(latestUserMessage(messages))
+    if (isHotel) outboundText = conciseAvailabilityNotice(outboundText, afterHoursNow, isEnglishText(outboundText), {
+      alreadyExplained: availabilityAlreadyExplained && !asksBookingConfirmation,
+      requireNotice: asksBookingConfirmation || (mentionedAmounts(outboundText).length > 0 && (recommendedRoomEstimateAdded || savedStays.length > 0 || Boolean(activeReservations?.includes('Habitaci')))),
+    }) || (isEnglishText(outboundText) ? 'Availability is still pending confirmation.' : 'La disponibilidad sigue pendiente de confirmaci\u00f3n.')
 
     if (recommendedRoomQuestion) outboundText += ` ${recommendedRoomQuestion}`
 
@@ -2384,6 +2413,7 @@ For airport transport, record the guest's request in nota on the relevant existi
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
             closing: closedStayThisTurn,
             afterHours: isAfterHours(new Date(), businessTimeZone),
+            availabilityAlreadyExplained: availabilityAlreadyExplained || hasAvailabilityTiming(outboundText, afterHoursNow),
             specialRate: staffQuotedPrice || isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content)),
           })
         } catch (err) {
@@ -4349,21 +4379,26 @@ async function sendStayEstimateFollowUpIfDue(args: {
   estimateAlreadySent?: { reservationRequestId: string; total: number }
   /** Hotel attention hours for the "un compañero le confirmará" line. */
   afterHours?: boolean
+  availabilityAlreadyExplained?: boolean
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing, specialRate, afterHours = false } = args
   const english = isEnglishText(modelText ?? '')
   const availabilityLine = english ? CLOSE_AVAILABILITY_LINE_EN : CLOSE_AVAILABILITY_LINE
   const availabilityAndTotalLine = english ? CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN : CLOSE_AVAILABILITY_AND_TOTAL_LINE
 
-  const sendLine = (contentText: string) =>
-    sendMessageToConversation(db, accountId, {
+  const sendLine = (contentText: string) => {
+    const text = conciseAvailabilityNotice(contentText, afterHours, english, {
+      alreadyExplained: Boolean(args.availabilityAlreadyExplained),
+      requireNotice: mentionedAmounts(contentText).length > 0 || !args.availabilityAlreadyExplained,
+    })
+    if (!text) return Promise.resolve()
+    return sendMessageToConversation(db, accountId, {
       conversationId,
       messageType: 'text',
-      contentText: modelText?.includes(availabilityConfirmationLine(afterHours, english))
-        ? withAttentionHours(contentText, afterHours)
-        : withAvailabilityConfirmationTiming(contentText, afterHours, english),
+      contentText: text,
       senderType: 'bot',
     })
+  }
 
   if (specialRate) {
     if (closing) await sendLine(availabilityAndTotalLine)

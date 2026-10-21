@@ -38,3 +38,37 @@ export function withAvailabilityConfirmationTiming(text: string, afterHours: boo
     .replace(/\s+([.,;!?])/g, '$1').trim()
   return [base, line].filter(Boolean).join(' ')
 }
+
+function noticeParts(text: string): string[] {
+  // Protect a. m./p. m. before splitting sentences.
+  return text.replace(/\b([ap])\.\s*m\./gi, '$1\uE000m\uE000')
+    .split(/(?<=[.!?])\s+|\n+/).map(s => s.replace(/\uE000/g, '.').trim()).filter(Boolean)
+}
+
+function isAvailabilityNotice(text: string): boolean {
+  const s = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  return /^(?:(?:el )?hotel|recepcion|un companero|nuestro equipo|the hotel|reception)\b/.test(s)
+    && /confirmara|confirmaria|confirmar|verificar|verify|confirm/.test(s)
+    && /disponib|availab/.test(s) && !/\b(?:total|tarifa|precio|price|rate)\b/.test(s)
+    && !/\b(?:q|gtq|usd)\s*\d|\$\s*\d/i.test(s)
+}
+
+export function hasAvailabilityTiming(text: string, afterHours: boolean): boolean {
+  const s = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  return /disponib|availab/.test(s) && /confirm|verific/.test(s)
+    && (afterHours ? /horario (?:habil|de atencion)|(?:reception|business) hours/.test(s) : /(?:2|dos|two) hours?|(?:2|dos) horas/.test(s))
+}
+
+/** One full window per recent request; later estimates retain a short caveat. */
+export function conciseAvailabilityNotice(text: string, afterHours: boolean, english: boolean,
+  options: { alreadyExplained: boolean; requireNotice: boolean }): string {
+  const parts = noticeParts(withAttentionHours(text, afterHours))
+  const notices = parts.filter(isAvailabilityNotice)
+  if (!options.requireNotice && (!options.alreadyExplained || notices.length === 0)) return text
+  const kept = parts.filter(s => !isAvailabilityNotice(s)).join(' ')
+  if (!options.requireNotice) return kept
+  if (!options.alreadyExplained) return [kept, availabilityConfirmationLine(afterHours, english)].filter(Boolean).join(' ')
+  if (/sujet[oa]s? a disponibilidad|subject to (?:hotel )?availability/i.test(kept)) return kept
+  const caveat = english ? 'Estimate subject to availability.' : 'Estimado sujeto a disponibilidad.'
+  return [kept, caveat].filter(Boolean).join(' ')
+}
