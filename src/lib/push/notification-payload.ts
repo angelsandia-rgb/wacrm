@@ -37,6 +37,12 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
   }
   if (row.type !== 'ai_handoff') return { title: 'Aviso del sistema', body: 'Hay una novedad pendiente de revisi\u00f3n. Abr\u00ed el aviso para consultar el detalle.' }
   const body = row.body ?? ''
+  if (body.startsWith('Acción: ')) {
+    return {
+      title: compact(contactName ? `Requiere atención: ${contactName}` : row.title.startsWith('Requiere atención') ? row.title : 'Requiere atención del hotel', 80),
+      body: body.split('\n\nContexto completo:')[0],
+    }
+  }
   const reason = body.match(/Motivo:\s*[\u201c"]([\s\S]*?)[\u201d"](?:\s|$)/i)?.[1]
   const last = body.match(/\u00daltimo mensaje del cliente:\s*[\u201c"]([\s\S]*?)[\u201d"]/i)?.[1]
   const detail = reason || last
@@ -50,6 +56,14 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
 export function notificationPushPayload(row: NotificationRow, contactName?: string | null): PushPayload {
   const text = notificationDisplayText(row, contactName)
   const lines = text.body.split('\n')
+  if (row.type === 'ai_handoff' && lines[0].startsWith('Acción: ')) {
+    const action = compact(lines[0], 100)
+    const request = lines.find(l => l.startsWith('Solicitud: '))
+    const message = lines.find(l => l.startsWith('Mensaje: '))
+    const detail = [request ? compact(request, message ? 105 : 195) : '', message ? compact(message, request ? 90 : 195) : ''].filter(Boolean).join(' ')
+    return { title: compact(text.title, 80), body: compact([action, detail].filter(Boolean).join(' '), 300),
+      url: row.conversation_id ? `/inbox?c=${row.conversation_id}` : '/notifications', tag: row.conversation_id ? `hotel-attention:${row.conversation_id}` : row.id }
+  }
   const body = row.type === 'ai_handoff' && lines.length > 1
     ? `${compact(lines[0], 180)} ${compact(lines.slice(1).join(' '), 115)}`
     : compact(text.body, 300)
