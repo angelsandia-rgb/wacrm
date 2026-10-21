@@ -3638,18 +3638,38 @@ describe('dispatchInboundToAiReply — proactive stay-estimate follow-up', () =>
       reservationProposals: habReservationProposal(),
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendMessageToConversation).toHaveBeenCalledWith(
-      expect.anything(),
-      'acct-1',
-      expect.objectContaining({
-        conversationId: 'conv-1',
-        messageType: 'text',
-        contentText: expect.stringContaining('500'),
-      }),
-    )
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({text:expect.stringContaining('500')}))
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
     expect(h.state.aiActionLogInserts).toContainEqual(
       expect.objectContaining({ action: 'send_stay_estimate', target_id: 'rr-1', result: { total: 500 } }),
     )
+  })
+
+  it('combines a new estimate with the primary reply without repeating a previously stated window (Cesar)',async()=>{
+    h.state.reservationRow=COMPLETE_ROW
+    h.state.products=[{id:'p1',name:'Master Suite Deluxe'}]
+    h.state.productRates=COUPLE_RATES
+    h.buildConversationContext.mockResolvedValue([
+      {role:'assistant',content:'El hotel le confirmar\u00e1 la disponibilidad en un m\u00e1ximo de 2 horas.',createdAt:'2026-09-01T11:30:00Z'},
+      {role:'user',content:'Me podr\u00eda reservar la Master Suite Deluxe?',createdAt:'2026-09-01T12:00:00Z'},
+    ])
+    h.generateReply.mockResolvedValue({text:'Ya tengo su solicitud. El hotel le confirmar\u00e1 la habitaci\u00f3n disponible en un m\u00e1ximo de 2 horas.',handoff:false,markDealWon:false,moveToStageName:null,reservationProposals:habReservationProposal()})
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledOnce()
+    const sent=h.engineSendText.mock.calls[0][0].text
+    expect(sent).toContain('500');expect(sent).toContain('sujeto a disponibilidad')
+    expect(sent).not.toContain('2 horas');expect(sent).not.toContain('El hotel le confirmar')
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+  })
+
+  it('answers factual follow-up questions without another hotel-confirmation reminder',async()=>{
+    h.buildConversationContext.mockResolvedValue([
+      {role:'assistant',content:'El hotel le confirmar\u00e1 la disponibilidad en un m\u00e1ximo de 2 horas.',createdAt:'2026-09-01T11:30:00Z'},
+      {role:'user',content:'Tienen parqueo?',createdAt:'2026-09-01T12:00:00Z'},
+    ])
+    h.generateReply.mockResolvedValue({text:'Incluye desayuno y parqueo. El hotel le confirmar\u00e1 la disponibilidad en un m\u00e1ximo de 2 horas.',handoff:false,markDealWon:false,moveToStageName:null})
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({text:'Incluye desayuno y parqueo.'}))
   })
 
   it('never sends the SAME total twice in one conversation', async () => {
@@ -5343,7 +5363,7 @@ describe('hotel price validation before send (Mery regression)', () => {
     expect(sent).not.toContain('1,800')
     expect(sent).toContain('1,500')
     expect(sent).toContain('nombre de qui\u00e9n')
-    expect(sent).toContain('Recepci\u00f3n debe verificar')
+    expect(sent).toContain('El hotel le confirmar\u00e1 la disponibilidad')
     expect(h.state.aiActionLogInserts).toContainEqual(expect.objectContaining({ action: 'send_stay_estimate', target_id: 'rr-mery', result: { total: 1500 } }))
     expect(h.sendMessageToConversation).not.toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({ contentText: expect.stringContaining('1,500') }))
   })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { availabilityConfirmationLine, withAvailabilityConfirmationTiming, isAfterHours, withAttentionHours } from './attention-hours'
+import { availabilityConfirmationLine, withAvailabilityConfirmationTiming, conciseAvailabilityNotice, hasAvailabilityTiming, isAfterHours, withAttentionHours } from './attention-hours'
 import { isGiftVoucherAsk } from './hotel-media-intent'
 import { classifyRecentAgentRows } from './human-reply'
 
@@ -51,4 +51,28 @@ it('uses the authorized daytime deadline and reception hours at night', () => {
   expect(night).not.toContain('2 horas')
   expect(night).toContain('8:00 a. m.')
   expect(withAvailabilityConfirmationTiming(night, true)).toBe(night)
+})
+
+describe('concise availability notices',()=>{
+  it('replaces stacked model and estimate notices with one full window',()=>{
+    const text='Su estimado es Q700. El hotel le confirmar\u00e1 la habitaci\u00f3n disponible en horario h\u00e1bil, de 8:00 a. m. a 8:00 p. m. Recepci\u00f3n debe verificar la disponibilidad; este estimado no confirma una reserva.';
+    const result=conciseAvailabilityNotice(text,true,false,{alreadyExplained:false,requireNotice:true});
+    expect(result).toContain('Q700');expect(result.match(/El hotel/g)).toHaveLength(1);expect(result.match(/8:00 a\. m\./g)).toHaveLength(1);expect(result).not.toContain('Recepci\u00f3n debe verificar');
+  })
+  it('keeps only a short caveat after the window was already explained',()=>{
+    const result=conciseAvailabilityNotice('Su estimado es Q700. '+availabilityConfirmationLine(true),true,false,{alreadyExplained:true,requireNotice:true});
+    expect(result).toContain('sujeto a disponibilidad');expect(result).not.toContain('8:00');expect(result).not.toContain('El hotel');
+  })
+  it('does not append a reminder to a factual answer, or retain a redundant standalone reminder',()=>{
+    expect(conciseAvailabilityNotice('Incluye desayuno. '+availabilityConfirmationLine(true),true,false,{alreadyExplained:true,requireNotice:false})).toBe('Incluye desayuno.');
+    expect(conciseAvailabilityNotice(availabilityConfirmationLine(true),true,false,{alreadyExplained:true,requireNotice:false})).toBe('');
+  })
+  it('preserves explicit unconfirmed prices and supports English caveats',()=>{
+    const result=conciseAvailabilityNotice('La tarifa de temporada requiere confirmaci\u00f3n del hotel. '+availabilityConfirmationLine(true),true,false,{alreadyExplained:true,requireNotice:false});
+    expect(result).toContain('La tarifa de temporada requiere confirmaci\u00f3n');
+    expect(conciseAvailabilityNotice('Estimated total Q700.',true,true,{alreadyExplained:true,requireNotice:true})).toContain('Estimate subject to availability.');
+    expect(hasAvailabilityTiming(availabilityConfirmationLine(true),true)).toBe(true);
+    expect(hasAvailabilityTiming(availabilityConfirmationLine(false),false)).toBe(true);
+    expect(hasAvailabilityTiming(availabilityConfirmationLine(false),true)).toBe(false);
+  })
 })
