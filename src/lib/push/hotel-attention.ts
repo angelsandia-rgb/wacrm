@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { autoReplyScheduleForAccount, withinAiAttentionHours } from '@/lib/ai/auto-reply-schedule'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
-import { isSimpleAcknowledgement } from '@/lib/ai/reception-alert'
 import { teammateRepliedRecently } from '@/lib/ai/human-reply'
 
 export function attentionNotificationId(accountId: string, messageId: string, userId: string): string {
@@ -30,7 +29,8 @@ export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: str
   try {
     if (!data || typeof data !== 'object') return
     const event = data as Record<string, unknown>
-    if (typeof event.text === 'string' && isSimpleAcknowledgement(event.text)) return
+    // A "sí" can accept a quote or answer a staff question: do not drop it.
+    if (typeof event.text === 'string' && /^(muchas\s+)?gracias[.!\s]*$/i.test(event.text.trim())) return
     if (typeof event.conversation_id !== 'string' || typeof event.contact_id !== 'string' || typeof event.whatsapp_message_id !== 'string') return
     const { data: account } = await db.from('accounts').select('industry_vertical, feature_flags, timezone, default_currency').eq('id', accountId).maybeSingle()
     if (account?.industry_vertical !== 'hotel') return
