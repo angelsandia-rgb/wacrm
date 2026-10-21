@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending } from './hotel-assistance'
+import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest } from './hotel-assistance'
 import type { ChatMessage } from './types'
 const user = (content: string): ChatMessage => ({ role: 'user', content })
 describe('staff-owned hotel conversations', () => {
@@ -29,7 +29,18 @@ describe('explicit stay length', () => {
 })
 
 describe('silent reception routing', () => {
-  it.each(['Quiero cancelar mi reserva', 'Necesito un reembolso', 'Le envío mi comprobante', 'Me pasa el número de cuenta', 'Tengo un voucher', 'Soy tour operador, tengo tarifa especial', 'Necesito cambiar mi reserva', 'Ya completé el formulario', 'Mi cotización sigue pendiente', 'Cotización para una boda', 'Quiero cotizar para 51 personas', 'Quiero hablar con una persona'])('routes the staff decision without a customer reply: %s', (text) => {
+  it.each([
+    'Buenas disculpe precio del hospedaje para 6 o 7 personas y un ni\u00f1o de 3 a\u00f1os para entrar el sabado 5 de diciembre y salir el 6',
+    'Somos un grupo familiar de 8 personas, cuanto cuestan dos habitaciones?',
+    'Quiero cotizar para 51 personas',
+    'Room prices for 7 guests and a child, December 5 to 6',
+  ])('keeps headcount-only lodging inquiries eligible: %s', text => {
+    expect(hotelReceptionReason([user(text)])).toBeNull()
+  })
+  it.each(['Necesito tarifa grupal para 7 personas', 'Quiero cotizar para un grupo de 7 personas', 'Group rates for 8 guests', 'Precio para una excursion de 8 personas', 'Necesito precio corporativo para 7 personas'])('keeps negotiated group terms with reception: %s', text => {
+    expect(hotelReceptionReason([user(text)])).toBeTruthy()
+  })
+  it.each(['Quiero cancelar mi reserva', 'Necesito un reembolso', 'Le envío mi comprobante', 'Me pasa el número de cuenta', 'Tengo un voucher', 'Soy tour operador, tengo tarifa especial', 'Necesito cambiar mi reserva', 'Ya completé el formulario', 'Mi cotización sigue pendiente', 'Cotización para una boda', 'Quiero cotizar para un grupo de 51 personas', 'Quiero hablar con una persona'])('routes the staff decision without a customer reply: %s', (text) => {
     expect(hotelReceptionReason([user(text)])).toBeTruthy()
   })
   it.each(['¿A qué hora es el desayuno?', '¿Cuál es su política de cancelación?', '¿Qué formas de pago aceptan?', '¿Cuánto vale la habitación?', 'Quiero reservar una habitación para hoy', 'Hospedaje de domingo a lunes', '¿Me manda fotos de la Suite Premium?'])('keeps ordinary information eligible: %s', (text) => {
@@ -40,6 +51,11 @@ describe('silent reception routing', () => {
 
 describe('current topic after a reception handoff', () => {
   const handoffAt = '2026-10-14T15:00:00.000Z'
+  it('does not replay an already handed-off customer message', () => {
+    expect(isAlreadyHandedOffRequest([{...user('Precio para 7 personas'),createdAt:'2026-10-14T14:59:00Z'}],handoffAt)).toBe(true)
+    expect(isAlreadyHandedOffRequest([{...user('Somos 6 adultos'),createdAt:'2026-10-14T15:01:00Z'}],handoffAt)).toBe(false)
+    expect(isAlreadyHandedOffRequest([user('Somos 6 adultos')],handoffAt)).toBe(false)
+  })
   it('separates a later informational question from an unanswered cancellation', () => {
     const messages = [ { ...user('Quiero cancelar mi reserva'), createdAt: '2026-10-14T14:59:00.000Z' }, { ...user('¿Tienen parqueo?'), createdAt: '2026-10-14T19:00:00.000Z' } ]
     expect(hotelReceptionReason(hotelCurrentRequest(messages, handoffAt))).toBeNull()

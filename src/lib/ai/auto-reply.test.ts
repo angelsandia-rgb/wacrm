@@ -5192,6 +5192,28 @@ describe('hotel automatic reception topic recovery', () => {
     h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' }
     h.state.conv = { assigned_agent_id: 'agent-existing', ai_autoreply_disabled: false, ai_handoff_transient: null, ai_reply_count: 0, ai_handoff_summary: pendingSummary, ai_handoff_at: pendingAt }
   })
+  it('does not replay Pineda\u2019s already handed-off message after the family intake policy changes', async () => {
+    h.state.conv!.ai_handoff_summary = '🤝 Pendiente de recepción. Recepción debe preparar la cotización de grupo o evento.'
+    h.buildConversationContext.mockResolvedValue([{role:'user',content:'Precio del hospedaje para 6 o 7 personas y un ni\u00f1o de 3 a\u00f1os, entrada 5 y salida 6 de diciembre',createdAt:'2026-10-14T14:55:00Z'}])
+    await dispatchInboundToAiReply({...ARGS,skipDebounce:true})
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.messageInserts).toEqual([])
+    expect(h.state.notificationInserts).toEqual([])
+  })
+  it('continues a new Pineda-style inquiry without sending event triage or a group handoff', async () => {
+    h.state.conv!.ai_handoff_summary = null
+    h.state.conv!.ai_handoff_at = null
+    h.buildConversationContext.mockResolvedValue([fresh('Buenas disculpe precio del hospedaje para 6 o 7 personas y un ni\u00f1o de 3 a\u00f1os para entrar el sabado 5 de diciembre y salir el 6')])
+    h.generateReply.mockResolvedValue({text:'\u00bfSer\u00edan 6 o 7 adultos, adem\u00e1s del ni\u00f1o de 3 a\u00f1os? \u00bfC\u00f3mo desean distribuirse en las habitaciones?',handoff:false,markDealWon:false,moveToStageName:null})
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledOnce()
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('Headcount alone')
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({text:expect.stringContaining('6 o 7 adultos')}))
+    expect(h.state.notificationInserts).toEqual([])
+    expect(h.state.messageInserts).toEqual([])
+  })
   it('answers a new breakfast question after a cancellation without a button press or changing the booking', async () => {
     h.buildConversationContext.mockResolvedValue([old, fresh('¿A qué hora sirven el desayuno?')])
     h.generateReply.mockResolvedValue({ text: 'El desayuno se sirve de 7:00 a 11:30.', handoff: false, markDealWon: true, moveToStageName: 'Confirmado', quoteProposal: { format: 'text', items: [] }, reservationProposals: [{ category: 'habitaciones', fields: { entrada: '2026-10-18', salida: '2026-10-19' }, confirmed: true }] })
