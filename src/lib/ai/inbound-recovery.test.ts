@@ -30,13 +30,14 @@ const NOW = Date.parse('2026-09-24T12:00:00Z')
 const minsAgo = (m: number) => new Date(NOW - m * 60_000).toISOString()
 
 interface Fixture {
+  overnightSchedule?: boolean
   hotel?: boolean
   quiet?: string[]
   recentStaff?: string[]
   muted?: string[]
   conversations: { id: string; account_id: string; contact_id: string | null; last_message_at: string; ai_autoreply_disabled?: boolean; ai_handoff_summary?: string }[]
   /** The customer's latest message per conversation. */
-  lastCustomer: Record<string, { id: string; sender_type: string; content_type: string; created_at: string } | null>
+  lastCustomer: Record<string, { id: string; sender_type: string; content_type: string; content_text?: string; created_at: string } | null>
   /** Conversations with an outbound TEXT after the customer's message. */
   answered?: string[]
   flowTouches?: Record<string, number>
@@ -79,7 +80,7 @@ function db(fx: Fixture) {
         },
         maybeSingle: async () => {
           if (table === 'messages') return { data: fx.lastCustomer[String(String(filters.conversation_id))] ?? null, error: null }
-          if (table === 'accounts') return { data: { owner_user_id: 'owner-1', industry_vertical: fx.hotel ? 'hotel' : null }, error: null }
+          if (table === 'accounts') return { data: { owner_user_id: 'owner-1', industry_vertical: fx.hotel ? 'hotel' : null, timezone: 'America/Guatemala', feature_flags: fx.overnightSchedule ? ['ai_attention_hours_20_8'] : [] }, error: null }
           return { data: null, error: null }
         },
         then: (resolve: (v: unknown) => void) => {
@@ -112,6 +113,29 @@ const conv = (id: string, m = 10) => ({ id, account_id: 'acct-1', contact_id: `c
 const customerText = (id: string, m = 10) => ({ id, sender_type: 'customer', content_type: 'text', created_at: minsAgo(m) })
 
 describe('recoverUnansweredInbound', () => {
+  it('resumes an unanswered daytime hotel question at 20:00 despite a staff reply before that question', async () => {
+    const at = '2026-10-21T21:22:00Z'
+    const dispatch = vi.fn()
+    const f = db({ hotel: true, overnightSchedule: true, quiet: ['c1'], conversations: [{ ...conv('c1'), last_message_at: at }], lastCustomer: { c1: { id: 'daytime', sender_type: 'customer', content_type: 'text', content_text: 'Cuánto cuesta una habitación individual?', created_at: at } } })
+    await recoverUnansweredInbound(f.client, { now: Date.parse('2026-10-22T02:00:00Z'), dispatch })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+  it('keeps the opening backlog silent during daytime and skips already answered or manually paused chats', async () => {
+    const at = '2026-10-21T21:22:00Z'
+    const make = (extra = {}) => db({ hotel: true, overnightSchedule: true, conversations: [{ ...conv('c1'), last_message_at: at }], lastCustomer: { c1: { id: 'daytime', sender_type: 'customer', content_type: 'text', created_at: at } }, ...extra })
+    const dispatch = vi.fn()
+    await recoverUnansweredInbound(make().client, { now: Date.parse('2026-10-22T01:59:00Z'), dispatch })
+    await recoverUnansweredInbound(make({ answered: ['c1'] }).client, { now: Date.parse('2026-10-22T02:00:00Z'), dispatch })
+    await recoverUnansweredInbound(make({ conversations: [{ ...conv('c1'), last_message_at: at, ai_autoreply_disabled: true, ai_handoff_summary: 'Pausa manual' }] }).client, { now: Date.parse('2026-10-22T02:00:00Z'), dispatch })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it('does not send a follow-up for a customer acknowledgement in the daytime backlog', async () => {
+    const at = '2026-10-21T21:22:00Z'
+    const dispatch = vi.fn()
+    const f = db({ hotel: true, overnightSchedule: true, conversations: [{ ...conv('c1'), last_message_at: at }], lastCustomer: { c1: { id: 'thanks', sender_type: 'customer', content_type: 'text', content_text: 'Muy bien', created_at: at } } })
+    await recoverUnansweredInbound(f.client, { now: Date.parse('2026-10-22T02:00:00Z'), dispatch })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
   it('re-dispatches a customer text left unanswered, once, without the debounce wait', async () => {
     const dispatch = vi.fn()
     const { client, inserts } = db({ conversations: [conv('c1')], lastCustomer: { c1: customerText('m1') } })

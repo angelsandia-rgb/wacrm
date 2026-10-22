@@ -1,4 +1,5 @@
 import { latestCustomerTimestamp, hasNewReceptionRequest } from './reception-alert'
+import { canResumeHotelDaytimeInquiry } from './hotel-opening-backlog'
 import { attentionBody, attentionNotificationId } from '@/lib/push/hotel-attention'
 import { withoutUnapprovedStayPrices } from './hotel-close'
 import { loadRecommendedRoomEstimate } from './hotel-recommended-estimate'
@@ -608,7 +609,8 @@ export async function dispatchInboundToAiReply(
     // leave the message unanswered so recovery can check again safely.
     if (neverSelfPause) {
       try {
-        if (await teammateRepliedRecently(db, accountId, conversationId, conv.ai_context_reset_at ?? null)) {
+        if (await teammateRepliedRecently(db, accountId, conversationId, conv.ai_context_reset_at ?? null)
+          && !await canResumeHotelDaytimeInquiry(db, conversationId, config.autoReplySchedule, conv.ai_context_reset_at ?? null)) {
           // Read text only: no provider or media download while staff own the chat.
           const pending = await buildConversationContext(db, conversationId, undefined, null, conv.ai_context_reset_at, null, true)
           const reason = hotelReceptionReason(hotelCurrentRequest(pending, isHotelReceptionPending(conv.ai_handoff_summary) ? conv.ai_handoff_at : null))
