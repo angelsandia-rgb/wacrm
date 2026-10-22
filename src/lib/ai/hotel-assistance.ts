@@ -5,6 +5,7 @@ import { isExplicitHumanRequest, isGiftVoucherAsk, isSpecialRateTalk } from './h
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 const OPERATIONAL = /\b(cancel\w*|reembols\w*|devol\w*|pago\w*|pagar|deposit\w*|anticipo|comprobante|factura|cotiz\w*|voucher|cupon|certificado|tour operador|toperador|tarifa especial|precio especial|clientes? frecuentes?|corporativ\w*|mi reserva|nuestra reserva|confirm\w*|reprogram\w*|reagend\w*|no entiendo|no entendi|no comprendo|i don.t understand|refund|cancel|payment|invoice|quote)\b/
 const INFORMATION = /\b(precios?|tarifas?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que hora|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
+const TOTAL_QUESTION = /\b(?:como|cuanto|cual|que)\b[^.!?\n]{0,60}\btotal(?:es)?\b/
 const NEW_INQUIRY = /\b(hospedaje|alojamiento|habitacion\w*|suite|paquete|masaje|spa|stay|room)\b/
 
 export const HOTEL_RECEPTION_PENDING_PREFIX = '🤝 Pendiente de recepción.'
@@ -78,15 +79,39 @@ export function isAlreadyHandedOffRequest(messages: ChatMessage[], handoffAt?: s
 /** After the three-hour window, staff business stays with staff. Only
  * factual information (or an unmistakable new inquiry with no open request)
  * may resume automatically. A bare yes, guest count or confusion is not one. */
-export function shouldDeferHotelStaffFollowup(messages: ChatMessage[], hasActiveRequest: boolean): boolean {
+export function shouldDeferHotelStaffFollowup(messages: ChatMessage[], hasActiveRequest: boolean, context: ChatMessage[] = messages): boolean {
   if (hotelStayOperationReason(messages)) return true
   const trailing: string[] = []
   for (let i = messages.length - 1; i >= 0 && messages[i].role === 'user'; i--) trailing.unshift(messages[i].content)
   const text = normalize(trailing.join(' '))
   if (OPERATIONAL.test(text)) return true
-  if (INFORMATION.test(text)) return false
+  if (answersHotelIntakeQuestion(messages, context)) return false
+  if (INFORMATION.test(text) || TOTAL_QUESTION.test(text)) return false
   if (!hasActiveRequest && NEW_INQUIRY.test(text)) return false
   return true
+}
+
+/** Recognize a guest supplying intake data requested by the bot. Staff
+ * questions and operational decisions retain their own handoff rules. */
+export function answersHotelIntakeQuestion(messages: ChatMessage[], context: ChatMessage[] = messages): boolean {
+  const latestIndex = context.findLastIndex(m => m.role === 'user')
+  const last = context[latestIndex]
+  const question = context.slice(0, latestIndex).findLast(m => m.role === 'assistant')
+  if (!last || !question || question.senderType === 'agent' || !/[?¿]/.test(question.content)) return false
+  const gap = Date.parse(last.createdAt ?? '') - Date.parse(question.createdAt ?? '')
+  if (Number.isFinite(gap) && (gap < 0 || gap > 24 * 60 * 60_000)) return false
+  const trailing: string[] = []
+  for (let i = messages.length - 1; i >= 0 && messages[i].role === 'user'; i--) trailing.unshift(messages[i].content)
+  const text = normalize(trailing.join(' '))
+  if (OPERATIONAL.test(text) || hotelReceptionReason(messages)) return false
+  const ask = normalize(question.content)
+  const dateAnswer = /\b(?:hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b|\b\d{1,4}[\/-]\d{1,2}|\b\d{1,2}\s*(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.test(text)
+  if (/\b(?:fecha|dia|entrada|ingres\w*|salida|lleg\w*)\b/.test(ask) && dateAnswer) return true
+  if (/\b(?:noches|duracion|tiempo|dias)\b/.test(ask) && /\b(?:\d+|un[ao]?|dos|tres|cuatro|cinco)\s+(?:noches?|dias?)\b/.test(text)) return true
+  if (/\b(?:personas|adultos|ninos|edades|huespedes)\b/.test(ask) && /\b(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete)\b/.test(text)) return true
+  if (/\b(?:habitacion|suite|opcion)\b/.test(ask) && /\b(?:junior|premium|master|clasica|doble|sencilla|individual|primera|segunda)\b/.test(text)) return true
+  if (/\b(?:nombre|titular|apellido)\b/.test(ask) && /^[a-z\s'-]{3,100}$/.test(text.trim())) return true
+  return false
 }
 
 /** Detect a stated arrival with no explicit departure, interval or length.
