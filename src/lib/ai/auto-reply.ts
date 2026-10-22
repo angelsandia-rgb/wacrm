@@ -862,7 +862,7 @@ export async function dispatchInboundToAiReply(
     const newEvent = eventTriage === 'new'
     const receptionReason = newEvent && rawReceptionReason?.includes('preparar la cotizaci') ? null : rawReceptionReason
     if (neverSelfPause && (receptionPending || teammateNote) && !receptionReason && trailingCustomerTurns(requestMessages).every((t) => isClosingMessage(t))) return
-    if (neverSelfPause && (receptionReason || (receptionPending && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, true)))) {
+    if (neverSelfPause && (receptionReason || (receptionPending && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, true, messages)))) {
       await handOffToHuman({
         db, accountId, conversationId,
         handoffAgentId: config.handoffAgentId,
@@ -1074,7 +1074,7 @@ export async function dispatchInboundToAiReply(
     }
 
     // Ambiguous follow-ups to staff also stay with reception after the window.
-    if (isHotel && teammateNote && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, Boolean(activeReservations))) {
+    if (isHotel && teammateNote && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, Boolean(activeReservations), messages)) {
       await handOffToHuman({
         db, accountId, conversationId,
         handoffAgentId: config.handoffAgentId,

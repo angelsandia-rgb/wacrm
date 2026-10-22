@@ -5684,6 +5684,21 @@ describe('hotel reception notifications for assigned chats', () => {
     expect(h.moveDeal).not.toHaveBeenCalled()
     expect(h.state.dealInserts).toEqual([])
   })
+  it('answers Joyce requested arrival date instead of re-handing it off after staff participation', async () => {
+    h.state.conv = { assigned_agent_id: 'ana', ai_autoreply_disabled: false, ai_reply_count: 0, ai_handoff_summary: '🤝 Pendiente de recepción. El cliente continúa una gestión pendiente.', ai_handoff_at: '2026-10-22T02:01:00Z' }
+    h.teammateTookOver.mockResolvedValue(true)
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Somos 2 adultos y 2 niños de 6 y 9 años; queremos comparar 2 y 3 noches.' },
+      { role: 'assistant', content: '¿Qué fecha de entrada tienen prevista?', createdAt: '2026-10-22T05:18:00Z' },
+      { role: 'user', content: 'Entrada 30 de diciembre', createdAt: '2026-10-22T06:14:00Z' },
+    ])
+    h.generateReply.mockResolvedValue({ text: 'Gracias por la fecha. El hotel debe verificar los precios del paquete para ambas opciones.', handoff: false, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledOnce()
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.state.notificationInserts).toEqual([])
+    expect(h.state.messageInserts).toEqual([])
+  })
 })
 
 

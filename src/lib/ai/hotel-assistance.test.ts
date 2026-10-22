@@ -2,6 +2,35 @@ import { describe, expect, it } from 'vitest'
 import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest } from './hotel-assistance'
 import type { ChatMessage } from './types'
 const user = (content: string): ChatMessage => ({ role: 'user', content })
+
+describe('guest answers to Angela intake questions', () => {
+  const question: ChatMessage = { role: 'assistant', content: 'Para 2 y 3 noches, ¿qué fecha de entrada tienen prevista? El hotel confirmará el total.', createdAt: '2026-10-22T05:18:00Z' }
+  const answer = { ...user('Entrada 30 de diciembre'), createdAt: '2026-10-22T06:14:00Z' }
+  it('accepts Joyce arrival date even when the pending-case context contains only that answer', () => {
+    expect(shouldDeferHotelStaffFollowup([answer], true, [question, answer])).toBe(false)
+    expect(shouldDeferHotelStaffFollowup([answer], true)).toBe(true)
+  })
+  it('recognizes the original comparison of totals as permitted price information', () => {
+    expect(shouldDeferHotelStaffFollowup([user('Seriamos 2 adultos y 2 niños, 6 años y 9 años. Como nos quedaria el total para 3 noches Y para 2 noche')], true)).toBe(false)
+  })
+  it.each([
+    ['¿Cuántos adultos y qué edades tienen los niños?', '2 adultos, niños de 6 y 9 años'],
+    ['¿Cuántas noches desea hospedarse?', 'Tres noches'],
+    ['¿Qué habitación prefiere?', 'La Junior Suite'],
+    ['¿Cuál es su nombre completo?', 'Joyce de González'],
+  ])('continues the requested intake: %s', (ask, reply) => {
+    const messages: ChatMessage[] = [{ role: 'assistant', content: ask }, user(reply)]
+    expect(shouldDeferHotelStaffFollowup(messages, true)).toBe(false)
+  })
+  it('does not borrow a staff question or an unrelated old bot question', () => {
+    expect(shouldDeferHotelStaffFollowup([answer], true, [{ ...question, senderType: 'agent' }, answer])).toBe(true)
+    expect(shouldDeferHotelStaffFollowup([answer], true, [{ ...question, content: '¿Desea fotos?' }, answer])).toBe(true)
+    expect(shouldDeferHotelStaffFollowup([answer], true, [{ ...question, createdAt: '2026-10-19T05:18:00Z' }, answer])).toBe(true)
+  })
+  it.each(['Cambie mi reserva al 30 de diciembre', 'Entrada 30 de diciembre, quiero pagar el anticipo', 'Me confirma la disponibilidad?', 'Ya envié el comprobante'])('keeps operational requests with staff despite an intake question: %s', text => {
+    expect(shouldDeferHotelStaffFollowup([user(text)], true, [question, user(text)])).toBe(true)
+  })
+})
 describe('staff-owned hotel conversations', () => {
   it.each(['Mañana cancelado', 'No entiendo…', 'Somos 3 adultos y dos menores de 10 y 3 años', 'Me urge mi cotización, ya llené el formulario', 'Sí por favor', 'Tengo tarifa corporativa', 'Nos envía la cuenta para pagar'])('defers the operational follow-up: %s', (text) => {
     expect(shouldDeferHotelStaffFollowup([user(text)], true)).toBe(true)
