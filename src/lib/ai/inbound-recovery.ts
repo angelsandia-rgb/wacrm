@@ -25,6 +25,8 @@ import { dispatchInboundToAiReply } from './auto-reply'
 import { loadTrailingOutbound, teammateRepliedRecently, TEAMMATE_QUIET_MS } from './human-reply'
 import { contactMutesAi } from './muted-contact'
 import { HOTEL_RECEPTION_PENDING_PREFIX } from './hotel-assistance'
+import { HOTEL_DAYTIME_BACKLOG_MS, isHotelDaytimeBacklog, isOnlyAcknowledgement } from './hotel-opening-backlog'
+import type { AutoReplySchedule } from './auto-reply-schedule'
 
 const MIN_AGE_MS = 4 * 60_000
 /** Older than this, a late automatic reply would read as odd — leave it
@@ -80,7 +82,7 @@ export async function recoverUnansweredInbound(
       .eq('accounts.industry_vertical', 'hotel')
       .eq('status', 'open')
       .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
-      .gte('last_message_at', new Date(now - HOTEL_MAX_AGE_MS).toISOString())
+      .gte('last_message_at', new Date(now - HOTEL_DAYTIME_BACKLOG_MS).toISOString())
       .lte('last_message_at', oldestRecent)
       .order('last_message_at', { ascending: true })
       .limit(MAX_PER_RUN * 3),
@@ -92,7 +94,7 @@ export async function recoverUnansweredInbound(
       .eq('status', 'open')
       .eq('ai_autoreply_disabled', true)
       .like('ai_handoff_summary', HOTEL_RECEPTION_PENDING_PREFIX + '%')
-      .gte('last_message_at', new Date(now - HOTEL_MAX_AGE_MS).toISOString())
+      .gte('last_message_at', new Date(now - HOTEL_DAYTIME_BACKLOG_MS).toISOString())
       .lte('last_message_at', newestEligible)
       .order('last_message_at', { ascending: true })
       .limit(MAX_PER_RUN * 3),
@@ -110,8 +112,10 @@ export async function recoverUnansweredInbound(
     if (!conv.contact_id) continue
     result.scanned++
     // Closed hours must not consume recovery attempts or create handoffs.
+    let schedule: AutoReplySchedule | null
     try {
-      if (!withinAiAttentionHours(await loadAutoReplySchedule(db, conv.account_id), new Date(now))) continue
+      schedule = await loadAutoReplySchedule(db, conv.account_id)
+      if (!withinAiAttentionHours(schedule, new Date(now))) continue
     } catch { continue }
 
     // The customer's latest message must be a plain text — the only
@@ -119,13 +123,13 @@ export async function recoverUnansweredInbound(
     // go elsewhere).
     const { data: lastCustomer } = await db
       .from('messages')
-      .select('id, sender_type, content_type, created_at')
+      .select('id, sender_type, content_type, content_text, created_at')
       .eq('conversation_id', conv.id)
       .eq('sender_type', 'customer')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    const msg = lastCustomer as { id: string; sender_type: string; content_type: string; created_at: string } | null
+    const msg = lastCustomer as { id: string; sender_type: string; content_type: string; content_text?: string | null; created_at: string } | null
     if (!msg || msg.content_type !== 'text') continue
 
     // Answered = some TEXT we sent after it. Images alone don't count: the
@@ -138,7 +142,8 @@ export async function recoverUnansweredInbound(
     const { rows: repliesAfter } = await loadTrailingOutbound(db, conv.id, null)
     if (repliesAfter.some((r) => r.content_type === 'text')) continue
     const age = now - Date.parse(msg.created_at)
-    if (age < MIN_AGE_MS || age > HOTEL_MAX_AGE_MS) continue
+    const daytimeBacklog = isHotelDaytimeBacklog(schedule, msg.created_at, new Date(now)) && repliesAfter.length === 0
+    if (age < MIN_AGE_MS || age > (daytimeBacklog ? HOTEL_DAYTIME_BACKLOG_MS : HOTEL_MAX_AGE_MS)) continue
 
     const { data: account, error: accountError } = await db
       .from('accounts')
@@ -149,6 +154,7 @@ export async function recoverUnansweredInbound(
     const ownerId = (account as { owner_user_id?: string | null } | null)?.owner_user_id
     if (!ownerId) continue
     const isHotel = account?.industry_vertical === 'hotel'
+    if (isHotel && isOnlyAcknowledgement(msg.content_text)) continue
     if (!isHotel && age > MAX_AGE_MS) continue
     if (await contactMutesAi(db, conv.contact_id)) continue
 
@@ -157,13 +163,13 @@ export async function recoverUnansweredInbound(
       try {
         // Do not spend the recovery attempts while staff still own the thread.
         // Dispatch repeats this check to handle a human reply arriving mid-sweep.
-        if (await teammateRepliedRecently(db, conv.account_id, conv.id, null, new Date(now))) continue
+        if (!daytimeBacklog && await teammateRepliedRecently(db, conv.account_id, conv.id, null, new Date(now))) continue
         // Only extend the age limit for a message delayed by the staff window.
         // Ordinary stale inquiries retain the existing one-hour cutoff.
         staffWindowElapsed = await teammateRepliedRecently(
           db, conv.account_id, conv.id, null, new Date(now), HOTEL_MAX_AGE_MS,
         )
-        if (age > MAX_AGE_MS && !staffWindowElapsed) continue
+        if (age > MAX_AGE_MS && !staffWindowElapsed && !daytimeBacklog) continue
       } catch {
         // Unknown staff state: leave the conversation alone until the next sweep.
         continue
