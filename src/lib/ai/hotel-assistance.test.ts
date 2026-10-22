@@ -13,6 +13,9 @@ describe('guest answers to Angela intake questions', () => {
   it('recognizes the original comparison of totals as permitted price information', () => {
     expect(shouldDeferHotelStaffFollowup([user('Seriamos 2 adultos y 2 niños, 6 años y 9 años. Como nos quedaria el total para 3 noches Y para 2 noche')], true)).toBe(false)
   })
+  it('does not treat an unsolicited new headcount as a price question just because it says total', () => {
+    expect(shouldDeferHotelStaffFollowup([user('En total seremos 4 personas')], true)).toBe(true)
+  })
   it.each([
     ['¿Cuántos adultos y qué edades tienen los niños?', '2 adultos, niños de 6 y 9 años'],
     ['¿Cuántas noches desea hospedarse?', 'Tres noches'],

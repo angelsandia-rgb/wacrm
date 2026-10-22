@@ -1,10 +1,11 @@
-﻿import { hotelStayOperationReason } from './hotel-stay-operations'
+import { hotelStayOperationReason } from './hotel-stay-operations'
 import type { ChatMessage } from './types'
 import { isExplicitHumanRequest, isGiftVoucherAsk, isSpecialRateTalk } from './hotel-media-intent'
 
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 const OPERATIONAL = /\b(cancel\w*|reembols\w*|devol\w*|pago\w*|pagar|deposit\w*|anticipo|comprobante|factura|cotiz\w*|voucher|cupon|certificado|tour operador|toperador|tarifa especial|precio especial|clientes? frecuentes?|corporativ\w*|mi reserva|nuestra reserva|confirm\w*|reprogram\w*|reagend\w*|no entiendo|no entendi|no comprendo|i don.t understand|refund|cancel|payment|invoice|quote)\b/
-const INFORMATION = /\b(precios?|tarifas?|total(?:es)?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que hora|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
+const INFORMATION = /\b(precios?|tarifas?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que hora|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
+const TOTAL_QUESTION = /\b(?:como|cuanto|cual|que)\b[^.!?\n]{0,60}\btotal(?:es)?\b/
 const NEW_INQUIRY = /\b(hospedaje|alojamiento|habitacion\w*|suite|paquete|masaje|spa|stay|room)\b/
 
 export const HOTEL_RECEPTION_PENDING_PREFIX = '🤝 Pendiente de recepción.'
@@ -85,7 +86,7 @@ export function shouldDeferHotelStaffFollowup(messages: ChatMessage[], hasActive
   const text = normalize(trailing.join(' '))
   if (OPERATIONAL.test(text)) return true
   if (answersHotelIntakeQuestion(messages, context)) return false
-  if (INFORMATION.test(text)) return false
+  if (INFORMATION.test(text) || TOTAL_QUESTION.test(text)) return false
   if (!hasActiveRequest && NEW_INQUIRY.test(text)) return false
   return true
 }
@@ -135,4 +136,3 @@ export function hasUnconfirmedStayDuration(messages: ChatMessage[]): boolean {
   return /\b(?:alojamiento|hospedaje|estadia|estancia|entrada|ingreso|llegada|llego|llegamos|check.?in|arrival|stay)\b/.test(dates)
     && /\d{1,2}|lunes|martes|miercoles|jueves|viernes|sabado|domingo/.test(dates)
 }
-
