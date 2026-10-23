@@ -1,4 +1,5 @@
 import type { PushPayload } from './send'
+import { attentionBody } from './attention-details'
 
 interface NotificationRow {
   id: string
@@ -37,10 +38,14 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
   }
   if (row.type !== 'ai_handoff') return { title: 'Aviso del sistema', body: 'Hay una novedad pendiente de revisi\u00f3n. Abr\u00ed el aviso para consultar el detalle.' }
   const body = row.body ?? ''
-  if (body.startsWith('Acción: ')) {
+  if (body.startsWith('Cliente necesita atención por: ') || body.startsWith('Acción: ')) {
+    const detail = body.startsWith('Acción: ')
+      ? attentionBody(body.split('\n\nContexto completo:\n')[1] || body,
+        body.match(/^Solicitud: (.+)$/m)?.[1], body.match(/^Mensaje: «(.*)»$/m)?.[1])
+      : body
     return {
       title: compact(contactName ? `Requiere atención: ${contactName}` : row.title.startsWith('Requiere atención') ? row.title : 'Requiere atención del hotel', 80),
-      body: body.split('\n\nContexto completo:')[0],
+      body: detail.split('\n\nContexto completo:')[0],
     }
   }
   const reason = body.match(/Motivo:\s*[\u201c"]([\s\S]*?)[\u201d"](?:\s|$)/i)?.[1]
@@ -56,12 +61,15 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
 export function notificationPushPayload(row: NotificationRow, contactName?: string | null): PushPayload {
   const text = notificationDisplayText(row, contactName)
   const lines = text.body.split('\n')
-  if (row.type === 'ai_handoff' && lines[0].startsWith('Acción: ')) {
-    const action = compact(lines[0], 100)
-    const request = lines.find(l => l.startsWith('Solicitud: '))
-    const message = lines.find(l => l.startsWith('Mensaje: '))
-    const detail = [request ? compact(request, message ? 105 : 195) : '', message ? compact(message, request ? 90 : 195) : ''].filter(Boolean).join(' ')
-    return { title: compact(text.title, 80), body: compact([action, detail].filter(Boolean).join(' '), 300),
+  if (row.type === 'ai_handoff' && lines[0].startsWith('Cliente necesita atención por: ')) {
+    const reason = compact(lines[0].replace('Cliente necesita atención por: ', 'Motivo: '), 90)
+    const action = compact((lines.find(l => l.startsWith('Acción requerida: ')) || '').replace('Acción requerida: ', 'Acción: '), 95)
+    const reference = lines.find(l => l.startsWith('Referencia registrada: '))?.replace('Referencia registrada: ', 'Datos: ')
+    const message = lines.find(l => l.startsWith('Último mensaje: '))
+    const budget = 300 - reason.length - action.length - 3
+    const refLimit = reference ? message ? Math.floor(budget * .6) : budget : 0
+    const extra = [reference ? compact(reference, refLimit) : '', message ? compact(message, budget - refLimit - (reference ? 1 : 0)) : ''].filter(Boolean).join(' ')
+    return { title: compact(text.title, 80), body: compact([reason, action, extra].filter(Boolean).join(' '), 300),
       url: row.conversation_id ? `/inbox?c=${row.conversation_id}` : '/notifications', tag: row.conversation_id ? `hotel-attention:${row.conversation_id}` : row.id }
   }
   const body = row.type === 'ai_handoff' && lines.length > 1
