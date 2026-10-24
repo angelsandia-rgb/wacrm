@@ -13,7 +13,7 @@ describe('hotel attention alerts', () => {
     const body = attentionBody('El hotel debe verificar el pago.', '- Junior Suite · 5–6 dic · 7 personas', 'Ya envié Q1,400')
     const push = notificationPushPayload({ id: 'n', type: 'ai_handoff', title: 'Requiere atención: Pineda', body, conversation_id: 'chat' })
     expect(push.title).toBe('Requiere atención: Pineda')
-    expect(push.body).toMatch(/verificar el pago/i)
+    expect(push.body).toMatch(/verifique el pago/i)
     expect(push.body).toContain('5–6 dic')
     expect(push.body).toContain('7 personas')
     expect(push.body).toContain('Q1,400')
@@ -21,7 +21,7 @@ describe('hotel attention alerts', () => {
     expect(push.url).toBe('/inbox?c=chat')
   })
   it('does not describe a guest-confirmed request as a hotel-approved visit', () => {
-    expect(attentionBody('🤖 El huésped completó y confirmó su solicitud.')).toContain('Confirmar disponibilidad y total')
+    expect(attentionBody('🤖 El huésped completó y confirmó su solicitud.')).toContain('Confirme disponibilidad y total')
   })
   it('notifies only the configured hotel recipient outside AI hours; retries share the same notification ID', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-20T16:00:00Z'))

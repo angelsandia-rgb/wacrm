@@ -4,6 +4,8 @@ import { notificationDisplayText, notificationPushPayload } from './notification
 
 describe('explanatory hotel handoff notifications', () => {
   it.each([
+    ['Tendrá habitación para el dia de hoy para 2 personas?', 'disponibilidad de habitaciones', 'las fechas y personas indicadas'],
+    ['A nombre de quien sale los cheques para el pago', 'beneficiario para emitir un cheque', 'beneficiario autorizado'],
     ['Hoy se me quedó una almohada en la habitación 10; ¿me la pueden guardar?', 'objeto olvidado', 'Verificar si está resguardado'],
     ['Adjunto pago', 'comprobante de pago', 'Revisar el comprobante'],
     ['Quedó pendiente mi factura', 'facturación', 'datos fiscales'],
@@ -22,8 +24,8 @@ describe('explanatory hotel handoff notifications', () => {
   })
   it('uses the receipt message before thanks instead of describing a photo as an action', () => {
     const body = attentionBody('Pendiente de recepción. Motivo: “(El cliente envió una foto.)”', null, 'Gracias', { customerText: 'Archivo adjunto para revisión Adjunto pago Gracias' })
-    expect(body).toContain('Cliente necesita atención por: la verificación de un comprobante de pago.')
-    expect(body).toContain('Acción requerida: Revisar el comprobante')
+    expect(body).toContain('Motivo: la verificación de un comprobante de pago.')
+    expect(body).toContain('Acción requerida: Revise el comprobante')
     expect(body).toContain('Último mensaje: «Gracias»')
   })
   it('uses the preceding hotel question for a short otherwise ambiguous answer', () => {
@@ -46,7 +48,7 @@ describe('explanatory hotel handoff notifications', () => {
   it('keeps the full detail in the panel and a bounded actionable push opening the chat', () => {
     const body = attentionBody('El cliente solicita atención.', '- Junior Suite · 24–25 oct · 4 personas', '¿Me confirma la reserva?')
     const row = { id: 'n', type: 'ai_handoff', title: 'Requiere atención: Nicole', conversation_id: 'chat', body }
-    expect(notificationDisplayText(row).body).toContain('Acción requerida: Verificar disponibilidad y total')
+    expect(notificationDisplayText(row).body).toContain('Acción requerida: Verifique disponibilidad y total')
     expect(notificationDisplayText(row).body).toContain('Plazo: máximo 2 horas')
     expect(notificationDisplayText(row).body).not.toContain('Contexto completo:')
     const push = notificationPushPayload(row)
@@ -59,7 +61,7 @@ describe('explanatory hotel handoff notifications', () => {
     const body = attentionBody('Gestión pendiente.', 'Junior Suite '.repeat(50), 'Adjunto pago ' + 'detalle '.repeat(100))
     const push = notificationPushPayload({ id: 'n', type: 'ai_handoff', title: 'Requiere atención: Cliente', body })
     expect(push.body).toContain('comprobante de pago')
-    expect(push.body).toContain('Revisar el comprobante')
+    expect(push.body).toContain('Revise el comprobante')
     expect(push.body!.length).toBeLessThanOrEqual(300)
   })
 })
