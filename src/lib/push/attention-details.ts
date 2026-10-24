@@ -27,6 +27,8 @@ function classify(text: string): { reason: string; action: string } | null {
     return { reason: 'la verificación de un pago.', action: 'Verificar el pago y comunicar el resultado al cliente.' }
   if (/\b(?:pago|pagar|tarjeta|banco)\b/.test(t) && /\b(?:no permitio|rechaz|fallo|validacion|no puedo|no pude|error)\w*\b/.test(t))
     return { reason: 'una dificultad para realizar el pago.', action: 'Revisar el problema y facilitar una alternativa de pago autorizada.' }
+  if (/\bcheques?\b/.test(t) && /\b(?:a nombre de quien|beneficiario|nombre)\b/.test(t))
+    return { reason: 'el nombre del beneficiario para emitir un cheque.', action: 'Verificar el beneficiario autorizado e indicar al cliente a nombre de quién debe emitir el cheque.' }
   if (/\b(?:pago|pagar|anticipo|deposito|cuenta bancaria|link de pago)\b/.test(t))
     return { reason: 'la coordinación de un pago.', action: 'Indicar el medio de pago autorizado y resolver la consulta del cliente.' }
   if (/\b(?:masaje\w*|spa|terapia)\b/.test(t) && /\b(?:junt\w*|horario\w*|hora\w*|agend\w*|turno\w*|disponib\w*)\b/.test(t))
@@ -35,6 +37,8 @@ function classify(text: string): { reason: string; action: string } | null {
     return { reason: 'asistencia durante su estancia.', action: 'Coordinar la atención con recepción y responder al huésped.' }
   if (/\b(?:restaurante|desayuno|almuerzo|cena|pedido)\b/.test(t))
     return { reason: 'una consulta o pedido del restaurante.', action: 'Confirmar con restaurante el servicio solicitado y orientar al huésped.' }
+  if (/\b(?:habitacion(?:es)?|cuartos?|suites?)\b/.test(t) && /\b(?:tendra[n]?|tiene[n]?|hay|disponib\w*|aparte)\b/.test(t))
+    return { reason: 'una consulta sobre disponibilidad de habitaciones.', action: 'Verificar las opciones para las fechas y personas indicadas; confirmar al cliente qué habitación está disponible.' }
   if (/\b(?:disponibilidad|me confirma|nos confirma|confirmar la reserva|confirmar disponibilidad|queda reservad\w*|reservar)\b/.test(t))
     return { reason: 'la confirmación de una solicitud de reserva.', action: 'Verificar disponibilidad y total antes de confirmar la reserva al cliente.' }
   if (/\b(?:cotiz\w*|precio\w*|tarifa\w*|total\w*|presupuesto|cuanto cuesta)\b/.test(t))
@@ -67,11 +71,19 @@ export function explainAttention(summary: string, last: string | null | undefine
   return { reason: 'una consulta pendiente que debe revisar el equipo.', action: 'Leer el mensaje y el contexto del chat para responder al cliente.' }
 }
 
+/** Only application instructions are rewritten; customer quotes stay literal. */
+export function formalAttentionAction(action: string): string {
+  const verbs: Record<string, string> = { Respetar: 'Respete', Verificar: 'Verifique', Revisar: 'Revise', Evaluar: 'Evalúe', Indicar: 'Indique', Coordinar: 'Coordine', Confirmar: 'Confirme', Abrir: 'Abra', Leer: 'Lea' }
+  return action.replace(/^(Respetar|Verificar|Revisar|Evaluar|Indicar|Coordinar|Confirmar|Abrir|Leer)\b/, verb => verbs[verb])
+    .replace(/([;] | y | e )(aclarar|coordinar|responder|confirmar|comunicar|facilitar|resolver|orientar|continuar|indicar)\b/g, (_match, prefix: string, verb: string) => prefix + ({ aclarar: 'aclare', coordinar: 'coordine', responder: 'responda', confirmar: 'confirme', comunicar: 'comunique', facilitar: 'facilite', resolver: 'resuelva', orientar: 'oriente', continuar: 'continúe', indicar: 'indique' }[verb]))
+    .replace('; no darlo por realizado', '; no lo dé por realizado')
+}
+
 /** Full detail stays in the panel; the push renderer gives reason/action priority. */
 export function attentionBody(summary: string, request?: string | null, lastMessage?: string | null, context: AttentionContext = {}): string {
   const last = lastMessage || summary.match(/Último mensaje del cliente:\s*[“"]([\s\S]*?)[”"]/i)?.[1]
   const { reason, action } = explainAttention(summary, last, context)
-  return [`Cliente necesita atención por: ${reason}`, `Acción requerida: ${action}`,
+  return [`Motivo: ${reason}`, `Acción requerida: ${formalAttentionAction(action)}`,
     request ? `Referencia registrada: ${compact(request.replace(/^[-\s]+/, ''))}` : null,
     last ? `Último mensaje: «${compact(last)}»` : null,
     context.customerText && compact(context.customerText) !== compact(last || '') ? `Contexto del cliente: ${compact(context.customerText)}` : null,
