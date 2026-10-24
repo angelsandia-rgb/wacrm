@@ -13,7 +13,7 @@ describe('hotel attention alerts', () => {
     const body = attentionBody('El hotel debe verificar el pago.', '- Junior Suite · 5–6 dic · 7 personas', 'Ya envié Q1,400')
     const push = notificationPushPayload({ id: 'n', type: 'ai_handoff', title: 'Requiere atención: Pineda', body, conversation_id: 'chat' })
     expect(push.title).toBe('Requiere atención: Pineda')
-    expect(push.body).toContain('verificar el pago')
+    expect(push.body).toMatch(/verificar el pago/i)
     expect(push.body).toContain('5–6 dic')
     expect(push.body).toContain('7 personas')
     expect(push.body).toContain('Q1,400')

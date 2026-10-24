@@ -1,6 +1,6 @@
 import { latestCustomerTimestamp, hasNewReceptionRequest } from './reception-alert'
 import { canResumeHotelDaytimeInquiry } from './hotel-opening-backlog'
-import { attentionBody, attentionNotificationId } from '@/lib/push/hotel-attention'
+import { attentionBody, attentionNotificationId, loadAttentionContext } from '@/lib/push/hotel-attention'
 import { withoutUnapprovedStayPrices } from './hotel-close'
 import { loadRecommendedRoomEstimate } from './hotel-recommended-estimate'
 import { hotelStayOperationReason } from './hotel-stay-operations'
@@ -3083,10 +3083,10 @@ async function notifyHandoffTeam(
     const { data: account } = await db.from('accounts').select('default_currency, industry_vertical').eq('id', accountId).maybeSingle()
     const title = `Requiere atención${contact?.name || contact?.phone ? ': ' + (contact.name || contact.phone) : account?.industry_vertical === 'hotel' ? ' del hotel' : ' del equipo'}`
     const { current } = await loadActiveReservationsSummary(db, accountId, conversationId, account?.default_currency || 'GTQ')
-    const body = account?.industry_vertical === 'hotel' ? attentionBody(summary, current) : summary
-
-    const { data: inbound } = await db.from('messages').select('whatsapp_message_id').eq('conversation_id', conversationId).eq('sender_type', 'customer').order('created_at', { ascending: false }).limit(1).maybeSingle()
-    const sourceId = account?.industry_vertical === 'hotel' ? inbound?.whatsapp_message_id : null
+    const context = account?.industry_vertical === 'hotel' ? await loadAttentionContext(db, accountId, conversationId) : {}
+    const { data: inbound } = await db.from('messages').select('message_id, content_text').eq('conversation_id', conversationId).eq('sender_type', 'customer').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const body = account?.industry_vertical === 'hotel' ? attentionBody(summary, current, inbound?.content_text, context) : summary
+    const sourceId = account?.industry_vertical === 'hotel' ? inbound?.message_id : null
     const rows = targets.map((r) => ({
         ...(sourceId ? { id: attentionNotificationId(accountId, sourceId, r.user_id as string) } : {}),
         account_id: accountId,

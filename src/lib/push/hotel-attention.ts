@@ -2,25 +2,43 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { autoReplyScheduleForAccount, withinAiAttentionHours } from '@/lib/ai/auto-reply-schedule'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
-import { teammateRepliedRecently } from '@/lib/ai/human-reply'
+import { teammateRepliedRecently, isBusinessAutoReply } from '@/lib/ai/human-reply'
+import { attentionBody, type AttentionContext } from './attention-details'
+export { attentionBody } from './attention-details'
 
 export function attentionNotificationId(accountId: string, messageId: string, userId: string): string {
   const hash = createHash('sha256').update(`hotel-attention:${accountId}:${messageId}:${userId}`).digest('hex')
   return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-8${hash.slice(17,20)}-${hash.slice(20,32)}`
 }
 
-/** Spanish, actionable presentation; keeps the complete context in the stored alert. */
-export function attentionBody(summary: string, request?: string | null, lastMessage?: string | null): string {
-  const last = lastMessage || summary.match(/Último mensaje del cliente:\s*[“"]([\s\S]*?)[”"]/i)?.[1]
-  const reason = summary.match(/Motivo:\s*[“"]([\s\S]*?)[”"](?:\s|$)/i)?.[1]
-  const first = summary.split('\n')[0].replace(/^[^\p{L}]+/u, '').replace(/^Pendiente de recepción\.\s*/i, '')
-  const action = /completó y confirmó su solicitud/.test(summary)
-    ? 'Confirmar disponibilidad y total; el huésped ya completó su solicitud.'
-    : reason || first || 'Revisar la consulta y responder al cliente.'
-  return [`Acción: ${action}`, request ? `Solicitud: ${request.replace(/^[-\s]+/, '').replace(/\s+/g, ' ').trim()}` : null,
-    last ? `Mensaje: «${last.replace(/\s+/g, ' ').trim()}»` : null,
-    'Seguimiento: máximo 2 horas en horario del hotel (8:00 a. m.–8:00 p. m.); de noche, al iniciar ese horario.',
-    '', 'Contexto completo:', summary].filter(v => v !== null).join('\n')
+/** Recent customer burst plus the preceding staff question. Never read an
+ * image as proof of payment or use a months-old booking to invent a reason. */
+export async function loadAttentionContext(db: SupabaseClient, accountId: string, conversationId: string): Promise<AttentionContext> {
+  try {
+    const { data, error } = await db.from('messages')
+      .select('sender_type,content_type,content_text,created_at,conversations!inner(account_id)')
+      .eq('conversation_id', conversationId).eq('conversations.account_id', accountId)
+      .neq('content_type', 'internal_note').neq('status', 'failed')
+      .order('created_at', { ascending: false }).limit(30)
+    if (error || !Array.isArray(data)) return {}
+    const index = data.findIndex(m => m.sender_type === 'customer')
+    if (index < 0) return {}
+    const at = Date.parse(data[index].created_at)
+    const texts: string[] = []
+    for (const m of data.slice(index)) {
+      if (at - Date.parse(m.created_at) > 30 * 60_000) break
+      if (m.sender_type !== 'customer') {
+        if (!isBusinessAutoReply(m.content_text)) break
+        continue
+      }
+      if (m.content_text?.trim()) texts.unshift(m.content_text.trim())
+      else if (['image', 'document', 'audio', 'video'].includes(m.content_type)) texts.unshift('Archivo adjunto para revisión')
+    }
+    const staff = data.slice(index + 1).find(m => m.sender_type === 'agent' && m.content_text?.trim()
+      && !/^\[.*\]$/.test(m.content_text.trim()) && !isBusinessAutoReply(m.content_text)
+      && at - Date.parse(m.created_at) <= 24 * 60 * 60_000)
+    return { customerText: texts.join(' '), staffText: staff?.content_text ?? null }
+  } catch { return {} }
 }
 
 /** Outside AI hours, every customer inbound needs the hotel's response.
@@ -48,7 +66,8 @@ export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: str
     const { current } = await import('@/lib/ai/known-context').then(m => m.loadActiveReservationsSummary(db, accountId, event.conversation_id as string, account.default_currency || 'GTQ'))
     const media: Record<string, string> = { image: 'imagen', audio: 'nota de voz', document: 'documento', video: 'video', location: 'ubicación', sticker: 'sticker' }
     const message = typeof event.text === 'string' && event.text.trim() ? event.text : `Archivo recibido: ${media[String(event.content_type)] || 'mensaje multimedia'}`
-    const body = attentionBody('Responder al cliente; la atención de esta conversación corresponde al hotel.', current, message)
+    const context = await loadAttentionContext(db, accountId, event.conversation_id)
+    const body = attentionBody('Responder al cliente; la atención de esta conversación corresponde al hotel.', current, message, context)
     const { error } = await db.from('notifications').upsert(targets.map(p => {
       const id = attentionNotificationId(accountId, event.whatsapp_message_id as string, p.user_id)
       return { id, account_id: accountId, user_id: p.user_id, type: 'ai_handoff', conversation_id: event.conversation_id,

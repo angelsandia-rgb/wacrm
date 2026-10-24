@@ -109,6 +109,7 @@ const h = vi.hoisted(() => ({
     /** `messages` read for `tryRecoverTransientHandoff` — a human's own
      *  reply after the handoff, or null (nobody engaged → recover). */
     humanMsgAfterHandoff: null as { id: string } | null,
+    notificationInbound: null as { message_id: string; content_text: string } | null,
     convFullSelectError: false,
     /** Rows `tryRecoverTransientHandoff`'s guarded UPDATE ... .select('id') returns. */
     recoveryUpdateRows: [{ id: 'conv-1' }] as { id: string }[],
@@ -525,6 +526,10 @@ vi.mock('./admin-client', () => ({
       }
       if (table === 'notifications') {
         return {
+          upsert: (payload: Record<string, unknown>[]) => {
+            h.state.notificationInserts.push(...payload)
+            return Promise.resolve({ error: null })
+          },
           insert: (payload: Record<string, unknown>[]) => {
             h.state.notificationInserts.push(...payload)
             return Promise.resolve({ error: null })
@@ -534,15 +539,16 @@ vi.mock('./admin-client', () => ({
       if (table === 'messages') {
         // handOffToHuman's best-effort internal-note insert +
         // tryRecoverTransientHandoff's "did a human reply?" read.
+        let inboundLookup = false
         const readChain = {
-          select: () => readChain,
+          select: (columns?: string) => { inboundLookup = columns === 'message_id, content_text'; return readChain },
           eq: () => readChain,
           order: () => readChain,
           neq: () => readChain,
           gt: () => readChain,
           limit: () => readChain,
           maybeSingle: () =>
-            Promise.resolve({ data: h.state.humanMsgAfterHandoff, error: null }),
+            Promise.resolve({ data: inboundLookup ? h.state.notificationInbound : h.state.humanMsgAfterHandoff, error: null }),
         }
         return {
           ...readChain,
@@ -637,6 +643,7 @@ beforeEach(() => {
     ai_handoff_at: null,
   }
   h.state.humanMsgAfterHandoff = null
+  h.state.notificationInbound = null
   h.state.convFullSelectError = false
   h.state.recoveryUpdateRows = [{ id: 'conv-1' }]
   h.state.claim = true
@@ -5656,6 +5663,17 @@ describe('hotel reception notifications for assigned chats', () => {
     expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.generateReply).not.toHaveBeenCalled()
+  })
+  it('uses the stored WhatsApp message_id so retries share the same notification identity', async () => {
+    h.state.notificationInbound = { message_id: 'wamid.room-question', content_text: 'Cuál es mi número de habitación?' }
+    await dispatchInboundToAiReply(ARGS)
+    await dispatchInboundToAiReply(ARGS)
+    const first = h.state.notificationInserts[0].id
+    expect(first).toEqual(expect.any(String))
+    expect(h.state.notificationInserts[2].id).toBe(first)
+    h.state.notificationInbound.message_id = 'wamid.next-room-question'
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.notificationInserts[4].id).not.toBe(first)
   })
   it('notifies reception cases even when the same handoff also assigns an agent', async () => {
     h.state.conv = { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 0 }
