@@ -43,6 +43,8 @@ export function hotelReceptionReason(messages: ChatMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0 && messages[i].role === 'user'; i--) trailing.unshift(messages[i].content)
   const text = normalize(trailing.join(' '))
   if (isExplicitHumanRequest(text)) return 'El cliente solicita atención de una persona.'
+  if (/\b(?:en seguimiento a lo conversado|seguimiento a (?:mi|la|nuestra) (?:cotizacion|propuesta)|como (?:hablamos|conversamos|quedamos)|lo conversado (?:ayer|el dia de ayer))\b/.test(text)
+    && /\b(?:propuesta|cotiz\w*|presupuesto|habitaciones?|hospedar|grupo)\b/.test(text)) return 'Recepción debe continuar la cotización en curso; no reenviar formularios ni solicitar nuevamente los datos.'
   // A follow-up needs a staff decision, even when the last line is a greeting
   // or thanks. Ordinary first-time availability inquiries remain eligible.
   if (/\bdisponibilidad\b/.test(text) && /\b(falta que|sigo esperando|seguimos esperando|quedo pendiente|validar|validen|ya estaran|aun no|todavia no|me confirmen|nos confirmen)\b/.test(text)) return 'Recepción debe responder la confirmación de disponibilidad pendiente.'

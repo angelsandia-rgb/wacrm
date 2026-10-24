@@ -49,6 +49,10 @@ describe('hotel attention alerts', () => {
     expect(writes[2][0].id).not.toBe(writes[0][0].id)
     await notifyHotelStaffInbound(db, 'hotel', { ...event, whatsapp_message_id: 'acceptance', text: 'Sí' })
     expect(writes).toHaveLength(4)
+    for (const text of ['Muchas gracias 🙏🏼🙏🏼', 'Muchísimas gracias, buenas noches', 'Muy bien Licenciada']) {
+      await notifyHotelStaffInbound(db, 'hotel', { ...event, text })
+    }
+    expect(writes).toHaveLength(4)
     vi.setSystemTime(new Date('2026-10-21T03:00:00Z'))
     await notifyHotelStaffInbound(db, 'hotel', { ...event, whatsapp_message_id: 'm3' })
     expect(writes).toHaveLength(4)

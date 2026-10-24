@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { hasNewReceptionRequest, latestCustomerTimestamp } from './reception-alert'
+import { hasNewReceptionRequest, latestCustomerTimestamp, isCourtesyClosing, isSimpleAcknowledgement } from './reception-alert'
+
+describe('courtesy closings', () => {
+  it.each(['Muy bien Licenciada', 'Muchísimas gracias, buenas noches', 'Muchas gracias 🙏🏼🙏🏼', 'Gracias, le agradezco', 'Perfecto. Gracias yo les escribo en unos días'])('does not reopen or alert for %s', text => {
+    expect(isCourtesyClosing(text)).toBe(true)
+    expect(isSimpleAcknowledgement(text)).toBe(true)
+  })
+  it.each(['Sí', 'Perfecto', 'Gracias, ¿cuánto cuesta?', 'Ok gracias y no hay manera de hacer los masajes juntos?', 'Gracias, quedo pendiente de la factura', 'Muy bien, reserve por favor'])('preserves decisions and requests: %s', text => {
+    expect(isCourtesyClosing(text)).toBe(false)
+  })
+})
 
 describe('new reception requests', () => {
   it('notifies a new customer message even when a different operation was already pending', () => {
