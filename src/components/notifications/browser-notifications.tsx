@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import type { Notification } from "@/types";
 import { notificationPushPayload } from "@/lib/push/notification-payload";
+import { enrichAssignment } from "@/lib/push/assignment-details";
 
 /**
  * BrowserNotifications — headless, mounted once in the dashboard shell
@@ -34,11 +35,11 @@ export function BrowserNotifications() {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "notifications" },
-        (payload) => {
+        async (payload) => {
           if (Notification.permission !== "granted") return;
           const row = payload.new as Notification;
 
-          const push = notificationPushPayload(row);
+          const push = notificationPushPayload(await enrichAssignment(supabase, row));
           let n: globalThis.Notification;
           try {
             n = new Notification(push.title, { body: push.body, tag: row.id });

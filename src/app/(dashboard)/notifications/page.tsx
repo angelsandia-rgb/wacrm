@@ -19,6 +19,7 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { notificationDisplayText } from "@/lib/push/notification-payload";
+import { enrichAssignment } from "@/lib/push/assignment-details";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -55,7 +56,7 @@ export default function NotificationsPage() {
       setError("No se pudieron cargar las notificaciones. Volv\u00e9 a intentarlo.");
       return;
     }
-    setNotifications((data ?? []) as Notification[]);
+    setNotifications(await Promise.all(((data ?? []) as Notification[]).map(row => enrichAssignment(supabase, row))));
   }, [accountId]);
 
   useEffect(() => {
@@ -72,16 +73,16 @@ export default function NotificationsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
+        async (payload) => {
           if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
+            const row = await enrichAssignment(supabase, payload.new as Notification);
             setNotifications((prev) => {
               if (!prev) return [row];
               if (prev.some((n) => n.id === row.id)) return prev;
               return [row, ...prev];
             });
           } else if (payload.eventType === "UPDATE") {
-            const row = payload.new as Notification;
+            const row = await enrichAssignment(supabase, payload.new as Notification);
             setNotifications((prev) =>
               prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
               prev,

@@ -17,6 +17,10 @@ function compact(text: string, limit: number): string {
 /** Shared Spanish presentation for push, foreground alerts and stored historical rows. */
 export function notificationDisplayText(row: NotificationRow, contactName?: string | null): { title: string; body: string } {
   if (row.type === 'conversation_assigned') {
+    if (/^(?:Motivo: |Cliente necesita atención por: )/.test(row.body || '')) {
+      const detail = notificationDisplayText({ ...row, type: 'ai_handoff' }, contactName)
+      return { title: compact(contactName ? `Conversación asignada: ${contactName}` : row.title.startsWith('Conversación asignada: ') ? row.title : 'Conversación asignada', 80), body: detail.body }
+    }
     const name = contactName || row.body?.match(/assigned you a conversation with\s+(.+)$/i)?.[1]
     return { title: 'Conversaci\u00f3n asignada', body: name ? `Cliente: ${name.trim()}.\nAbra el chat para darle seguimiento.` : 'Tiene una conversaci\u00f3n por atender. Abra el chat para darle seguimiento.' }
   }
@@ -68,7 +72,7 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
 export function notificationPushPayload(row: NotificationRow, contactName?: string | null): PushPayload {
   const text = notificationDisplayText(row, contactName)
   const lines = text.body.split('\n')
-  if (row.type === 'ai_handoff' && lines[0].startsWith('Motivo: ')) {
+  if ((row.type === 'ai_handoff' || row.type === 'conversation_assigned') && lines[0].startsWith('Motivo: ')) {
     const reason = compact(lines[0], 90)
     const action = compact((lines.find(l => l.startsWith('Acción requerida: ')) || '').replace('Acción requerida: ', 'Acción: '), 95)
     const reference = lines.find(l => l.startsWith('Referencia registrada: '))?.replace('Referencia registrada: ', 'Datos: ')

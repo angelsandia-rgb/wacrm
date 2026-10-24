@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/ai/admin-client';
 import { sendPushToUser } from '@/lib/push/send';
 import { notificationPushPayload } from '@/lib/push/notification-payload';
+import { enrichAssignment } from '@/lib/push/assignment-details';
 import { isPushConfigured } from '@/lib/push/vapid';
 import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/alerts';
 
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
   const admin = supabaseAdmin();
   const { data: n, error } = await admin
     .from('notifications')
-    .select('id, account_id, user_id, title, body, conversation_id, type')
+    .select('id, account_id, user_id, title, body, conversation_id, type, created_at')
     .eq('id', id)
     .maybeSingle();
 
@@ -64,7 +65,8 @@ export async function POST(request: Request) {
     const contact = conversation?.contact as { name?: string | null } | null;
     contactName = contact?.name ?? null;
   }
-  const result = await sendPushToUser(admin, n.user_id as string, notificationPushPayload(n, contactName));
+  const enriched = await enrichAssignment(admin, n);
+  const result = await sendPushToUser(admin, n.user_id as string, notificationPushPayload(enriched, contactName));
   if (n.type === 'ai_handoff') {
     const dedupKey = `push_delivery:${n.account_id}:${n.user_id}`;
     if (result.sent === 0) {
