@@ -5164,3 +5164,32 @@ Patrones (los mismos de #285/#286):
 **Validación.** Lint 0 problemas (regla en error), typecheck, 2679 tests y
 `npm run build` en verde. Sin prueba en navegador desde la sesión (requiere
 login real).
+
+### 2026-10-24 — Claude Code (infra: firewall del VPS, respaldo cifrado a R2, grants explícitos)
+
+**Origen.** Tres avisos externos: Contabo (Auto Backup y CVE de PHP) y
+Supabase (desde el 30-oct ya no da grants automáticos a tablas nuevas).
+
+- **CVE de PHP:** no aplica. Ni el VPS ni los contenedores tienen PHP.
+- **Firewall del VPS (`ufw`):** estaba apagado, con el panel de EasyPanel
+  (:3000) y los puertos de control de Docker Swarm (2377/7946) abiertos a
+  internet. Ahora solo entran 22/80/443; el :3000, que Docker publica por
+  fuera de `ufw`, se bloquea con una regla `DOCKER-USER` en
+  `/etc/ufw/after.rules`. El panel se usa en `https://kmencc.easypanel.host`.
+  - **Incidente:** el webhook de deploy de GitHub apuntaba a
+    `http://<ip>:3000/api/deploy/...`, así que el firewall cortó el
+    auto-deploy de 23:44 a 04:05 UTC (producción siguió arriba con la versión
+    anterior). El webhook ahora usa `https://kmencc.easypanel.host/...`
+    (la clave del deploy ya no viaja en texto plano) y el :3000 queda cerrado.
+- **Respaldo fuera del VPS (PR #300):** el script nocturno sube el dump
+  y todos los archivos de Storage a Cloudflare R2, cifrados con `rclone crypt`
+  (RUNBOOK §9). Script y clave ya están en el VPS. **Falta:** activar R2 en
+  Cloudflare (checkout con método de pago, lo hace el owner) y cargar el
+  token en `backup.env`.
+- **Grants explícitos (PR #301, migración 168, aplicada):** fija los grants
+  actuales de producción para que un proyecto reconstruido desde las
+  migraciones (RUNBOOK §9) funcione después del 30-oct. Un test exige `GRANT`
+  en toda migración ≥169 que cree una tabla en `public`.
+
+**Validación.** Typecheck, 2800 tests y build en verde; deploy `4a411df`
+en línea con health 200; ping del webhook por HTTPS con :3000 cerrado: 200.
