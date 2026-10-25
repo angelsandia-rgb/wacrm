@@ -4,6 +4,12 @@ import type { ChatMessage } from './types'
 const user = (content: string): ChatMessage => ({ role: 'user', content })
 const ask: ChatMessage = { role: 'assistant', content: EVENT_TRIAGE_QUESTION }
 describe('event quotation triage', () => {
+  it('does not restart intake for an event whose quote staff already manage', () => {
+    expect(hotelEventTriage([{ role: 'assistant', senderType: 'agent', content: 'Por favor para modificar su cotizacion' }, user('Gracias el día del evento le puedo realizar el pago'), { role: 'assistant', senderType: 'agent', content: 'Si asi es' }, user('Muy amable')])).toBe('existing')
+  })
+  it('allows an explicit new event quote after an earlier staff quote', () => {
+    expect(hotelEventTriage([{ role: 'assistant', senderType: 'agent', content: 'Le envío su cotización' }, user('Quiero una cotización nueva para otro evento')])).toBe('new')
+  })
   it.each(['Quiero informacion de eventos', 'Precios para una boda', 'Tienen salon para cumpleanos?'])('asks the quotation status first: %s', text => {
     expect(hotelEventTriage([user(text)])).toBe('ask')
   })

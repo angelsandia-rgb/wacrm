@@ -10,13 +10,15 @@ const OTHER_TOPIC = /\b(habitacion\w*|hospedaje|alojamiento|spa|masaje|restauran
 export function hotelEventTriage(messages: ChatMessage[]): EventTriage {
   let state: EventTriage = 'none'
   let asked = false
+  let staffQuote = false
   for (const message of messages) {
     const text = normalize(message.content)
     if (message.role === 'assistant') {
+      if (message.senderType === 'agent' && /\b(?:cotiz\w*|presupuesto|propuesta)\b/.test(text)) staffQuote = true
       if (message.senderType !== 'agent' && message.content === EVENT_TRIAGE_QUESTION) { state = 'ask'; asked = true }
       continue
     }
-    if (EVENT.test(text)) { if (state === 'none') state = 'ask' }
+    if (EVENT.test(text)) { if (state === 'none') state = staffQuote ? 'existing' : 'ask' }
     else if (OTHER_TOPIC.test(text)) { state = 'none'; asked = false; continue }
     if (state === 'none') continue
     const noQuote = /\b(no tengo|no tenemos|aun no tengo|todavia no tengo)\b/.test(text)

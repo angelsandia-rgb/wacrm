@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { hasNewReceptionRequest, latestCustomerTimestamp, isCourtesyClosing, isSimpleAcknowledgement } from './reception-alert'
 
 describe('courtesy closings', () => {
-  it.each(['Muy bien Licenciada', 'Muchísimas gracias, buenas noches', 'Muchas gracias 🙏🏼🙏🏼', 'Gracias, le agradezco', 'Perfecto. Gracias yo les escribo en unos días'])('does not reopen or alert for %s', text => {
+  it.each(['Muy amable', 'Se lo agradezco', 'Muy bien Licenciada', 'Muchísimas gracias, buenas noches', 'Muchas gracias 🙏🏼🙏🏼', 'Gracias, le agradezco', 'Perfecto. Gracias yo les escribo en unos días'])('does not reopen or alert for %s', text => {
     expect(isCourtesyClosing(text)).toBe(true)
     expect(isSimpleAcknowledgement(text)).toBe(true)
   })
