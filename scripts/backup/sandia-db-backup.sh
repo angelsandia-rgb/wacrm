@@ -106,7 +106,8 @@ if [ -n "${R2_ACCOUNT_ID:-}" ]; then
     RCLONE_CONFIG_R2_ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" \
     RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID missing}" \
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY missing}" \
-    RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
+    RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
+    RCLONE_CONFIG_R2_NO_HEAD=true  # rclone 1.60 HEADs ?versionId= after each PUT; R2 answers 501
   # File names stay readable (contents encrypted) so the bucket is browsable.
   export RCLONE_CONFIG_R2C_TYPE=crypt RCLONE_CONFIG_R2C_REMOTE="r2:$R2_BUCKET" \
     RCLONE_CONFIG_R2C_FILENAME_ENCRYPTION=off RCLONE_CONFIG_R2C_DIRECTORY_NAME_ENCRYPTION=false
