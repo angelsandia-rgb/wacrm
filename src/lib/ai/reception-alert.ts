@@ -17,6 +17,7 @@ export function isCourtesyClosing(text: string): boolean {
     .replace(/[\p{Extended_Pictographic}\p{Emoji_Component}]/gu, '').replace(/[.,!;:\s]+/g, ' ').trim()
   return /^(?:(?:muchas|muchisimas|mil) )?gracias(?: (?:muy amable|le agradezco|buenas noches|buen dia))?$/.test(clean)
     || /^muy bien(?: (?:licenciada|licenciado|gracias))?$/.test(clean)
+    || /^(?:muy amable|que amable|se lo agradezco|le agradezco|muchas gracias muy amable)$/.test(clean)
     || /^(?:perfecto gracias )?yo les escribo en unos dias$/.test(clean)
     || /^muy bien (?:en (?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre) les comento que decidimos gracias|yo les informo con gusto)$/.test(clean)
 }

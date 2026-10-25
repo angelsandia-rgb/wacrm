@@ -1,4 +1,4 @@
-import { latestCustomerTimestamp, hasNewReceptionRequest } from './reception-alert'
+import { latestCustomerTimestamp, hasNewReceptionRequest, isCourtesyClosing } from './reception-alert'
 import { canResumeHotelDaytimeInquiry } from './hotel-opening-backlog'
 import { attentionBody, attentionNotificationId, loadAttentionContext } from '@/lib/push/hotel-attention'
 import { withoutUnapprovedStayPrices } from './hotel-close'
@@ -786,6 +786,9 @@ export async function dispatchInboundToAiReply(
       console.error('[ai auto-reply] human-reply check failed:', describeError(err))
     }
     if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return
+    // A courtesy after staff assistance is not an unanswered hotel inquiry.
+    // Run before event triage so historical event mentions cannot reopen it.
+    if (neverSelfPause && trailingCustomerTurns(messages).every(isCourtesyClosing)) return
 
     // We already said goodbye and the customer only says goodbye again —
     // nothing left to add (VSR 2026-10-07: "¡Con mucho gusto!…" then
@@ -838,7 +841,7 @@ export async function dispatchInboundToAiReply(
     // Event intake is decided before provider calls or any form/catalog action.
     if (eventTriage === 'ask' || eventTriage === 'existing') {
       const previous = previousAssistantMessage(messages)
-      const alreadyAcknowledged = eventTriage === 'existing' && previous.includes('seguimiento a su cotizaci\u00f3n')
+      const alreadyAcknowledged = eventTriage === 'existing' && (receptionPending || Boolean(teammateNote) || previous.includes('seguimiento a su cotizaci\u00f3n'))
       if (!alreadyAcknowledged) {
         let timeZone = config.autoReplySchedule?.timeZone
         if (!timeZone) {
