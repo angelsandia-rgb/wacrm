@@ -3001,8 +3001,15 @@ describe('dispatchInboundToAiReply — autonomous send_category_banner', () => {
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
     // These banner/dedup fixtures represent a stay already qualified.
     h.state.reservationRow = { check_in: '2026-10-26', check_out: '2026-10-28', guests: 2 }
+    // Pin "today" before that stay, or the past-date guard expires it once
+    // the real clock passes 2026-10-28 (CI went red on 2026-11-01).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T18:00:00Z'))
     // A guest genuinely quoting rooms — the only time a banner may go out (owner, 2026-10-09).
     h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero ver si tienen habitaciones?' }])
+  })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('no banner when the guest is not quoting that category, even if the model asks for one', async () => {
@@ -3786,6 +3793,13 @@ describe('dispatchInboundToAiReply — deterministic category banner (tied to re
     h.state.account = { default_currency: 'USD', industry_vertical: 'hotel' }
     // These banner/dedup fixtures represent a stay already qualified.
     h.state.reservationRow = { check_in: '2026-10-26', check_out: '2026-10-28', guests: 2 }
+    // Pin "today" before that stay, or the past-date guard expires it once
+    // the real clock passes 2026-10-28 (CI went red on 2026-11-01).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T18:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('sends the banner image BEFORE the text reply, not after — Angel, 2026-09-20: "quisiera que primero mande el banner y luego el mensaje... para que sea más natural"', async () => {
