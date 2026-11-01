@@ -1656,8 +1656,10 @@
         "placeholderMessageText": "안녕하세요! 문의해주셔서 감사합니다…",
         "tagLabel": "태그",
         "modeLabel": "모드",
+        "onlineOnly": "현재 온라인인 상담원만 (없으면 미배정)",
         "modes": {
-          "round_robin": "순차 배정",
+          "round_robin": "라운드 로빈 (순서대로)",
+          "least_open": "열린 대화가 가장 적은 상담원",
           "specific": "특정 상담원"
         },
         "agentLabel": "상담원",
