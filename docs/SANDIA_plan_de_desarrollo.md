@@ -5241,3 +5241,12 @@ caída de `media_type`.
 combinados; migraciones probadas con `BEGIN … ROLLBACK` antes de aplicarse;
 cada deploy verificado (GIT_SHA en el contenedor, healthy, health 200);
 rutas nuevas responden 401/404 sin sesión.
+
+**#314 — Embudo por etapa y ranking por asesor (/kpis).** Embudo por
+pipeline (negocios creados en el periodo y hasta qué etapa llegaron; sin
+historial de etapas, cuenta la etapa actual) y ranking del equipo
+(abiertos asignados, cerrados, respuestas, mediana de tiempo de respuesta,
+ventas ganadas). Hotel y clínica lo ven con 30 días. Los envíos desde la
+bandeja ahora guardan `messages.sender_id` (antes siempre nulo), así que
+respuestas y tiempo de respuesta por asesor cuentan desde este deploy. Sin
+migración. Desplegado `e6164e7`. Calendly queda pendiente.
