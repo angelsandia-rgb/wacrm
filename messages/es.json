@@ -2502,6 +2502,7 @@
       "fields": "Campos y etiquetas",
       "deals": "Negocios y moneda",
       "csat": "Satisfacción (CSAT)",
+      "conversations": "Cierre de conversaciones",
       "members": "Miembros del equipo",
       "api": "Claves de API",
       "webhooks": "Webhooks",

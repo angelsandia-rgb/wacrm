@@ -204,6 +204,13 @@ export interface Conversation {
   channel?: 'whatsapp' | 'instagram' | 'facebook';
   /** Which WhatsApp connection owns this thread (migration 050). Null for non-WhatsApp channels. */
   whatsapp_config_id?: string | null;
+  /** AI close insights (migration 169), filled a few minutes after the
+   *  conversation closes when the account turned them on. */
+  closed_at?: string | null;
+  close_category?: string | null;
+  close_summary?: string | null;
+  close_sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  close_sentiment_reason?: string | null;
 }
 
 // ============================================================

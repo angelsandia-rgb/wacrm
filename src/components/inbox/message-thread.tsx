@@ -71,6 +71,7 @@ import {
 import { deleteAccountMedia } from '@/lib/storage/upload-media';
 import { TemplatePicker } from './template-picker';
 import { AiThreadBanner } from './ai-thread-banner';
+import { CloseInsightsCard } from './close-insights-card';
 import { buildReplyPreview } from './reply-quote';
 import { renderTemplateBody } from '@/lib/whatsapp/template-body';
 import { toast } from 'sonner';
@@ -1634,6 +1635,15 @@ export function MessageThread({
           </div>
         )}
       </div>
+
+      {conversation.status === 'closed' && conversation.close_summary && (
+        <CloseInsightsCard
+          category={conversation.close_category ?? null}
+          summary={conversation.close_summary}
+          sentiment={conversation.close_sentiment ?? null}
+          sentimentReason={conversation.close_sentiment_reason ?? null}
+        />
+      )}
 
       {/* AI auto-reply banner — take over an active bot, or resume it
           after a handoff. Renders nothing unless the account has
