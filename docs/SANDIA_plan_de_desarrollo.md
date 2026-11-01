@@ -5193,3 +5193,26 @@ Supabase (desde el 30-oct ya no da grants automáticos a tablas nuevas).
 
 **Validación.** Typecheck, 2800 tests y build en verde; deploy `4a411df`
 en línea con health 200; ping del webhook por HTTPS con :3000 cerrado: 200.
+
+### 2026-11-01 — Claude Code (CI: pruebas del banner vencidas por fecha)
+
+**Qué pasó.** El CI de `main` se puso en rojo el 1-nov sin ningún cambio de
+código: 16 pruebas del banner de hotel en `auto-reply.test.ts` usaban una
+estadía fija del 26 al 28-oct; al pasar esa fecha, la guarda de "fecha
+pasada" la trataba como reservación vieja y no mandaba el banner. La app no
+tenía ningún problema.
+
+**Arreglo (PR #306).** Esos dos bloques fijan `Date` en
+`2026-10-20T18:00:00Z` (`vi.useFakeTimers({ toFake: ['Date'] })` +
+`useRealTimers()` en `afterEach`), como ya hacían otros bloques del archivo.
+Solo pruebas. **Regla:** toda prueba con fechas de estadía fijas debe fijar
+el reloj, o vence sola.
+
+**Otros de la sesión.** PR #305 cerrado (duplicado de #304, ya en `main`).
+MCP del repo registrado en Claude Code con una API key de la cuenta Chat
+Sandia. Zernio: Facebook desconectado para quedar en las 2 cuentas gratis.
+Pendiente del owner: la key de Anthropic de Chat Sandia es inválida desde
+el 29-sep (bot sin responder) y Google Sheets de Chat Sandia sigue
+desconectado.
+
+**Validación.** Typecheck, 2804 tests y build en verde; CI del PR en verde.
