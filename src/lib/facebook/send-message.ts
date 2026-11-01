@@ -174,6 +174,7 @@ export async function sendFacebookMessageToConversation(
     .insert({
       conversation_id: conversationId,
       sender_type: 'agent',
+      sender_id: params.senderUserId ?? null,
       content_type: messageType,
       content_text: persistedText,
       media_url: mediaUrl || null,
