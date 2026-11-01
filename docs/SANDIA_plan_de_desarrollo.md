@@ -5193,3 +5193,51 @@ Supabase (desde el 30-oct ya no da grants automáticos a tablas nuevas).
 
 **Validación.** Typecheck, 2800 tests y build en verde; deploy `4a411df`
 en línea con health 200; ping del webhook por HTTPS con :3000 cerrado: 200.
+
+### 2026-11-01 — Claude Code (CI: pruebas del banner vencidas por fecha)
+
+**Qué pasó.** El CI de `main` se puso en rojo el 1-nov sin ningún cambio de
+código: 16 pruebas del banner de hotel en `auto-reply.test.ts` usaban una
+estadía fija del 26 al 28-oct; al pasar esa fecha, la guarda de "fecha
+pasada" la trataba como reservación vieja y no mandaba el banner. La app no
+tenía ningún problema.
+
+**Arreglo (PR #306).** Esos dos bloques fijan `Date` en
+`2026-10-20T18:00:00Z` (`vi.useFakeTimers({ toFake: ['Date'] })` +
+`useRealTimers()` en `afterEach`), como ya hacían otros bloques del archivo.
+Solo pruebas. **Regla:** toda prueba con fechas de estadía fijas debe fijar
+el reloj, o vence sola.
+
+**Otros de la sesión.** PR #305 cerrado (duplicado de #304, ya en `main`).
+MCP del repo registrado en Claude Code con una API key de la cuenta Chat
+Sandia. Zernio: Facebook desconectado para quedar en las 2 cuentas gratis.
+Pendiente del owner: la key de Anthropic de Chat Sandia es inválida desde
+el 29-sep (bot sin responder) y Google Sheets de Chat Sandia sigue
+desconectado.
+
+**Validación.** Typecheck, 2804 tests y build en verde; CI del PR en verde.
+
+### 2026-11-01 (sesión posterior) — Claude Code (paridad con respond.io: 6 funciones)
+
+Se exploró respond.io por dentro (organización de prueba "Chat Sandia",
+vence 2026-11-07) y se implementaron las 6 brechas más valiosas, un PR
+cada una, todas desplegadas el 1-nov:
+
+| PR | Qué | Migración |
+|---|---|---|
+| #308 | Resumen con IA al cerrar (categoría, resumen, sentimiento) + cierre automático por inactividad. Configuración → Cierre de conversaciones (apagado por defecto). Corre en el cron de conversaciones. | 169 (aplicada) |
+| #309 | Paso de automatización **Hacer una pregunta**: estaciona la corrida (`awaiting_reply`) hasta que el cliente responde; la respuesta se guarda en un campo o `{{ vars.x }}` y no dispara IA ni otras automatizaciones. | 170 (aplicada) |
+| #310 | Disparadores **Conversación cerrada**, **Campo de contacto actualizado** y **Webhook entrante** (`/api/automations/webhook/<token>`). Los campos personalizados ahora se guardan por `PUT /api/contacts/[id]/custom-values`. | — |
+| #311 | Asignación **rotativa real** (antes siempre el primer perfil), **al de menos chats** y **solo en línea**. | — |
+| #312 | Botón **Mejorar con IA** en la bandeja: tono, corregir, simplificar, traducir (`/api/ai/rewrite`). | — |
+| #313 | **Habilidades de la IA**: cada acción del bot se puede apagar o recibir una regla de "cuándo"; lo apagado se elimina del resultado del modelo en un solo punto. Sin configuración = comportamiento idéntico. | 171 (aplicada) |
+
+**Reglas nuevas.** Un cierre o una escritura hecha por una automatización
+nunca vuelve a disparar automatizaciones (evita bucles). `ai_configs.skills`
+se lee con una consulta aparte y tolerante a errores para no repetir la
+caída de `media_type`.
+
+**Validación.** Typecheck, lint, 2824 tests y build en verde en cada PR y
+combinados; migraciones probadas con `BEGIN … ROLLBACK` antes de aplicarse;
+cada deploy verificado (GIT_SHA en el contenedor, healthy, health 200);
+rutas nuevas responden 401/404 sin sesión.
