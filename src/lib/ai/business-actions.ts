@@ -6,6 +6,7 @@ import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes
 import { createEvent } from '@/lib/google-calendar/api'
 import { GoogleCalendarError } from '@/lib/google-calendar/oauth'
 import type { LeadTemperature } from '@/types'
+import { notifyConversationClosed } from '@/lib/automations/events'
 
 export type BusinessAction =
   | 'close_conversation'
@@ -56,9 +57,7 @@ export async function executeBusinessAction(args: {
     if (error) throw new BusinessActionError(error.message, 500)
     if (!data) throw new BusinessActionError('Conversation not found', 404)
     result = data
-    void dispatchWebhookEvent(webhookDb, accountId, 'conversation.closed', {
-      conversation_id: data.id, closed_by: 'ai_action',
-    })
+    void notifyConversationClosed(webhookDb, { accountId, conversationId: data.id, closedBy: 'ai_action' })
   } else if (action === 'mark_deal_won') {
     // Prefer moving to the pipeline's "Venta cerrada" stage (migration
     // 051) — same operation a human dragging the card there triggers —

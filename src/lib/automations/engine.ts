@@ -21,6 +21,8 @@ import type {
   SendPhotoStepConfig,
   AssignConversationStepConfig,
   AskQuestionStepConfig,
+  ContactFieldTriggerConfig,
+  IncomingWebhookTriggerConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { isWithinTimeWindow } from './time-window'
@@ -55,6 +57,11 @@ export interface AutomationContext {
   /** Set while a run is parked on an `ask_question` step: where the
    *  customer's answer goes once it arrives. */
   awaiting_answer?: { field: string; var_name: string }
+  /** The field that changed, for contact_field_updated (same encoding as
+   *  UpdateContactFieldStepConfig.field). */
+  field?: string
+  /** Path token of the incoming_webhook call, so only its automation runs. */
+  webhook_token?: string
 }
 
 export interface DispatchInput {
@@ -1015,6 +1022,16 @@ export function triggerMatches(automation: Automation, ctx: AutomationContext | 
       return false
     }
     return cfg.reply_ids.includes(replyId)
+  }
+
+  if (automation.trigger_type === 'incoming_webhook') {
+    const cfg = automation.trigger_config as IncomingWebhookTriggerConfig
+    return Boolean(ctx?.webhook_token && cfg?.token && cfg.token === ctx.webhook_token)
+  }
+
+  if (automation.trigger_type === 'contact_field_updated') {
+    const cfg = automation.trigger_config as ContactFieldTriggerConfig
+    return Boolean(ctx?.field) && (!cfg?.field || cfg.field === ctx?.field)
   }
 
   if (automation.trigger_type === 'tag_added') {

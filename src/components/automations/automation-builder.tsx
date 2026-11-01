@@ -230,6 +230,9 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: 'new_contact_created' },
   { value: 'conversation_assigned' },
   { value: 'tag_added' },
+  { value: 'contact_field_updated' },
+  { value: 'conversation_closed' },
+  { value: 'incoming_webhook' },
   { value: 'time_based' },
 ];
 
@@ -513,12 +516,15 @@ function ContactFieldSelect({
   onChange,
   t,
   allowNone = false,
+  noneLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   t: ReturnType<typeof useTranslations>;
-  /** Adds a "don't save to a field" option, stored as ''. */
+  /** Adds an option stored as '' ("don't save" / "any field"). */
   allowNone?: boolean;
+  /** Label of that '' option; defaults to "don't save to a field". */
+  noneLabel?: string;
 }) {
   const { customFields } = useResources();
   const customValue = value.startsWith('custom:') ? value : '';
@@ -530,7 +536,7 @@ function ContactFieldSelect({
       onChange={(e) => onChange(e.target.value)}
       className={SELECT_CLASS}
     >
-      {allowNone && <option value="">{t('fields.none')}</option>}
+      {allowNone && <option value="">{noneLabel ?? t('fields.none')}</option>}
       <option value="name">{t('fields.name')}</option>
       <option value="email">{t('fields.email')}</option>
       <option value="company">{t('fields.company')}</option>
@@ -1193,6 +1199,23 @@ function TriggerCard({
                 />
               </div>
             )}
+            {type === 'contact_field_updated' && (
+              <div>
+                <label className="text-muted-foreground mb-1 block text-xs font-medium">
+                  {t('config.fieldLabel')}
+                </label>
+                <ContactFieldSelect
+                  value={(config.field as string) ?? ''}
+                  onChange={(v) => onConfigChange({ ...config, field: v })}
+                  t={t}
+                  allowNone
+                  noneLabel={t('anyField')}
+                />
+              </div>
+            )}
+            {type === 'incoming_webhook' && (
+              <IncomingWebhookConfig config={config} onChange={onConfigChange} t={t} />
+            )}
             {type === 'time_based' && (
               <div>
                 <label className="text-muted-foreground mb-1 block text-xs font-medium">
@@ -1214,6 +1237,59 @@ function TriggerCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function newWebhookToken(): string {
+  return crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+}
+
+/** Secret URL for the incoming_webhook trigger. The token is generated
+ *  client-side the first time the trigger is picked and saved with the
+ *  automation; "Generate new URL" invalidates the old one on save. */
+function IncomingWebhookConfig({
+  config,
+  onChange,
+  t,
+}: {
+  config: Record<string, unknown>;
+  onChange: (c: Record<string, unknown>) => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const token = typeof config.token === 'string' ? config.token : '';
+  useEffect(() => {
+    if (!token) onChange({ ...config, token: newWebhookToken() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const url =
+    token && typeof window !== 'undefined'
+      ? `${window.location.origin}/api/automations/webhook/${token}`
+      : '';
+  return (
+    <div className="space-y-1.5">
+      <label className="text-muted-foreground block text-xs font-medium">{t('webhookUrl')}</label>
+      <div className="flex gap-2">
+        <Input readOnly value={url} className="bg-muted text-foreground font-mono text-xs" />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void navigator.clipboard?.writeText(url)}
+          disabled={!url}
+        >
+          {t('copy')}
+        </Button>
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => onChange({ ...config, token: newWebhookToken() })}
+      >
+        {t('regenerate')}
+      </Button>
+      <p className="text-muted-foreground text-[11px]">{t.raw('webhookHelp')}</p>
     </div>
   );
 }

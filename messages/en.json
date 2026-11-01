@@ -1553,6 +1553,18 @@
           "label": "Button / List Reply",
           "hint": "Customer taps a button or list row whose id matches — chain menus across automations"
         },
+        "conversation_closed": {
+          "label": "Conversation Closed",
+          "hint": "When a person, the AI or auto-close closes a conversation (not another automation)"
+        },
+        "contact_field_updated": {
+          "label": "Contact Field Updated",
+          "hint": "When a contact field changes value — pick one or leave it on any field"
+        },
+        "incoming_webhook": {
+          "label": "Incoming Webhook",
+          "hint": "When another system (n8n, a form, your website) POSTs JSON to this automation’s secret URL"
+        },
         "new_contact_created": {
           "label": "New Contact Created",
           "hint": "When a contact is auto-created from an incoming message"
@@ -1578,6 +1590,11 @@
       "replyIdsHint": "yes, no, more_info",
       "replyIdsHelp": "Comma-separated button/list-row ids to match, exact. Use the same ids you set on a Send Buttons / Send List step.",
       "schedule": "Schedule",
+      "anyField": "Any field",
+      "webhookUrl": "Webhook URL (keep it secret)",
+      "webhookHelp": "POST a JSON object. Include \"phone\" (E.164) to run it for that contact (created if new); every top-level value is available as {{ vars.key }}.",
+      "regenerate": "Generate new URL",
+      "copy": "Copy",
       "scheduleHint": "Cron expression (e.g. 0 9 * * 1-5)",
       "active": "Active",
       "activeAria": "Active",
