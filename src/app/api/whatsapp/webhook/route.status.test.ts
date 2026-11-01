@@ -76,7 +76,7 @@ vi.mock('@/lib/whatsapp/meta-api', () => ({ getMediaUrl: vi.fn(), downloadMedia:
 vi.mock('@/lib/contacts/dedupe', () => ({ findExistingContact: vi.fn(), isUniqueViolation: vi.fn(), shouldAdoptProfileName: vi.fn() }))
 vi.mock('@/lib/conversations/reopen', () => ({ reopenClosedConversation: vi.fn() }))
 vi.mock('@/lib/whatsapp/webhook-signature', () => ({ verifyMetaWebhookSignature: vi.fn() }))
-vi.mock('@/lib/automations/engine', () => ({ runAutomationsForTrigger: vi.fn() }))
+vi.mock('@/lib/automations/engine', () => ({ runAutomationsForTrigger: vi.fn(), consumeAwaitingAnswer: vi.fn(async () => false) }))
 vi.mock('@/lib/flows/engine', () => ({ dispatchInboundToFlows: vi.fn() }))
 vi.mock('@/lib/ai/auto-reply', () => ({ dispatchInboundToAiReply: vi.fn() }))
 vi.mock('@/lib/whatsapp/template-webhook', () => ({

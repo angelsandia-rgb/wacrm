@@ -47,6 +47,9 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
+  /** Per-account skill switches + rules (migration 171, ./skills.ts).
+   *  Empty/undefined == every skill on, no extra rules. */
+  skills?: import('./skills').AiSkillsConfig
 }
 
 /** An inbound customer photo, decoded and ready to hand to a provider

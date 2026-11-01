@@ -2,6 +2,7 @@ import { loadAutoReplySchedule } from './auto-reply-schedule'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { AiError, type AiConfig } from './types'
+import { normalizeSkills, type AiSkillsConfig } from './skills'
 
 interface AiConfigRow {
   provider: 'openai' | 'anthropic'
@@ -106,6 +107,21 @@ export async function loadAiConfig(
     askCustomerTaxInfo: row.ask_customer_tax_info,
     handoffAgentId: row.handoff_agent_id,
     embeddingsApiKey,
+    skills: await loadSkills(db, accountId),
+  }
+}
+
+/** ai_configs.skills (migration 171), read on its own so a missing column
+ *  or a malformed value can never take the bot down — it just falls back
+ *  to "every skill on" (the 2026-09-06 media_type outage was exactly a
+ *  bad column in this load path). */
+async function loadSkills(db: SupabaseClient, accountId: string): Promise<AiSkillsConfig> {
+  try {
+    const { data, error } = await db.from('ai_configs').select('skills').eq('account_id', accountId).maybeSingle()
+    if (error) return {}
+    return normalizeSkills((data as { skills?: unknown } | null)?.skills)
+  } catch {
+    return {}
   }
 }
 

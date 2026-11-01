@@ -35,7 +35,8 @@ export async function GET(request: Request) {
   const { data: due, error } = await admin
     .from('automation_pending_executions')
     .select('*')
-    .eq('status', 'pending')
+    // 'awaiting_reply' = an ask_question step whose timeout passed.
+    .in('status', ['pending', 'awaiting_reply'])
     .lte('run_at', new Date().toISOString())
     .order('run_at', { ascending: true })
     .limit(50)
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
       .from('automation_pending_executions')
       .update({ status: 'running' })
       .eq('id', row.id)
-      .eq('status', 'pending')
+      .eq('status', row.status as string)
       .select('id')
       .maybeSingle()
     if (!claim) continue

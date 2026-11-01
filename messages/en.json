@@ -1528,6 +1528,7 @@
         "create_deal": "Create Deal",
         "move_deal": "Move Deal",
         "create_task": "Create Task",
+        "ask_question": "Ask a Question",
         "send_photo": "Send Photo",
         "wait": "Wait",
         "condition": "Condition (If/Else)",
@@ -1551,6 +1552,18 @@
         "interactive_reply": {
           "label": "Button / List Reply",
           "hint": "Customer taps a button or list row whose id matches — chain menus across automations"
+        },
+        "conversation_closed": {
+          "label": "Conversation Closed",
+          "hint": "When a person, the AI or auto-close closes a conversation (not another automation)"
+        },
+        "contact_field_updated": {
+          "label": "Contact Field Updated",
+          "hint": "When a contact field changes value — pick one or leave it on any field"
+        },
+        "incoming_webhook": {
+          "label": "Incoming Webhook",
+          "hint": "When another system (n8n, a form, your website) POSTs JSON to this automation’s secret URL"
         },
         "new_contact_created": {
           "label": "New Contact Created",
@@ -1577,6 +1590,11 @@
       "replyIdsHint": "yes, no, more_info",
       "replyIdsHelp": "Comma-separated button/list-row ids to match, exact. Use the same ids you set on a Send Buttons / Send List step.",
       "schedule": "Schedule",
+      "anyField": "Any field",
+      "webhookUrl": "Webhook URL (keep it secret)",
+      "webhookHelp": "POST a JSON object. Include \"phone\" (E.164) to run it for that contact (created if new); every top-level value is available as {{ vars.key }}.",
+      "regenerate": "Generate new URL",
+      "copy": "Copy",
       "scheduleHint": "Cron expression (e.g. 0 9 * * 1-5)",
       "active": "Active",
       "activeAria": "Active",
@@ -1599,6 +1617,7 @@
         "name": "Name",
         "email": "Email",
         "company": "Company",
+        "none": "Don’t save to a field",
         "customFields": "Custom fields",
         "unknown": "{id} (unknown field)"
       },
@@ -1637,8 +1656,10 @@
         "placeholderMessageText": "Hi! Thanks for reaching out…",
         "tagLabel": "Tag",
         "modeLabel": "Mode",
+        "onlineOnly": "Only agents online now (otherwise leave unassigned)",
         "modes": {
-          "round_robin": "Round-robin",
+          "round_robin": "Round robin (in turn)",
+          "least_open": "Fewest open conversations",
           "specific": "Specific agent"
         },
         "agentLabel": "Agent",
@@ -1692,6 +1713,11 @@
           "author": "Automation author"
         },
         "taskDueLabel": "Due in (hours)",
+        "questionLabel": "Question",
+        "answerFieldLabel": "Save the answer in",
+        "answerVarLabel": "Variable name (use {{ vars.name }} later)",
+        "answerTimeoutLabel": "Wait for the answer (hours)",
+        "askQuestionHint": "The run pauses until the customer replies. Their reply is not sent to the AI or other automations. With no reply before the timeout, the next steps run without it.",
         "taskDueHint": "0 = no due date (and no reminder). The task is linked to the contact.",
         "photoProductLabel": "Product",
         "photoCaptionLabel": "Caption (optional)"

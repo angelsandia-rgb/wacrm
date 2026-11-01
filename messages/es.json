@@ -76,6 +76,7 @@
         "create_deal": "Crear negocio",
         "move_deal": "Mover negocio de etapa",
         "create_task": "Crear tarea",
+        "ask_question": "Hacer una pregunta",
         "send_photo": "Enviar foto",
         "wait": "Esperar",
         "condition": "Condición (Si/Si no)",
@@ -99,6 +100,18 @@
         "interactive_reply": {
           "label": "Respuesta de botón / lista",
           "hint": "El cliente toca un botón o fila de lista cuyo id coincide — encadena menús entre automatizaciones"
+        },
+        "conversation_closed": {
+          "label": "Conversación cerrada",
+          "hint": "Cuando una persona, la IA o el cierre automático cierran una conversación (no otra automatización)"
+        },
+        "contact_field_updated": {
+          "label": "Campo de contacto actualizado",
+          "hint": "Cuando cambia el valor de un campo del contacto — elige uno o déjalo en cualquier campo"
+        },
+        "incoming_webhook": {
+          "label": "Webhook entrante",
+          "hint": "Cuando otro sistema (n8n, un formulario, tu sitio web) envía JSON a la URL secreta de esta automatización"
         },
         "new_contact_created": {
           "label": "Nuevo contacto creado",
@@ -125,6 +138,11 @@
       "replyIdsHint": "si, no, mas_info",
       "replyIdsHelp": "Lista separada por comas de ids de botón/fila de lista a coincidir, exactos. Usa los mismos ids que definiste en un paso de Enviar botones / Enviar lista.",
       "schedule": "Horario",
+      "anyField": "Cualquier campo",
+      "webhookUrl": "URL del webhook (mantenla en secreto)",
+      "webhookHelp": "Envía un objeto JSON por POST. Incluye \"phone\" (E.164) para correrla para ese contacto (se crea si no existe); cada valor de primer nivel queda como {{ vars.clave }}.",
+      "regenerate": "Generar URL nueva",
+      "copy": "Copiar",
       "scheduleHint": "Expresión cron (ej. 0 9 * * 1-5)",
       "active": "Activa",
       "activeAria": "Activa",
@@ -147,6 +165,7 @@
         "name": "Nombre",
         "email": "Correo electrónico",
         "company": "Empresa",
+        "none": "No guardar en un campo",
         "customFields": "Campos personalizados",
         "unknown": "{id} (campo desconocido)"
       },
@@ -185,8 +204,10 @@
         "placeholderMessageText": "¡Hola! Gracias por escribirnos…",
         "tagLabel": "Etiqueta",
         "modeLabel": "Modo",
+        "onlineOnly": "Solo agentes en línea ahora (si no hay, queda sin asignar)",
         "modes": {
-          "round_robin": "Rotativo",
+          "round_robin": "Rotativo (por turnos)",
+          "least_open": "Al que tenga menos chats abiertos",
           "specific": "Agente específico"
         },
         "agentLabel": "Agente",
@@ -240,6 +261,11 @@
           "author": "Autor de la automatización"
         },
         "taskDueLabel": "Vence en (horas)",
+        "questionLabel": "Pregunta",
+        "answerFieldLabel": "Guardar la respuesta en",
+        "answerVarLabel": "Nombre de variable (úsala luego como {{ vars.nombre }})",
+        "answerTimeoutLabel": "Esperar la respuesta (horas)",
+        "askQuestionHint": "La automatización se pausa hasta que el cliente responda. Su respuesta no se envía a la IA ni a otras automatizaciones. Si no responde antes del límite, los siguientes pasos corren sin ella.",
         "taskDueHint": "0 = sin fecha límite (y sin recordatorio). La tarea queda vinculada al contacto.",
         "photoProductLabel": "Producto",
         "photoCaptionLabel": "Descripción (opcional)"

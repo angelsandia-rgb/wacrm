@@ -111,7 +111,7 @@ export async function reassignUnclaimedConversations(
   return { processed: due.length, assigned }
 }
 
-async function loadOnlineAdvisors(
+export async function loadOnlineAdvisors(
   db: SupabaseClient,
   accountId: string,
   now: number,
@@ -126,7 +126,7 @@ async function loadOnlineAdvisors(
     .map((row) => row.user_id as string)
 }
 
-async function loadOpenAssignedCounts(
+export async function loadOpenAssignedCounts(
   db: SupabaseClient,
   accountId: string,
   advisorIds: string[],
@@ -147,4 +147,41 @@ async function loadOpenAssignedCounts(
     counts.set(row.assigned_agent_id, (counts.get(row.assigned_agent_id) ?? 0) + 1)
   }
   return counts
+}
+
+/** Members who can take conversations (owner/admin/agent — never a
+ *  viewer), sorted by user id so round-robin order is stable;
+ *  `onlineOnly` keeps just the ones online now. */
+export async function loadAssignableAgents(
+  db: SupabaseClient,
+  accountId: string,
+  opts: { onlineOnly: boolean; now?: number },
+): Promise<string[]> {
+  const { data } = await db
+    .from('profiles')
+    .select('user_id')
+    .eq('account_id', accountId)
+    .in('account_role', ['owner', 'admin', 'agent'])
+  let ids = (data ?? []).map((r) => r.user_id as string)
+  if (opts.onlineOnly) {
+    const online = new Set(await loadOnlineAdvisors(db, accountId, opts.now ?? Date.now()))
+    ids = ids.filter((id) => online.has(id))
+  }
+  return ids.sort()
+}
+
+/** Next agent after `lastAgentId` in `agents` (wraps; first when unknown). */
+export function nextRoundRobin(agents: string[], lastAgentId: string | undefined): string | undefined {
+  if (agents.length === 0) return undefined
+  const i = lastAgentId ? agents.indexOf(lastAgentId) : -1
+  return agents[(i + 1) % agents.length]
+}
+
+/** The agent with the fewest open assigned conversations (first wins a tie). */
+export function leastLoaded(agents: string[], counts: Map<string, number>): string | undefined {
+  let pick: string | undefined
+  for (const id of agents) {
+    if (pick === undefined || (counts.get(id) ?? 0) < (counts.get(pick) ?? 0)) pick = id
+  }
+  return pick
 }
