@@ -7,7 +7,7 @@ import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, shouldAdoptProfileName } from '@/lib/contacts/dedupe'
 import { reopenClosedConversation } from '@/lib/conversations/reopen'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
-import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { consumeAwaitingAnswer, runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
@@ -862,7 +862,17 @@ async function processMessage(
           },
     isFirstInboundMessage,
   })
-  const flowConsumed = flowResult.consumed
+  // An automation `ask_question` step waiting on this customer takes the
+  // message as its answer; it then counts as consumed, like a flow reply,
+  // so it can't re-fire content triggers or get an AI reply.
+  const flowConsumed =
+    flowResult.consumed ||
+    (await consumeAwaitingAnswer({
+      accountId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      text: contentText ?? message.text?.body ?? '',
+    }))
 
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound

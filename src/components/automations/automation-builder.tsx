@@ -29,6 +29,7 @@ import {
   GitBranch,
   Webhook,
   CircleSlash,
+  MessageCircleQuestion,
   AlertTriangle,
   ArrowRightLeft,
   ClipboardList,
@@ -145,6 +146,11 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
     icon: PencilLine,
     border: 'border-l-primary',
   },
+  ask_question: {
+    label: 'ask_question',
+    icon: MessageCircleQuestion,
+    border: 'border-l-primary',
+  },
   create_deal: {
     label: 'create_deal',
     icon: Briefcase,
@@ -205,6 +211,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   'remove_tag',
   'assign_conversation',
   'update_contact_field',
+  'ask_question',
   'create_deal',
   'move_deal',
   'create_task',
@@ -293,6 +300,8 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { mode: 'round_robin' };
     case 'update_contact_field':
       return { field: 'name', value: '' };
+    case 'ask_question':
+      return { question: '', field: '', var_name: 'respuesta', timeout_hours: 24 };
     case 'create_deal':
       return { pipeline_id: '', stage_id: '', title: '', value: 0 };
     case 'move_deal':
@@ -503,10 +512,13 @@ function ContactFieldSelect({
   value,
   onChange,
   t,
+  allowNone = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   t: ReturnType<typeof useTranslations>;
+  /** Adds a "don't save to a field" option, stored as ''. */
+  allowNone?: boolean;
 }) {
   const { customFields } = useResources();
   const customValue = value.startsWith('custom:') ? value : '';
@@ -514,10 +526,11 @@ function ContactFieldSelect({
     customValue && customFields.some((f) => `custom:${f.id}` === customValue);
   return (
     <select
-      value={value || 'name'}
+      value={value || (allowNone ? '' : 'name')}
       onChange={(e) => onChange(e.target.value)}
       className={SELECT_CLASS}
     >
+      {allowNone && <option value="">{t('fields.none')}</option>}
       <option value="name">{t('fields.name')}</option>
       <option value="email">{t('fields.email')}</option>
       <option value="company">{t('fields.company')}</option>
@@ -1731,6 +1744,47 @@ function StepEditor({
           </FieldBlock>
         </>
       );
+    case 'ask_question':
+      return (
+        <>
+          <FieldBlock label={t('config.questionLabel')}>
+            <Textarea
+              value={(cfg.question as string) ?? ''}
+              onChange={(e) => set({ question: e.target.value })}
+              rows={2}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t('config.answerFieldLabel')}>
+            <ContactFieldSelect
+              value={(cfg.field as string) ?? ''}
+              onChange={(v) => set({ field: v })}
+              t={t}
+              allowNone
+            />
+          </FieldBlock>
+          <FieldBlock label={t.raw('config.answerVarLabel')}>
+            <Input
+              value={(cfg.var_name as string) ?? ''}
+              onChange={(e) => set({ var_name: e.target.value.replace(/[^\w]/g, '') })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t('config.answerTimeoutLabel')}>
+            <Input
+              type="number"
+              min={1}
+              max={168}
+              value={(cfg.timeout_hours as number) ?? 24}
+              onChange={(e) =>
+                set({ timeout_hours: Math.min(168, Math.max(1, Math.floor(Number(e.target.value) || 1))) })
+              }
+              className="bg-muted text-foreground w-28"
+            />
+          </FieldBlock>
+          <p className="text-muted-foreground text-xs">{t('config.askQuestionHint')}</p>
+        </>
+      );
     case 'create_deal':
       return (
         <>
@@ -1997,6 +2051,8 @@ function previewFor(step: BuilderStep, products: ProductOption[]): string {
       return (step.step_config.template_name as string) || 'pick a template';
     case 'create_task':
       return (step.step_config.title as string) || 'no title yet';
+    case 'ask_question':
+      return (step.step_config.question as string) || 'no question yet';
     case 'send_photo': {
       const productId = step.step_config.product_id as string;
       const product = products.find((p) => p.id === productId);

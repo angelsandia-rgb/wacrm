@@ -20,6 +20,7 @@ import type {
   CreateTaskStepConfig,
   SendPhotoStepConfig,
   AssignConversationStepConfig,
+  AskQuestionStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { isWithinTimeWindow } from './time-window'
@@ -51,6 +52,9 @@ export interface AutomationContext {
   agent_id?: string
   /** Button / list-row id the customer tapped, for interactive_reply. */
   interactive_reply_id?: string
+  /** Set while a run is parked on an `ask_question` step: where the
+   *  customer's answer goes once it arrives. */
+  awaiting_answer?: { field: string; var_name: string }
 }
 
 export interface DispatchInput {
@@ -160,11 +164,15 @@ export async function resumePendingExecution(pending: {
     return
   }
 
+  // A question that timed out continues without an answer.
+  const context: AutomationContext = { ...(pending.context ?? {}) }
+  delete context.awaiting_answer
+
   try {
     await executeStepsFrom({
       automation: automation as Automation,
       contactId: pending.contact_id,
-      context: pending.context ?? {},
+      context,
       parentStepId: pending.parent_step_id,
       branch: pending.branch,
       startPosition: pending.next_step_position,
@@ -175,6 +183,76 @@ export async function resumePendingExecution(pending: {
   } catch (err) {
     console.error('[automations] resume failed:', err)
     await markPending(pending.id, 'failed')
+  }
+}
+
+/**
+ * The customer just wrote: if an automation is waiting on their answer
+ * (`ask_question`), save it and continue that run. Returns true when the
+ * message was consumed as an answer — callers then skip the content
+ * triggers and the AI reply for it, like a flow-consumed message, so
+ * the answer can't re-fire the automation that asked.
+ *
+ * Must never throw — called inline from the WhatsApp webhooks.
+ */
+export async function consumeAwaitingAnswer(input: {
+  accountId: string
+  contactId: string
+  conversationId: string
+  text: string
+}): Promise<boolean> {
+  try {
+    if (!input.text.trim()) return false
+    const db = supabaseAdmin()
+    const { data: rows } = await db
+      .from('automation_pending_executions')
+      .select('*')
+      .eq('account_id', input.accountId)
+      .eq('contact_id', input.contactId)
+      .eq('status', 'awaiting_reply')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const row = rows?.[0]
+    if (!row) return false
+    // Claim — a cron timeout or a second message may race us.
+    const { data: claim } = await db
+      .from('automation_pending_executions')
+      .update({ status: 'running' })
+      .eq('id', row.id)
+      .eq('status', 'awaiting_reply')
+      .select('id')
+      .maybeSingle()
+    if (!claim) return false
+
+    const { awaiting_answer: target, ...rest } = (row.context as AutomationContext) ?? {}
+    const answer = input.text.trim()
+    const context: AutomationContext = {
+      ...rest,
+      message_text: answer,
+      conversation_id: input.conversationId,
+      vars: { ...(rest.vars ?? {}), ...(target?.var_name ? { [target.var_name]: answer } : {}) },
+    }
+    if (target?.field) {
+      await writeContactField(input.accountId, input.contactId, target.field, answer).catch((err) =>
+        console.error('[automations] saving answer failed:', err),
+      )
+    }
+    await resumePendingExecution({
+      id: row.id as string,
+      automation_id: row.automation_id as string,
+      account_id: row.account_id as string,
+      user_id: row.user_id as string,
+      contact_id: input.contactId,
+      log_id: (row.log_id as string | null) ?? null,
+      parent_step_id: (row.parent_step_id as string | null) ?? null,
+      branch: (row.branch as 'yes' | 'no' | null) ?? null,
+      next_step_position: row.next_step_position as number,
+      context,
+    })
+    return true
+  } catch (err) {
+    console.error('[automations] consumeAwaitingAnswer failed:', err)
+    return false
   }
 }
 
@@ -328,6 +406,47 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
       })
       status = 'partial'
       await appendResults(args.logId, results, status, errorMessage)
+      return
+    }
+
+    // `ask_question` also suspends: send the question, then park the run
+    // until the customer answers (webhook → consumeAwaitingAnswer) or the
+    // timeout passes (cron → resumePendingExecution).
+    if (step.step_type === 'ask_question') {
+      const cfg = step.step_config as AskQuestionStepConfig
+      try {
+        if (!args.contactId) throw new Error('ask_question needs a contact')
+        const text = interpolate(cfg.question, args)
+        if (!text.trim()) throw new Error('ask_question has an empty question')
+        const conversationId = await resolveConversationId(args)
+        await engineSendText({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text,
+        })
+      } catch (err) {
+        const msg = describeError(err)
+        results.push({ step_id: step.id, step_type: step.step_type, status: 'failed', detail: msg })
+        await appendResults(args.logId, results, args.parentStepId === null ? 'failed' : null, msg)
+        return
+      }
+      await db.from('automation_pending_executions').insert({
+        automation_id: args.automation.id,
+        account_id: args.automation.account_id,
+        user_id: args.automation.user_id,
+        contact_id: args.contactId,
+        log_id: args.logId,
+        parent_step_id: args.parentStepId,
+        branch: args.branch,
+        next_step_position: step.position + 1,
+        context: { ...args.context, awaiting_answer: { field: cfg.field ?? '', var_name: cfg.var_name ?? '' } },
+        run_at: new Date(Date.now() + askTimeoutMs(cfg)).toISOString(),
+        status: 'awaiting_reply',
+      })
+      results.push({ step_id: step.id, step_type: step.step_type, status: 'success', detail: 'question sent, awaiting answer' })
+      await appendResults(args.logId, results, args.parentStepId === null ? 'partial' : null, errorMessage)
       return
     }
 
@@ -570,49 +689,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // values can be populated dynamically from the triggering context.
       const value = interpolate(cfg.value, args)
 
-      // Custom fields are encoded as `custom:<custom_field_id>`; anything else
-      // is a built-in contact column.
-      if (cfg.field.startsWith('custom:')) {
-        const customFieldId = cfg.field.slice('custom:'.length)
-        if (!customFieldId) {
-          return `field ${cfg.field} not writable from automations`
-        }
-        // Defense in depth: the service-role client bypasses RLS, so confirm
-        // the field definition belongs to this account before writing.
-        const { data: field } = await db
-          .from('custom_fields')
-          .select('id')
-          .eq('id', customFieldId)
-          .eq('account_id', args.automation.account_id)
-          .maybeSingle()
-        if (!field) {
-          return `field ${cfg.field} not writable from automations`
-        }
-        // Upsert on the table's UNIQUE(contact_id, custom_field_id) so repeated
-        // runs overwrite rather than duplicate. Tenancy is enforced above and,
-        // for the contact side, by the entry-point ownership guard.
-        await db
-          .from('contact_custom_values')
-          .upsert(
-            { contact_id: args.contactId, custom_field_id: customFieldId, value },
-            { onConflict: 'contact_id,custom_field_id' },
-          )
-        return `custom field updated`
-      }
-
-      const allowed = new Set(['name', 'email', 'company'])
-      if (!allowed.has(cfg.field)) {
-        return `field ${cfg.field} not writable from automations`
-      }
-      // Defense in depth: scope the service-role write to the account so
-      // a future caller that skips the entry-point ownership guard still
-      // cannot write across tenants.
-      await db
-        .from('contacts')
-        .update({ [cfg.field]: value, updated_at: new Date().toISOString() })
-        .eq('id', args.contactId)
-        .eq('account_id', args.automation.account_id)
-      return `${cfg.field} updated`
+      return writeContactField(args.automation.account_id, args.contactId, cfg.field, value)
     }
 
     case 'create_deal': {
@@ -1046,6 +1123,68 @@ export function compareMessageCount(
     case '==': return actual === threshold
     default: return false
   }
+}
+
+/** Write one contact field — a built-in column (`name` | `email` |
+ *  `company`) or `custom:<custom_field_id>`. Shared by the
+ *  `update_contact_field` and `ask_question` steps. */
+async function writeContactField(
+  accountId: string,
+  contactId: string,
+  field: string,
+  value: string,
+): Promise<string> {
+  const db = supabaseAdmin()
+  // Custom fields are encoded as `custom:<custom_field_id>`; anything else
+  // is a built-in contact column.
+  if (field.startsWith('custom:')) {
+    const customFieldId = field.slice('custom:'.length)
+    if (!customFieldId) {
+      return `field ${field} not writable from automations`
+    }
+    // Defense in depth: the service-role client bypasses RLS, so confirm
+    // the field definition belongs to this account before writing.
+    const { data: owned } = await db
+      .from('custom_fields')
+      .select('id')
+      .eq('id', customFieldId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (!owned) {
+      return `field ${field} not writable from automations`
+    }
+    // Upsert on the table's UNIQUE(contact_id, custom_field_id) so repeated
+    // runs overwrite rather than duplicate. Tenancy is enforced above and,
+    // for the contact side, by the entry-point ownership guard.
+    await db
+      .from('contact_custom_values')
+      .upsert(
+        { contact_id: contactId, custom_field_id: customFieldId, value },
+        { onConflict: 'contact_id,custom_field_id' },
+      )
+    return `custom field updated`
+  }
+
+  const allowed = new Set(['name', 'email', 'company'])
+  if (!allowed.has(field)) {
+    return `field ${field} not writable from automations`
+  }
+  // Defense in depth: scope the service-role write to the account so
+  // a future caller that skips the entry-point ownership guard still
+  // cannot write across tenants.
+  await db
+    .from('contacts')
+    .update({ [field]: value, updated_at: new Date().toISOString() })
+    .eq('id', contactId)
+    .eq('account_id', accountId)
+  return `${field} updated`
+}
+
+const ASK_MAX_TIMEOUT_HOURS = 168
+
+function askTimeoutMs(cfg: AskQuestionStepConfig): number {
+  const hours = Math.min(ASK_MAX_TIMEOUT_HOURS, Math.max(1, Number(cfg.timeout_hours) || 24))
+  return hours * 3_600_000
 }
 
 function waitMs(cfg: WaitStepConfig): number {
