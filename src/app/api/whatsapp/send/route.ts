@@ -174,6 +174,7 @@ export async function POST(request: Request) {
         // bot (which all send through their own engine-send paths that
         // never set this).
         humanAgentTag: human_agent_tag === true,
+        senderUserId: userId,
       })
 
       return NextResponse.json({

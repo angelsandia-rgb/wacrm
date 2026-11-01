@@ -39,6 +39,7 @@ import { KpiFunnelChart } from '@/components/kpis/kpi-funnel-chart'
 import { SpendInputCard } from '@/components/kpis/spend-input-card'
 import { HotelKpis } from '@/components/kpis/hotel-kpis'
 import { ClinicKpis } from '@/components/kpis/clinic-kpis'
+import { TeamPerformance } from '@/components/kpis/team-performance'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -226,8 +227,14 @@ export default function KpisPage() {
   // / booking pace) instead of the sales-funnel KPIs. Rendered after all
   // hooks above so rules-of-hooks stays happy; `load` is a no-op for
   // hotels so the generic dataset query never fires.
-  if (isClinic) return <ClinicKpis />
-  if (isHotel) return <HotelKpis />
+  if (isClinic || isHotel) {
+    return (
+      <div className="space-y-5">
+        {isClinic ? <ClinicKpis /> : <HotelKpis />}
+        <TeamPerformance window={windowFor(30)} currency={defaultCurrency} />
+      </div>
+    )
+  }
 
   // ---- Access gate ------------------------------------------------
   if (profileLoading) {
@@ -389,6 +396,8 @@ export default function KpisPage() {
           )}
         </ChartSection>
       </div>
+
+      <TeamPerformance window={windowFor(range)} currency={defaultCurrency} />
 
       {/* Métricas operativas de la prueba */}
       <div className="space-y-3">

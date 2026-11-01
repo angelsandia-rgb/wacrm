@@ -524,6 +524,7 @@ export async function sendMessageToConversation(
     .insert({
       conversation_id: conversationId,
       sender_type: params.senderType === 'bot' ? 'bot' : 'agent',
+      sender_id: params.senderUserId ?? null,
       content_type: messageType,
       content_text: persistedText,
       media_url: mediaUrl || null,
