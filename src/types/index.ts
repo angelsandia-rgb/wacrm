@@ -687,7 +687,10 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
-  | 'close_conversation';
+  | 'close_conversation'
+  /** Sends a question, parks the run until the customer answers (or
+   *  `timeout_hours` passes), saves the answer, then continues. */
+  | 'ask_question';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
 
@@ -766,6 +769,18 @@ export interface UpdateContactFieldStepConfig {
   field: string;
   /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation at runtime. */
   value: string;
+}
+
+export interface AskQuestionStepConfig {
+  /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation. */
+  question: string;
+  /** Where the answer is saved — same encoding as
+   *  `UpdateContactFieldStepConfig.field`; '' = only the variable. */
+  field: string;
+  /** The answer is also available to later steps as `{{ vars.<var_name> }}`. */
+  var_name: string;
+  /** No answer after this many hours → continue without one (1–168). */
+  timeout_hours: number;
 }
 
 export interface CreateDealStepConfig {
@@ -853,6 +868,7 @@ export type AutomationStepConfig =
   | TagStepConfig
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
+  | AskQuestionStepConfig
   | CreateDealStepConfig
   | MoveDealStepConfig
   | CreateTaskStepConfig

@@ -1528,6 +1528,7 @@
         "create_deal": "Create Deal",
         "move_deal": "Move Deal",
         "create_task": "Create Task",
+        "ask_question": "Ask a Question",
         "send_photo": "Send Photo",
         "wait": "Wait",
         "condition": "Condition (If/Else)",
@@ -1599,6 +1600,7 @@
         "name": "Name",
         "email": "Email",
         "company": "Company",
+        "none": "Don’t save to a field",
         "customFields": "Custom fields",
         "unknown": "{id} (unknown field)"
       },
@@ -1692,6 +1694,11 @@
           "author": "Automation author"
         },
         "taskDueLabel": "Due in (hours)",
+        "questionLabel": "Question",
+        "answerFieldLabel": "Save the answer in",
+        "answerVarLabel": "Variable name (use {{ vars.name }} later)",
+        "answerTimeoutLabel": "Wait for the answer (hours)",
+        "askQuestionHint": "The run pauses until the customer replies. Their reply is not sent to the AI or other automations. With no reply before the timeout, the next steps run without it.",
         "taskDueHint": "0 = no due date (and no reminder). The task is linked to the contact.",
         "photoProductLabel": "Product",
         "photoCaptionLabel": "Caption (optional)"

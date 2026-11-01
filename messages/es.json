@@ -76,6 +76,7 @@
         "create_deal": "Crear negocio",
         "move_deal": "Mover negocio de etapa",
         "create_task": "Crear tarea",
+        "ask_question": "Hacer una pregunta",
         "send_photo": "Enviar foto",
         "wait": "Esperar",
         "condition": "Condición (Si/Si no)",
@@ -147,6 +148,7 @@
         "name": "Nombre",
         "email": "Correo electrónico",
         "company": "Empresa",
+        "none": "No guardar en un campo",
         "customFields": "Campos personalizados",
         "unknown": "{id} (campo desconocido)"
       },
@@ -240,6 +242,11 @@
           "author": "Autor de la automatización"
         },
         "taskDueLabel": "Vence en (horas)",
+        "questionLabel": "Pregunta",
+        "answerFieldLabel": "Guardar la respuesta en",
+        "answerVarLabel": "Nombre de variable (úsala luego como {{ vars.nombre }})",
+        "answerTimeoutLabel": "Esperar la respuesta (horas)",
+        "askQuestionHint": "La automatización se pausa hasta que el cliente responda. Su respuesta no se envía a la IA ni a otras automatizaciones. Si no responde antes del límite, los siguientes pasos corren sin ella.",
         "taskDueHint": "0 = sin fecha límite (y sin recordatorio). La tarea queda vinculada al contacto.",
         "photoProductLabel": "Producto",
         "photoCaptionLabel": "Descripción (opcional)"

@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
     taskInserts: [] as Record<string, unknown>[],
     logInserts: [] as Record<string, unknown>[],
     logUpdates: [] as Record<string, unknown>[],
+    pendingInserts: [] as Record<string, unknown>[],
+    pendingRow: null as Record<string, unknown> | null,
   },
 }));
 
@@ -76,6 +78,14 @@ vi.mock("./admin-client", () => {
       return { data: { steps_executed: [], status: "success" }, error: null };
     }
     if (table === "automation_steps") return { data: state.steps, error: null };
+    if (table === "automation_pending_executions") {
+      if (type === "insert") {
+        state.pendingInserts.push(ops.payload as Record<string, unknown>);
+        return { data: null, error: null };
+      }
+      if (type === "update") return { data: { id: state.pendingRow?.id ?? "p1" }, error: null };
+      return { data: state.pendingRow ? [state.pendingRow] : [], error: null };
+    }
     return { data: null, error: null };
   }
 
@@ -131,7 +141,8 @@ vi.mock("@/lib/whatsapp/send-message", () => ({
   },
 }));
 
-import { runAutomationsForTrigger, triggerMatches, compareMessageCount } from "./engine";
+import { runAutomationsForTrigger, triggerMatches, compareMessageCount, consumeAwaitingAnswer } from "./engine";
+import { engineSendText } from "./meta-send";
 import type { Automation, KeywordMatchTriggerConfig } from "@/types";
 import { sendMessageToConversation } from "@/lib/whatsapp/send-message";
 
@@ -151,6 +162,62 @@ beforeEach(() => {
   h.state.taskInserts = [];
   h.state.logInserts = [];
   h.state.logUpdates = [];
+  h.state.pendingInserts = [];
+  h.state.pendingRow = null;
+  vi.mocked(engineSendText).mockClear();
+});
+
+describe("ask_question step", () => {
+  const automation = {
+    id: "a1",
+    account_id: ACCOUNT,
+    user_id: "u1",
+    trigger_type: "new_message_received",
+    trigger_config: {},
+    is_active: true,
+  };
+
+  it("sends the question and parks the run without running the next step", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automation];
+    h.state.steps = [
+      { id: "s1", automation_id: "a1", step_type: "ask_question", position: 0, parent_step_id: null, branch: null,
+        step_config: { question: "¿Cuál es tu correo?", field: "email", var_name: "correo", timeout_hours: 2 } },
+      { id: "s2", automation_id: "a1", step_type: "update_contact_field", position: 1, parent_step_id: null, branch: null,
+        step_config: { field: "company", value: "x" } },
+    ];
+    const before = Date.now();
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT, triggerType: "new_message_received", contactId: "c1",
+      context: { conversation_id: "conv1" },
+    });
+    expect(vi.mocked(engineSendText)).toHaveBeenCalledWith(expect.objectContaining({ text: "¿Cuál es tu correo?" }));
+    expect(h.state.pendingInserts).toHaveLength(1);
+    const parked = h.state.pendingInserts[0];
+    expect(parked).toMatchObject({ status: "awaiting_reply", next_step_position: 1 });
+    expect(parked.context).toMatchObject({ awaiting_answer: { field: "email", var_name: "correo" } });
+    const runAt = Date.parse(parked.run_at as string);
+    expect(runAt - before).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
+    expect(h.state.updateCalls).toHaveLength(0); // step 2 never ran
+  });
+
+  it("saves the customer's answer and resumes the run", async () => {
+    h.state.automations = [automation];
+    h.state.steps = [];
+    h.state.pendingRow = {
+      id: "p1", automation_id: "a1", account_id: ACCOUNT, user_id: "u1", contact_id: "c1", log_id: "log1",
+      parent_step_id: null, branch: null, next_step_position: 1, status: "awaiting_reply",
+      context: { awaiting_answer: { field: "email", var_name: "correo" } },
+    };
+    const consumed = await consumeAwaitingAnswer({ accountId: ACCOUNT, contactId: "c1", conversationId: "conv1", text: " ana@x.com " });
+    expect(consumed).toBe(true);
+    expect(h.state.updateCalls.some((c) => c.table === "contacts")).toBe(true);
+    expect(h.state.fromCalls).toContain("automation_steps");
+  });
+
+  it("does not consume when nothing is waiting", async () => {
+    expect(await consumeAwaitingAnswer({ accountId: ACCOUNT, contactId: "c1", conversationId: "conv1", text: "hola" })).toBe(false);
+  });
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
