@@ -171,6 +171,16 @@ export const CREATE_QUOTE_SENTINEL_PREFIX = '[[ACTION:create_quote_chat:'
 export const CREATE_QUOTE_SENTINEL_SUFFIX = ']]'
 
 /**
+ * Turns a confirmed chat order into a Shopify order (auto-reply mode,
+ * only when the account connected a Shopify store — migration 173).
+ * Payload: `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>`.
+ * Every item is re-resolved against real Shopify-synced `products`
+ * before anything is created (src/lib/shopify/chat-order.ts).
+ */
+export const CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX = '[[ACTION:create_shopify_order:'
+export const CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX = ']]'
+
+/**
  * Sentinel prefix/suffix the model is instructed to wrap a quick
  * reply's `id` in (auto-reply mode only, when the account has at least
  * one 'text'-kind quick reply — see `loadQuickReplyContext`). Unlike
@@ -394,6 +404,9 @@ export function buildSystemPrompt(args: {
    *  the chat goes, feeding the per-category Google Sheet. Off/omitted
    *  means the marker is never taught. */
   hotelReservations?: boolean
+  /** The account has a Shopify store connected (migration 173) —
+   *  turns on `CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX`. */
+  shopifyOrders?: boolean
   /** The account has a restaurant menu PDF on file
    *  (`accounts.restaurant_menu_url`, migration 114) — auto-reply mode
    *  only. Turns on `SEND_RESTAURANT_MENU_SENTINEL` so the bot can send
@@ -480,7 +493,7 @@ export function buildSystemPrompt(args: {
   /** The account's AI skill rules (auto-reply mode, ./skills.ts). */
   skills?: AiSkillsConfig | null
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, shopifyOrders, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -622,6 +635,14 @@ export function buildSystemPrompt(args: {
         `This business's catalog is ${catalogDeliveryMode === 'pdf' ? 'a PDF' : 'photos'}, not a digital page with its own shopping cart — so when the customer asks for the price or a quote on one or more SPECIFIC products from the catalog list below (never something outside that list), you handle the quote yourself, in two steps across turns: ` +
           `(1) First, in plain text with no marker, ask whether they'd like the quote as a PDF or as a text message in the chat — ask this only once per conversation, don't repeat it if you already asked earlier in this same conversation. ` +
           `(2) ${customerInfoStep} Use the EXACT product name as it appears in the catalog list below (the text before the price in parentheses) for every item — never a product not in that list, never an invented quantity or price; the price always comes from the real catalog, you never write one yourself. Never mention this marker to the customer, and never claim the quote is sent until you actually have everything needed to use this marker.`,
+      )
+    }
+
+    if (shopifyOrders && catalog && catalog.length > 0) {
+      parts.push(
+        `You can take ORDERS for products in the catalog list below; this business delivers nationwide in Guatemala with free shipping and accepts two payment methods: cash on delivery ("contra entrega") or card via a payment link sent by WhatsApp ("tarjeta"). When the customer wants to buy, collect, one or two at a time and never asking again for something already given earlier in the conversation: the product(s) and quantity, full name, phone number, delivery address (with zona/municipio and a reference), departamento, and payment method (contra entrega or tarjeta). ` +
+          `Once you have ALL of them, send ONE summary (products, quantities, the catalog price and total, name, phone, address, departamento, payment method) and ask the customer to confirm it — with NO marker in that turn. ` +
+          `Only in a later turn where the customer clearly confirms that exact summary ("sí", "confirmo", "así está bien"), reply briefly that you are registering the order and append ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}<exact product name from the catalog below>:<quantity>,<exact product name>:<quantity>|<full name>|<phone>|<address>|<departamento>|<cod or tarjeta>${CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX} at the very end of your reply. The system sends the order number itself once the order exists — never invent an order number and never say the order is already registered. If the customer changes anything after the summary, send a new summary and wait for a new confirmation. Use this marker at most once per confirmed order, never for a product outside the list, and never mention it to the customer.`,
       )
     }
 

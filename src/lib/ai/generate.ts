@@ -25,6 +25,8 @@ import {
   SCHEDULE_APPOINTMENT_SENTINEL_SUFFIX,
   CREATE_QUOTE_SENTINEL_PREFIX,
   CREATE_QUOTE_SENTINEL_SUFFIX,
+  CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX,
+  CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX,
   QUICK_REPLY_SENTINEL_PREFIX,
   QUICK_REPLY_SENTINEL_SUFFIX,
   RECORD_RESERVATION_SENTINEL_PREFIX,
@@ -230,6 +232,14 @@ export function parseGeneration(
     }
   }
 
+  const shopifyOrderMatch = raw.match(
+    new RegExp(
+      `${escapeRegExp(CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX)}(.+?)${escapeRegExp(CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX)}`,
+    ),
+  )
+  // undefined (not null) when absent: the key stays optional on GenerateResult.
+  const shopifyOrderProposal = (shopifyOrderMatch && parseShopifyOrderPayload(shopifyOrderMatch[1])) || undefined
+
   const quickReplyMatch = raw.match(
     new RegExp(
       `${escapeRegExp(QUICK_REPLY_SENTINEL_PREFIX)}(.+?)${escapeRegExp(QUICK_REPLY_SENTINEL_SUFFIX)}`,
@@ -324,6 +334,7 @@ export function parseGeneration(
     .replace(contactNameMatch ? contactNameMatch[0] : '', '')
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
+    .replace(shopifyOrderMatch ? shopifyOrderMatch[0] : '', '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
     .replace(RESERVATION_MARKER_RE, '') // strips EVERY record_reservation marker, not just the first
     .replace(apptActionMatch ? apptActionMatch[0] : '', '')
@@ -396,6 +407,7 @@ export function parseGeneration(
     appointmentProposal,
     sentinelLeakDetected,
     quoteProposal,
+    shopifyOrderProposal,
     quickReplyId,
     reservationProposals,
     appointmentAction,
@@ -405,4 +417,24 @@ export function parseGeneration(
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>`
+ *  → proposal, or null when any field is missing (a half-filled order is
+ *  never created; the unparsed marker is still stripped from the reply). */
+export function parseShopifyOrderPayload(payload: string): GenerateResult['shopifyOrderProposal'] {
+  const [itemsStr, fullName, phone, address, departamento, paymentRaw] = payload.split('|').map((s) => s.trim())
+  const items = (itemsStr ?? '')
+    .split(',')
+    .map((entry) => {
+      const cut = entry.lastIndexOf(':')
+      const name = (cut === -1 ? entry : entry.slice(0, cut)).trim()
+      const qty = Number(cut === -1 ? 1 : entry.slice(cut + 1))
+      return name ? { name, qty: Number.isFinite(qty) && qty > 0 ? Math.min(Math.floor(qty), 20) : 1 } : null
+    })
+    .filter((i): i is { name: string; qty: number } => i !== null)
+  const pay = (paymentRaw ?? '').toLowerCase()
+  const payment = /cod|contra|efectivo/.test(pay) ? 'cod' : /tarjeta|card|link/.test(pay) ? 'card' : null
+  if (!items.length || !fullName || !phone || !address || !departamento || !payment) return null
+  return { items, fullName, phone, address, departamento, payment }
 }

@@ -51,6 +51,7 @@ import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/goog
 import { formatWithOffset, describeNowInZone, describeUpcomingWeekdaysInZone, dateKeyInZone } from '@/lib/timezone'
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
+import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
 import {
   buildReservationFollowUpMessage,
   missingReservationFields,
@@ -924,6 +925,7 @@ export async function dispatchInboundToAiReply(
     // conservative turn than for a clinic bot to diagnose or prescribe.
     let clinicSafetyMode = false
     let hasRestaurantMenu = false
+    let shopifyOrders = false
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
@@ -951,12 +953,14 @@ export async function dispatchInboundToAiReply(
         loadCatalogContext(db, accountId),
         loadQuickReplyContext(db, accountId),
         loadKnownContactFacts(db, accountId, contactId),
+        db.from('shopify_config').select('id').eq('account_id', accountId).maybeSingle(),
       ])
       if (enrichment[0].status === 'fulfilled') knowledge = enrichment[0].value
       if (enrichment[1].status === 'fulfilled') dealStageOptions = enrichment[1].value
       if (enrichment[2].status === 'fulfilled') catalog = enrichment[2].value
       if (enrichment[3].status === 'fulfilled') quickReplies = enrichment[3].value
       if (enrichment[4].status === 'fulfilled') knownContactFacts = enrichment[4].value
+      if (enrichment[5].status === 'fulfilled') shopifyOrders = Boolean(enrichment[5].value.data)
 
       // How the catalog is delivered (migration 068) + the vertical +
       // whether a restaurant menu PDF is on file (migration 114).
@@ -1102,6 +1106,7 @@ export async function dispatchInboundToAiReply(
       quickReplies,
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
+      shopifyOrders,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -1323,7 +1328,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -2376,6 +2381,28 @@ For airport transport, record the guest's request in nota on the relevant existi
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_quote_chat failed:', err)
+      }
+    }
+
+    // Same defense in depth: only an account with a connected store was
+    // taught the marker; createShopifyOrderFromChat re-checks the config.
+    if (shopifyOrderProposal && shopifyOrders) {
+      try {
+        await createShopifyOrderFromChat({
+          db, accountId, contactId, conversationId, configOwnerUserId, proposal: shopifyOrderProposal,
+          handoff: (summary) => handOffToHuman({
+            db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+            alreadyAssigned: Boolean(conv.assigned_agent_id), summary, transient: true,
+          }),
+          sendText: async (contentText) => {
+            await sendMessageToConversation(db, accountId, {
+              conversationId, messageType: 'text', contentText, senderType: neverSelfPause ? 'bot' : 'agent',
+            })
+          },
+        })
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] autonomous create_shopify_order failed:', err)
       }
     }
 

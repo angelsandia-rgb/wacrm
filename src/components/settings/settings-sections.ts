@@ -12,6 +12,7 @@ import {
   PlugZap,
   Shield,
   Sheet,
+  ShoppingBag,
   Stethoscope,
   Star,
   Tags,
@@ -52,6 +53,7 @@ export const SETTINGS_SECTIONS = [
   'billing',
   'google-calendar',
   'google-sheets',
+  'shopify',
   'support',
 ] as const;
 
@@ -91,6 +93,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   billing: { id: 'billing', label: 'Billing', icon: Banknote, group: 'workspace' },
   'google-calendar': { id: 'google-calendar', label: 'Google Calendar', icon: CalendarDays, group: 'workspace' },
   'google-sheets': { id: 'google-sheets', label: 'Google Sheets', icon: Sheet, group: 'workspace' },
+  shopify: { id: 'shopify', label: 'Shopify', icon: ShoppingBag, group: 'workspace' },
   support: { id: 'support', label: 'Tickets', icon: LifeBuoy, group: 'workspace' },
 };
 

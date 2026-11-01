@@ -27,6 +27,7 @@ import { WebhooksSettings } from '@/components/settings/webhooks-settings';
 import { BillingSettings } from '@/components/settings/billing';
 import { GoogleCalendarConfig } from '@/components/settings/google-calendar-config';
 import { GoogleSheetsConfig } from '@/components/settings/google-sheets-config';
+import { ShopifyConfig } from '@/components/settings/shopify-config';
 import { SupportTicketsPanel } from '@/components/settings/support-tickets-panel';
 import {
   resolveSection,
@@ -104,6 +105,7 @@ function SettingsPageInner() {
     billing: <BillingSettings />,
     'google-calendar': <GoogleCalendarConfig />,
     'google-sheets': <GoogleSheetsConfig />,
+    shopify: <ShopifyConfig />,
     support: <SupportTicketsPanel />,
   };
 
