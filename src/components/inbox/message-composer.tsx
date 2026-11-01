@@ -1,6 +1,7 @@
 'use client';
 
 import { readResponseJson } from '@/lib/http/response-json';
+import { RewriteMenu } from './rewrite-menu';
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent } from 'react';
 import {
@@ -1171,6 +1172,15 @@ export function MessageComposer({
               <Sparkles className="h-4 w-4" />
             )}
           </GatedButton>
+
+          <RewriteMenu
+            text={text}
+            disabled={readOnly}
+            onRewrite={(next) => {
+              setText(next);
+              requestAnimationFrame(() => adjustHeight());
+            }}
+          />
 
           <GatedButton
             variant="ghost"
