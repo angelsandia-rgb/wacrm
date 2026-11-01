@@ -1710,9 +1710,20 @@ function StepEditor({
               <option value="round_robin">
                 {t('config.modes.round_robin')}
               </option>
+              <option value="least_open">{t('config.modes.least_open')}</option>
               <option value="specific">{t('config.modes.specific')}</option>
             </select>
           </FieldBlock>
+          {cfg.mode !== 'specific' && (
+            <label className="text-foreground flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={cfg.online_only === true}
+                onChange={(e) => set({ online_only: e.target.checked })}
+              />
+              {t('config.onlineOnly')}
+            </label>
+          )}
           {cfg.mode === 'specific' && (
             <FieldBlock label={t('config.agentLabel')}>
               <AgentSelect

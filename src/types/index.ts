@@ -754,8 +754,14 @@ export interface TagStepConfig {
 }
 
 export interface AssignConversationStepConfig {
-  mode: 'specific' | 'round_robin';
+  /** round_robin = rotate through the agents in turn; least_open = the
+   *  agent with the fewest open conversations right now. */
+  mode: 'specific' | 'round_robin' | 'least_open';
   agent_id?: string;
+  /** round_robin / least_open: only agents online now (presence). */
+  online_only?: boolean;
+  /** round_robin cursor — written back by the engine, not the builder. */
+  last_agent_id?: string;
 }
 
 export interface UpdateContactFieldStepConfig {

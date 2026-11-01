@@ -187,8 +187,10 @@
         "placeholderMessageText": "¡Hola! Gracias por escribirnos…",
         "tagLabel": "Etiqueta",
         "modeLabel": "Modo",
+        "onlineOnly": "Solo agentes en línea ahora (si no hay, queda sin asignar)",
         "modes": {
-          "round_robin": "Rotativo",
+          "round_robin": "Rotativo (por turnos)",
+          "least_open": "Al que tenga menos chats abiertos",
           "specific": "Agente específico"
         },
         "agentLabel": "Agente",

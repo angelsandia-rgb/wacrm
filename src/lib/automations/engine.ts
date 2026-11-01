@@ -34,6 +34,12 @@ import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
+import {
+  leastLoaded,
+  loadAssignableAgents,
+  loadOpenAssignedCounts,
+  nextRoundRobin,
+} from '@/lib/conversations/reassign'
 
 // ------------------------------------------------------------
 // Public API
@@ -654,16 +660,28 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as AssignConversationStepConfig
       if (!args.contactId) throw new Error('assign_conversation needs a contact')
       let agentId = cfg.agent_id
-      if (cfg.mode === 'round_robin') {
-        // Pick any member of the account. The existing implementation
-        // only ever returned the automation's author; preserving that
-        // shape until a real round-robin algorithm replaces it.
-        const { data: profiles } = await db
-          .from('profiles')
-          .select('user_id')
-          .eq('account_id', args.automation.account_id)
-          .limit(1)
-        agentId = profiles?.[0]?.user_id
+      if (cfg.mode === 'round_robin' || cfg.mode === 'least_open') {
+        const agents = await loadAssignableAgents(db, args.automation.account_id, {
+          onlineOnly: cfg.online_only === true,
+        })
+        if (cfg.mode === 'round_robin') {
+          agentId = nextRoundRobin(agents, cfg.last_agent_id)
+          // ponytail: the cursor lives in the step's own config (last write
+          // wins under concurrent runs, and saving the automation resets it);
+          // a dedicated table if strict rotation ever matters.
+          if (agentId) {
+            await db
+              .from('automation_steps')
+              .update({ step_config: { ...cfg, last_agent_id: agentId } })
+              .eq('id', step.id)
+          }
+        } else {
+          agentId =
+            agents.length > 0
+              ? leastLoaded(agents, await loadOpenAssignedCounts(db, args.automation.account_id, agents))
+              : undefined
+        }
+        if (!agentId) return cfg.online_only ? 'no agent online' : 'no agent resolved'
       }
       if (!agentId) return 'no agent resolved'
       // Assign only the conversation that fired this automation when we

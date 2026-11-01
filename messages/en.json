@@ -1639,8 +1639,10 @@
         "placeholderMessageText": "Hi! Thanks for reaching out…",
         "tagLabel": "Tag",
         "modeLabel": "Mode",
+        "onlineOnly": "Only agents online now (otherwise leave unassigned)",
         "modes": {
-          "round_robin": "Round-robin",
+          "round_robin": "Round robin (in turn)",
+          "least_open": "Fewest open conversations",
           "specific": "Specific agent"
         },
         "agentLabel": "Agent",
