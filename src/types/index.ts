@@ -216,7 +216,7 @@ export interface Conversation {
 // ============================================================
 // Notifications (migration 027; 'ai_key_invalid' added in 079;
 // 'google_calendar_error' in 084; 'google_sheets_error' and 'task_due'
-// in 095/097; 'ai_handoff' added in 136)
+// in 095/097; 'ai_handoff' added in 136; 'mention' in 173)
 // ============================================================
 
 export type NotificationType =
@@ -225,7 +225,8 @@ export type NotificationType =
   | 'google_calendar_error'
   | 'google_sheets_error'
   | 'task_due'
-  | 'ai_handoff';
+  | 'ai_handoff'
+  | 'mention';
 
 export interface Notification {
   id: string;

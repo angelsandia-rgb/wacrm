@@ -40,6 +40,7 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
     title: row.title.startsWith('Tarea pendiente') ? row.title : `Tarea pendiente: ${row.title.replace(/^Task (?:due|overdue):?\s*/i, '')}`,
     body: row.body ? row.body.replace(/^Contact:/i, 'Contacto:') : 'Revise la tarea y dele seguimiento.',
   }
+  if (row.type === 'mention') return { title: compact(row.title, 80), body: compact(row.body || '', 180) }
   if (row.type !== 'ai_handoff') return { title: 'Aviso del sistema', body: 'Hay una novedad pendiente de revisi\u00f3n. Abra el aviso para consultar el detalle.' }
   const body = row.body ?? ''
   if (body.startsWith('Motivo: ') || body.startsWith('Cliente necesita atención por: ') || body.startsWith('Acción: ')) {
