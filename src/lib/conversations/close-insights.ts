@@ -3,7 +3,7 @@ import { loadAiConfig } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
 import { logAiUsage } from '@/lib/ai/usage'
 import type { ChatMessage } from '@/lib/ai/types'
-import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { notifyConversationClosed } from '@/lib/automations/events'
 
 // ============================================================
 // Close insights (respond.io parity): when a conversation closes, the
@@ -151,10 +151,12 @@ export async function runAutoClose(
       console.error('[close-insights] auto-close failed:', cfg.account_id, error.message)
       continue
     }
+    // Outbound webhook + conversation_closed automations, like any close.
     for (const row of data ?? []) {
-      void dispatchWebhookEvent(db, cfg.account_id, 'conversation.closed', {
-        conversation_id: row.id,
-        closed_by: 'auto_close',
+      await notifyConversationClosed(db, {
+        accountId: cfg.account_id,
+        conversationId: row.id as string,
+        closedBy: 'auto_close',
       })
     }
     autoClosed += data?.length ?? 0
