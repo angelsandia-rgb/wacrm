@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { Bot, Eraser, Send, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +21,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { readResponseJson } from '@/lib/http/response-json';
+import { browserStorage, readStored } from '@/hooks/use-stored-preference';
 
 interface DemoMessage {
   role: 'user' | 'assistant';
@@ -39,45 +47,83 @@ Qué hacés:
 - No inventás precios ni prometés plazos que no estén acá.
 - Si piden un descuento, un caso especial o algo que no sabés, decís que lo pasás con un asesor.`;
 
+// The saved demo is only read once after hydration; nothing else in the
+// tab writes it, so there is nothing to subscribe to.
+function subscribeNever(): () => void {
+  return () => {};
+}
+
+function parseMessages(raw: string | null): DemoMessage[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as DemoMessage[];
+    return Array.isArray(parsed) ? parsed.slice(-40) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function AiDemo() {
-  const [prompt, setPrompt] = useState('');
-  const [messages, setMessages] = useState<DemoMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Restore a demo in progress (survives an accidental refresh mid-pitch).
-  useEffect(() => {
-    try {
-      const p = localStorage.getItem(PROMPT_KEY);
-      setPrompt(p && p.trim() ? p : EXAMPLE_PROMPT);
-      const m = localStorage.getItem(MESSAGES_KEY);
-      if (m) {
-        const parsed = JSON.parse(m) as DemoMessage[];
-        if (Array.isArray(parsed)) setMessages(parsed.slice(-40));
-      }
-    } catch {
-      setPrompt(EXAMPLE_PROMPT);
-    }
-  }, []);
+  // The saved copy is read after hydration (the server has no storage);
+  // once the operator edits anything, their draft takes over.
+  const storedPrompt = useSyncExternalStore(
+    subscribeNever,
+    () => readStored(browserStorage(), PROMPT_KEY),
+    () => null
+  );
+  const storedMessages = useSyncExternalStore(
+    subscribeNever,
+    () => readStored(browserStorage(), MESSAGES_KEY),
+    () => null
+  );
+  const restoredMessages = useMemo(
+    () => parseMessages(storedMessages),
+    [storedMessages]
+  );
+  const [promptDraft, setPrompt] = useState<string | null>(null);
+  const [messagesDraft, setMessagesDraft] = useState<DemoMessage[] | null>(
+    null
+  );
+  const prompt =
+    promptDraft ??
+    (storedPrompt && storedPrompt.trim() ? storedPrompt : EXAMPLE_PROMPT);
+  const messages = messagesDraft ?? restoredMessages;
+  const setMessages = useCallback(
+    (update: (prev: DemoMessage[]) => DemoMessage[]) =>
+      setMessagesDraft((prev) => update(prev ?? restoredMessages)),
+    [restoredMessages]
+  );
 
+  // Only the operator's own edits are written back, so hydration can
+  // never overwrite the saved demo with the defaults.
   useEffect(() => {
+    if (promptDraft === null) return;
     try {
-      localStorage.setItem(PROMPT_KEY, prompt);
+      localStorage.setItem(PROMPT_KEY, promptDraft);
     } catch {
       /* private window / storage disabled — the demo still works */
     }
-  }, [prompt]);
+  }, [promptDraft]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages.slice(-40)));
-    } catch {
-      /* ignore */
+    if (messagesDraft !== null) {
+      try {
+        localStorage.setItem(
+          MESSAGES_KEY,
+          JSON.stringify(messagesDraft.slice(-40))
+        );
+      } catch {
+        /* ignore */
+      }
     }
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages]);
+  }, [messagesDraft, messages]);
 
   const send = useCallback(async () => {
     const text = draft.trim();
@@ -88,7 +134,7 @@ export function AiDemo() {
     }
     setError(null);
     const next: DemoMessage[] = [...messages, { role: 'user', content: text }];
-    setMessages(next);
+    setMessages(() => next);
     setDraft('');
     setLoading(true);
     try {
@@ -113,17 +159,17 @@ export function AiDemo() {
     } finally {
       setLoading(false);
     }
-  }, [draft, loading, prompt, messages]);
+  }, [draft, loading, prompt, messages, setMessages]);
 
   const reset = useCallback(() => {
-    setMessages([]);
+    setMessages(() => []);
     setError(null);
     try {
       localStorage.removeItem(MESSAGES_KEY);
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [setMessages]);
 
   return (
     <Card>

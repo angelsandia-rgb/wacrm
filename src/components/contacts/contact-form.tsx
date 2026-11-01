@@ -55,11 +55,13 @@ interface ContactFormProps {
   onViewExisting?: (contactId: string) => void;
 }
 
+// Stable default: the seeding check compares `contactTags` by identity.
+const NO_CONTACT_TAGS: ContactTag[] = [];
 export function ContactForm({
   open,
   onOpenChange,
   contact,
-  contactTags = [],
+  contactTags = NO_CONTACT_TAGS,
   onSaved,
   onViewExisting,
 }: ContactFormProps) {
@@ -91,18 +93,34 @@ export function ContactForm({
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
 
+  // Seed the form whenever it opens (or its contact changes while open) —
+  // while rendering, React's pattern for reacting to changed inputs.
+  const [seeded, setSeeded] = useState<{
+    contact: typeof contact;
+    contactTags: typeof contactTags;
+  } | null>(null);
+  if (!open && seeded) setSeeded(null);
+  if (
+    open &&
+    (!seeded ||
+      seeded.contact !== contact ||
+      seeded.contactTags !== contactTags)
+  ) {
+    setSeeded({ contact, contactTags });
+    setName(contact?.name ?? '');
+    setPhone(contact?.phone ?? '');
+    setEmail(contact?.email ?? '');
+    setCompany(contact?.company ?? '');
+    setLeadTemperature(contact?.lead_temperature ?? 'unclassified');
+    setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
+    setDupMatch(null);
+    setLoadingTags(true);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     if (open) {
-      setName(contact?.name ?? '');
-      setPhone(contact?.phone ?? '');
-      setEmail(contact?.email ?? '');
-      setCompany(contact?.company ?? '');
-      setLeadTemperature(contact?.lead_temperature ?? 'unclassified');
-      setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
-      setDupMatch(null);
-      setLoadingTags(true);
       void supabase
         .from('tags')
         .select('*')

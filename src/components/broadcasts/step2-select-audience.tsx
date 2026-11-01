@@ -92,8 +92,6 @@ export function Step2SelectAudience({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingFields, setLoadingFields] = useState(false);
-  const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
-  const [loadingCount, setLoadingCount] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -201,8 +199,33 @@ export function Step2SelectAudience({
     fetchFields();
   }, [audience.type]);
 
-  const fetchEstimatedCount = useCallback(async () => {
-    setLoadingCount(true);
+  // The audience inputs the count depends on. The result is tagged with
+  // the inputs it answers, so a slow response for an older selection can
+  // never overwrite the current one, and the spinner shows until it lands.
+  const countInputs = useMemo(
+    () => ({
+      type: audience.type,
+      tagIds: audience.tagIds,
+      customField: audience.customField,
+      csvContacts: audience.csvContacts,
+      excludeTagIds: audience.excludeTagIds,
+    }),
+    [
+      audience.type,
+      audience.tagIds,
+      audience.customField,
+      audience.csvContacts,
+      audience.excludeTagIds,
+    ],
+  );
+  const [countResult, setCountResult] = useState<{
+    inputs: typeof countInputs;
+    count: number | null;
+  } | null>(null);
+  const estimatedCount = countResult?.count ?? null;
+  const loadingCount = countResult?.inputs !== countInputs;
+
+  const computeEstimatedCount = useCallback(async (): Promise<number | null> => {
     try {
       const supabase = createClient();
 
@@ -251,12 +274,10 @@ export function Step2SelectAudience({
         audience.csvContacts &&
         audience.csvContacts.length > 0
       ) {
-        setEstimatedCount(audience.csvContacts.length);
-        return;
+        return audience.csvContacts.length;
       } else {
         // Partially-configured audience — wait for the user to finish.
-        setEstimatedCount(null);
-        return;
+        return null;
       }
 
       // Apply exclude tags
@@ -278,21 +299,19 @@ export function Step2SelectAudience({
         const effective = [...baseIds].filter(
           (id) => !excludeSet?.has(id),
         );
-        setEstimatedCount(effective.length);
+        return effective.length;
       } else {
         // "All" — fetch the total, then subtract exclude set if any.
         const { count } = await supabase
           .from('contacts')
           .select('*', { count: 'exact', head: true });
         const total = count ?? 0;
-        setEstimatedCount(excludeSet ? Math.max(0, total - excludeSet.size) : total);
+        return excludeSet ? Math.max(0, total - excludeSet.size) : total;
       }
     } catch (err) {
       // Unknown beats a wrong number shown as the send size.
       console.error('[broadcast audience] count failed:', err);
-      setEstimatedCount(null);
-    } finally {
-      setLoadingCount(false);
+      return null;
     }
   }, [
     audience.type,
@@ -303,17 +322,26 @@ export function Step2SelectAudience({
   ]);
 
   useEffect(() => {
-    fetchEstimatedCount();
-  }, [fetchEstimatedCount]);
+    let cancelled = false;
+    void computeEstimatedCount().then((count) => {
+      if (!cancelled) setCountResult({ inputs: countInputs, count });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [computeEstimatedCount, countInputs]);
 
   // Drop the CSV file hint/error when the user leaves the CSV option
   // (switching away also wipes `audience.csvContacts` in the handler).
-  useEffect(() => {
+  // Adjusted while rendering, React's pattern for a changed input.
+  const [csvHintFor, setCsvHintFor] = useState(audience.type);
+  if (audience.type !== csvHintFor) {
+    setCsvHintFor(audience.type);
     if (audience.type !== 'csv') {
       setCsvError(null);
       setCsvFileName(null);
     }
-  }, [audience.type]);
+  }
 
   function toggleTag(tagId: string) {
     const current = audience.tagIds ?? [];

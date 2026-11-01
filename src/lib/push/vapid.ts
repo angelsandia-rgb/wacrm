@@ -15,8 +15,10 @@ export interface VapidConfig {
 }
 
 export function getVapidConfig(): VapidConfig | null {
-  const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  // Indirect lookup keeps Next from freezing the public key at build time.
+  const env = process.env;
+  const publicKey = env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const privateKey = env.VAPID_PRIVATE_KEY;
   if (!publicKey || !privateKey) return null;
   const subject = process.env.VAPID_SUBJECT?.trim() || 'mailto:soporte@chatsandia.com';
   return { publicKey, privateKey, subject };

@@ -5,7 +5,7 @@ import { moveDeal, MoveDealError } from './move-deal';
 
 interface Fixture {
   /** pipeline_stages row for the requested stageId, or null if none matches (cross-tenant/missing). */
-  stage?: { id: string; pipeline_id: string; is_won: boolean } | null;
+  stage?: { id: string; pipeline_id: string; is_won: boolean; name?: string } | null;
   /** deals row returned after the update, or null (deal not in that pipeline/account). */
   updatedDeal?: { id: string; pipeline_id: string; stage_id: string; status: string } | null;
   /** deals.status returned by the pre-move point lookup (only hit on a
@@ -47,6 +47,16 @@ function makeDb(fx: Fixture, updatePayloads: Record<string, unknown>[] = []): Su
 }
 
 describe('moveDeal', () => {
+  it('marks an explicit Descarte move lost without touching any reservation', async () => {
+    const writes: Record<string, unknown>[] = [];
+    await moveDeal(makeDb({ stage: { id: 'discard', pipeline_id: 'p', name: 'Descarte', is_won: false }, statusBeforeMove: 'open', updatedDeal: { id: 'd', pipeline_id: 'p', stage_id: 'discard', status: 'lost' } }, writes), 'a', 'd', 'discard');
+    expect(writes[0]).toEqual({ stage_id: 'discard', status: 'lost', won_at: null });
+  });
+  it('allows explicitly returning a discarded hotel opportunity to Cotizando', async () => {
+    const writes: Record<string, unknown>[] = [];
+    await moveDeal(makeDb({ stage: { id: 'quote', pipeline_id: 'p', name: 'Cotizando', is_won: false }, statusBeforeMove: 'lost', updatedDeal: { id: 'd', pipeline_id: 'p', stage_id: 'quote', status: 'open' } }, writes), 'a', 'd', 'quote');
+    expect(writes[0]).toEqual({ stage_id: 'quote', status: 'open', won_at: null });
+  });
   it('moves a deal to a non-won stage without touching status', async () => {
     const db = makeDb({
       stage: { id: 'stage-2', pipeline_id: 'pipe-1', is_won: false },

@@ -91,27 +91,42 @@ export function WebhooksSettings() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const fetchEndpoints = useCallback(async (): Promise<
+    WebhookEndpoint[] | null
+  > => {
     try {
       const res = await fetch('/api/account/webhooks', { cache: 'no-store' });
       if (!res.ok) {
         const payload = await readResponseJson(res).catch(() => ({}));
         toast.error(payload.error || t('loadFailed'));
-        return;
+        return null;
       }
       const data = await readResponseJson<{ webhooks: WebhookEndpoint[] }>(res);
-      setEndpoints(data.webhooks);
+      return data.webhooks;
     } catch (err) {
       console.error('[WebhooksSettings] load error:', err);
       toast.error(t('networkError'));
-    } finally {
-      setLoading(false);
+      return null;
     }
   }, [t]);
 
+  const load = useCallback(async () => {
+    const loaded = await fetchEndpoints();
+    if (loaded) setEndpoints(loaded);
+    setLoading(false);
+  }, [fetchEndpoints]);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void fetchEndpoints().then((loaded) => {
+      if (cancelled) return;
+      if (loaded) setEndpoints(loaded);
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchEndpoints]);
 
   async function handleToggleActive(endpoint: WebhookEndpoint) {
     setBusyId(endpoint.id);
@@ -304,21 +319,28 @@ function DeliveryLog({ endpointId }: { endpointId: string }) {
   const [deliveries, setDeliveries] = useState<Delivery[] | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const fetchDeliveries = useCallback(async (): Promise<Delivery[]> => {
     const res = await fetch(`/api/account/webhooks/${endpointId}/deliveries`, {
       cache: 'no-store',
     });
-    if (!res.ok) {
-      setDeliveries([]);
-      return;
-    }
+    if (!res.ok) return [];
     const data = await readResponseJson<{ deliveries: Delivery[] }>(res);
-    setDeliveries(data.deliveries);
+    return data.deliveries;
   }, [endpointId]);
 
+  const load = useCallback(async () => {
+    setDeliveries(await fetchDeliveries());
+  }, [fetchDeliveries]);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void fetchDeliveries().then((loaded) => {
+      if (!cancelled) setDeliveries(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchDeliveries]);
 
   async function handleRetry(deliveryId: string) {
     setRetryingId(deliveryId);

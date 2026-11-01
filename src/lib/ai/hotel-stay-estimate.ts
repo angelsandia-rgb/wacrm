@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
 import { DAY_LABEL_ES, OCCUPANCY_LABEL_ES, TIER_GUESTS, formatDateEs } from '@/lib/products/rates'
 import {
-  estimateDeposit,
   loadStayPricingInputs,
   priceStay,
   resolveStayProductId,
@@ -135,6 +134,8 @@ export async function loadHotelStayEstimate(
   currency: string,
   depositPercent = 50,
 ): Promise<string | null> {
+  // Keep the positional API compatible; pending stays never request a deposit.
+  void depositPercent
   const rr = await loadPendingStay(db, accountId, conversationId)
   if (!rr || !rr.check_in || !rr.check_out) return null
 
@@ -152,7 +153,7 @@ export async function loadHotelStayEstimate(
   // get a partial estimate the team validates (`quote.partial`); other
   // rooms still skip 5+ (Angel, 2026-09-18).
   const quote = priceStay(rates, rr, maxGuests)
-  if (quote.kind !== 'quoted' || quote.nights.length === 0) return null
+  if (quote.kind !== 'quoted' || quote.nights.length === 0 || quote.total <= 0) return null
   const { rooms, occupancy } = quote
 
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
@@ -171,11 +172,6 @@ export async function loadHotelStayEstimate(
     `${quote.missing.length ? 'Subtotal de noches con tarifa' : 'Total estimado'}${rooms > 1 ? ` (${rooms} habitaciones)` : ''}: ${formatCurrency(total, currency)}.`
   if (quote.missing.length > 0) {
     text += ` (${quote.missing.join(', ')} sin tarifa publicada — esas noches las cotiza una persona.)`
-  } else {
-    // Deposit only makes sense once the total is real, not a partial
-    // subtotal — matches "never fake a complete quote" (price.ts).
-    const deposit = estimateDeposit(total, depositPercent)
-    text += ` Para apartar se requiere un anticipo del ${depositPercent}%, equivalente a ${formatCurrency(deposit, currency)}.`
   }
   text +=
     ' Este total sale de las tarifas publicadas del hotel; es un estimado — la disponibilidad y el precio final los confirma una persona.'
@@ -224,6 +220,7 @@ export async function loadHotelStayEstimate(
 
 export type StayEstimateStatus =
   | { status: 'incomplete' }
+  | { status: 'approval_pending' }
   | { status: 'too_large_group' } // 5+ guests — never auto-priced, by design
   | { status: 'uneven_rooms' } // several rooms, headcount doesn't split evenly — a person prices it
   | { status: 'needs_person' } // a child over 12, or several rooms with children — a person prices it
@@ -244,10 +241,10 @@ export type StayEstimateStatus =
     }
 
 /** Sent after a hotel close when there is no fresh total to share. */
-export const CLOSE_AVAILABILITY_LINE = 'Un compañero le confirmará la disponibilidad en breve. 😊'
-export const CLOSE_AVAILABILITY_AND_TOTAL_LINE = 'Un compañero le confirmará la disponibilidad y el total en breve. 😊'
-export const CLOSE_AVAILABILITY_LINE_EN = 'A team member will confirm availability shortly. 😊'
-export const CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN = 'A team member will confirm availability and the total shortly. 😊'
+export const CLOSE_AVAILABILITY_LINE = 'Recepción debe verificar la disponibilidad; este estimado no confirma una reserva.'
+export const CLOSE_AVAILABILITY_AND_TOTAL_LINE = 'Recepción debe verificar la disponibilidad y el total; todavía no hay una reserva confirmada.'
+export const CLOSE_AVAILABILITY_LINE_EN = 'Reception must verify availability; this estimate does not confirm a booking.'
+export const CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN = 'Reception must verify availability and the total; the booking is not confirmed yet.'
 
 /** Whether a reply is written in English — the model answers in the
  *  guest's language, so the system's own lines follow it. */
@@ -277,6 +274,8 @@ export async function computeStayEstimateStatus(
    *  (test run 2026-09-24 — past dates were quoted and sent). */
   todayISO?: string,
 ): Promise<StayEstimateStatus> {
+  // Keep the positional API compatible; pending stays never request a deposit.
+  void depositPercent
   const rr = await loadPendingStay(db, accountId, conversationId)
   if (!rr || !rr.check_in || !rr.check_out) return { status: 'incomplete' }
   if (!rr.guests && !rr.adults) return { status: 'incomplete' }
@@ -288,6 +287,7 @@ export async function computeStayEstimateStatus(
   if (!productId) return { status: 'unpriceable', reason: 'no_product_match' }
 
   const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, productId)
+  if (rates.some(r => r.requires_confirmation && r.date_from && r.date_to && r.date_from < rr.check_out! && r.date_to >= rr.check_in!)) return { status: 'approval_pending' }
   if (rates.length === 0) return { status: 'unpriceable', reason: 'no_rates' }
 
   const quote = priceStay(rates, rr, maxGuests)
@@ -302,7 +302,6 @@ export async function computeStayEstimateStatus(
   const label = (rr.service_name ?? 'la habitación').trim() || 'la habitación'
   const nightsWord = quote.nights.length === 1 ? 'noche' : 'noches'
   const total = quote.total * rooms
-  const deposit = estimateDeposit(total, depositPercent)
   // A package priced for several nights repeats the package rate each
   // night, but the extra night's real price (and e.g. Luna de Miel's 25%
   // second-night discount) is the team's call — QA 2026-10-01 quoted
@@ -317,7 +316,7 @@ export async function computeStayEstimateStatus(
   const text =
     `El total estimado sería de ${formatCurrency(total, currency)} por ${quote.nights.length} ${nightsWord} ` +
     `para ${headcountEs(quote)}${freeChildNote(quote)} en ${label}, del ${formatDateEs(rr.check_in)} al ${formatDateEs(rr.check_out)}${partialBasisNote(quote)}. ` +
-    `Para apartar se requiere un anticipo estimado de ${formatCurrency(deposit, currency)}.` +
+    CLOSE_AVAILABILITY_LINE +
     (quote.partial.length > 0 ? ` ${partialTeamLine(quote)}` : '') +
     (packageNightsNote ? ` ${packageNightsNote}` : '')
 
@@ -338,7 +337,7 @@ export async function computeStayEstimateStatus(
   ]
   const closingText =
     `El total estimado de su solicitud es de ${formatCurrency(total, currency)} por ${nightsPart}` +
-    `${detailBits.length ? ` (${detailBits.join('; ')})` : ''}, con un anticipo de ${formatCurrency(deposit, currency)} para apartarla. ` +
+    `${detailBits.length ? ` (${detailBits.join('; ')})` : ''}. ` +
     (quote.partial.length > 0
       ? `Es un estimado: ${lowerFirst(partialTeamLine(quote))}${packageNightsNote ? ` ${packageNightsNote}` : ''} 😊`
       : packageNightsNote
@@ -349,10 +348,10 @@ export async function computeStayEstimateStatus(
   const nightsEn = `${quote.nights.length} ${quote.nights.length === 1 ? 'night' : 'nights'}`
   const textEn =
     `The estimated total would be ${formatCurrency(total, currency)} for ${nightsEn} at ${label}, ` +
-    `${formatDateEs(rr.check_in)} to ${formatDateEs(rr.check_out)}. A deposit of ${formatCurrency(deposit, currency)} is required to hold it.${estimateNoteEn}`
+    `${formatDateEs(rr.check_in)} to ${formatDateEs(rr.check_out)}. ${CLOSE_AVAILABILITY_LINE_EN}${estimateNoteEn}`
   const closingTextEn =
     `The estimated total for your request is ${formatCurrency(total, currency)} for ${nightsEn}, ` +
-    `with a deposit of ${formatCurrency(deposit, currency)} to hold it.${estimateNoteEn} ${CLOSE_AVAILABILITY_LINE_EN}`
+    `${estimateNoteEn} ${CLOSE_AVAILABILITY_LINE_EN}`
 
   return { status: 'priced', reservationRequestId: rr.id, text, closingText, textEn, closingTextEn, total }
 }

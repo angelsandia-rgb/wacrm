@@ -156,7 +156,13 @@ export function MembersTab() {
     useState<AccountRole>('agent');
   const [transferring, setTransferring] = useState(false);
 
-  const loadEverything = useCallback(async () => {
+  // Returns what loaded (members can load even when invitations fail),
+  // so the mount effect can drop a stale response before applying it.
+  const fetchEverything = useCallback(async (): Promise<{
+    members?: Member[];
+    seatLimit?: number;
+    invitations?: Invitation[];
+  }> => {
     try {
       const [mres, ires] = await Promise.all([
         fetch('/api/account/members', { cache: 'no-store' }),
@@ -168,39 +174,54 @@ export function MembersTab() {
       if (!mres.ok) {
         const payload = await readResponseJson(mres).catch(() => ({}));
         toast.error(payload.error || 'Failed to load members');
-        return;
+        return {};
       }
       const mdata = await readResponseJson<{
         members: Member[];
         seatLimit: number;
       }>(mres);
-      setMembers(mdata.members);
-      setSeatLimit(mdata.seatLimit);
+      const loaded = { members: mdata.members, seatLimit: mdata.seatLimit };
 
-      if (ires) {
-        if (!ires.ok) {
-          const payload = await readResponseJson(ires).catch(() => ({}));
-          toast.error(payload.error || 'Failed to load invitations');
-          return;
-        }
-        const idata = await readResponseJson<{ invitations: Invitation[] }>(
-          ires
-        );
-        setInvitations(idata.invitations);
-      } else {
-        setInvitations([]);
+      if (!ires) return { ...loaded, invitations: [] };
+      if (!ires.ok) {
+        const payload = await readResponseJson(ires).catch(() => ({}));
+        toast.error(payload.error || 'Failed to load invitations');
+        return loaded;
       }
+      const idata = await readResponseJson<{ invitations: Invitation[] }>(
+        ires
+      );
+      return { ...loaded, invitations: idata.invitations };
     } catch (err) {
       console.error('[MembersTab] load error:', err);
       toast.error('Could not reach the server');
-    } finally {
-      setLoading(false);
+      return {};
     }
   }, [canManageMembers]);
 
+  const applyEverything = useCallback(
+    (loaded: Awaited<ReturnType<typeof fetchEverything>>) => {
+      if (loaded.members) setMembers(loaded.members);
+      if (loaded.seatLimit !== undefined) setSeatLimit(loaded.seatLimit);
+      if (loaded.invitations) setInvitations(loaded.invitations);
+      setLoading(false);
+    },
+    []
+  );
+
+  const loadEverything = useCallback(async () => {
+    applyEverything(await fetchEverything());
+  }, [fetchEverything, applyEverything]);
+
   useEffect(() => {
-    void loadEverything();
-  }, [loadEverything]);
+    let cancelled = false;
+    void fetchEverything().then((loaded) => {
+      if (!cancelled) applyEverything(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchEverything, applyEverything]);
 
   async function handleRoleChange(member: Member, nextRole: AccountRole) {
     if (member.role === nextRole) return;

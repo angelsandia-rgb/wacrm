@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { IconTrendingUp } from '@tabler/icons-react'
 import { useAuth } from '@/hooks/use-auth'
@@ -25,25 +25,31 @@ export function ClinicKpis() {
 
   const [period, setPeriod] = useState<DashboardPeriod>('month')
   const [stats, setStats] = useState<ClinicDashboardStats | null>(null)
-  const [loading, setLoading] = useState(true)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { from, to } = dashboardPeriodBounds(period, tz)
-      const res = await fetch(`/api/clinic-dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
-      const body = await readResponseJson<ClinicDashboardStats>(res)
-      setStats(res.ok ? body : null)
-    } catch {
-      setStats(null)
-    } finally {
-      setLoading(false)
+  // Which period the stats on screen belong to; loading until it matches.
+  const statsKey = `${period}|${tz}`
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      let next: ClinicDashboardStats | null = null
+      try {
+        const { from, to } = dashboardPeriodBounds(period, tz)
+        const res = await fetch(`/api/clinic-dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+        const body = await readResponseJson<ClinicDashboardStats>(res)
+        if (res.ok) next = body
+      } catch {
+        /* shown as no stats */
+      }
+      if (cancelled) return
+      setStats(next)
+      setLoadedKey(`${period}|${tz}`)
+    })()
+    return () => {
+      cancelled = true
     }
   }, [period, tz])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const loading = loadedKey !== statsKey
 
   return (
     <div className="space-y-5">

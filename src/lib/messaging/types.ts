@@ -68,6 +68,12 @@ export interface SendMessageParams {
    * send core only — the Instagram/Facebook cores ignore it.
    */
   senderType?: 'agent' | 'bot';
+  /**
+   * The teammate who clicked send, persisted as `messages.sender_id`.
+   * Only the dashboard send route sets it, so per-agent reports never
+   * count automated sends (which also persist as `'agent'`).
+   */
+  senderUserId?: string | null;
 }
 
 export interface SendMessageResult {

@@ -147,6 +147,19 @@ describe("validateStepsForActivation", () => {
     expect(ok).toEqual([]);
   });
 
+  it("flags ask_question without a question, a destination or a valid timeout", () => {
+    expect(
+      validateStepsForActivation([
+        { step_type: "ask_question", step_config: { question: "", field: "", var_name: "", timeout_hours: 0 } },
+      ]).map((i) => i.path),
+    ).toEqual(["steps[0].question", "steps[0].field", "steps[0].timeout_hours"]);
+    expect(
+      validateStepsForActivation([
+        { step_type: "ask_question", step_config: { question: "¿Tu correo?", field: "email", var_name: "", timeout_hours: 24 } },
+      ]),
+    ).toEqual([]);
+  });
+
   it("flags create_task when the due offset is negative", () => {
     const issues = validateStepsForActivation([
       {

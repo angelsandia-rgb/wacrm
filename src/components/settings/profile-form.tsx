@@ -39,20 +39,32 @@ export function ProfileForm() {
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
+  // Edits are paired with the profile they started from, so a new
+  // profile (first load, or refreshProfile after a save) re-seeds the
+  // form without a sync effect.
+  const [nameDraft, setNameDraft] = useState<{
+    base: typeof profile;
+    value: string;
+  } | null>(null);
+  const [emailDraft, setEmailDraft] = useState<{
+    base: typeof profile;
+    value: string;
+  } | null>(null);
+  const fullName =
+    nameDraft && nameDraft.base === profile
+      ? nameDraft.value
+      : (profile?.full_name ?? '');
+  const email =
+    emailDraft && emailDraft.base === profile
+      ? emailDraft.value
+      : (profile?.email ?? '');
+  const setFullName = (value: string) => setNameDraft({ base: profile, value });
+  const setEmail = (value: string) => setEmailDraft({ base: profile, value });
   const [pendingAvatar, setPendingAvatar] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
   const [emailChangePending, setEmailChangePending] = useState(false);
-
-  // Seed form state once the profile loads.
-  useEffect(() => {
-    if (!profile) return;
-    setFullName(profile.full_name ?? '');
-    setEmail(profile.email ?? '');
-  }, [profile]);
 
   // Cleanup object URLs to avoid leaks.
   useEffect(() => {

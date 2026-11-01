@@ -1,3 +1,15 @@
+import { latestCustomerTimestamp, hasNewReceptionRequest, isCourtesyClosing } from './reception-alert'
+import { canResumeHotelDaytimeInquiry } from './hotel-opening-backlog'
+import { attentionBody, attentionNotificationId, loadAttentionContext } from '@/lib/push/hotel-attention'
+import { withoutUnapprovedStayPrices } from './hotel-close'
+import { loadRecommendedRoomEstimate } from './hotel-recommended-estimate'
+import { hotelStayOperationReason } from './hotel-stay-operations'
+import { HOTEL_DIRECT_SERVICE_POLICY, hotelChangeRequest, hotelChangeConfirmationLine, explicitGuestCount, claimsExecutedHotelChange } from './hotel-service-policy'
+import { hotelEventTriage, EVENT_TRIAGE_QUESTION, eventFollowupLine } from './hotel-event-triage'
+import { roomBannerVariant } from './hotel-room-banner'
+import { withinAiAttentionHours, OutsideAiAttentionHours } from './auto-reply-schedule'
+import { repairHotelPartyFields } from './hotel-party'
+import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest, HOTEL_RECEPTION_PENDING_PREFIX, HOTEL_FAMILY_LODGING_POLICY } from './hotel-assistance'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { waitForQuietPeriod } from './debounce'
@@ -26,7 +38,7 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
 import { contactMutesAi } from './muted-contact'
-import { isAfterHours, withAttentionHours } from './attention-hours'
+import { availabilityConfirmationLine, withAvailabilityConfirmationTiming, conciseAvailabilityNotice, hasAvailabilityTiming, isAfterHours, withAttentionHours } from './attention-hours'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -70,18 +82,15 @@ import {
   isExplicitHumanRequest,
   isLocationQuestion,
   isMedicalCaution,
-  isPaymentRequest,
   isPhotoPromise,
   isPolicyQuestion,
   mapsLinkIn,
-  PAYMENT_HANDOFF_OFFER,
-  PAYMENT_HANDOFF_OFFER_EN,
   photoOnlyReplyText,
   productForPhotoRequest,
   replyNamesProduct,
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
-import { claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { mentionedAmounts, withoutConflictingStayPrices, claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import { teammateRepliedRecently,
@@ -92,6 +101,7 @@ import { teammateRepliedRecently,
   trailingCustomerTurns,
   trimTrailingAssistant,
 } from './human-reply'
+import { applySkillGates } from './skills'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -100,7 +110,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
  *  on its own. Postgres `integer` max. */
 const UNBOUNDED_REPLY_SLOTS = 2147483647
 /** Hotel: how long the AI waits for the staff to answer a message first. */
-const HOTEL_STAFF_WAIT_MS = 120_000
+const HOTEL_STAFF_WAIT_MS = 180_000
 
 /**
  * Hotel vertical only (owner, 2026-09-26 — Villa San Ricardo): the bot
@@ -283,12 +293,10 @@ const SIGN_OFF_REPLY_RE = /^[^\p{L}]*(?:con (?:mucho )?gusto|igualmente|a usted|
 
 /** Appended when a teammate has already replied in this hotel thread. */
 const TEAMMATE_PRESENT_NOTE =
-  'A teammate from the hotel is already chatting with this guest in this conversation (their messages are in the history). Keep helping as the assistant, but do NOT offer to connect them with the team and do NOT hand off — a person is already here. If they ask about a booking they already have, just say kindly that our teammate already helping them in this chat will take care of it (no hand-off marker). In Spanish call that person "nuestro compañero" or "alguien de nuestro equipo" — never "su colega" or "la colega". Never repeat or contradict what the teammate already told them; if the teammate already answered something, build on it.'
+  'A teammate previously replied in this hotel conversation. The staff quiet window is enforced before generation; you are now handling an eligible unanswered customer message. Respond to that latest need using the existing history and agreements. Do not restart the sale, duplicate a human answer, or claim a teammate is currently preparing or following up on something without evidence. If reception must verify availability, a voucher, payment or an overdue quote, use the available handoff once rather than promising progress or a deadline. In Spanish call staff "nuestro compañero" or "alguien de nuestro equipo", never "su colega". Respect verified staff decisions.'
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
-/** Hotel: the hours line is appended by `withAttentionHours`. */
-const HOTEL_HANDOFF_ACK_TEXT = 'Con mucho gusto, un compañero de nuestro equipo le atenderá por este chat. 🙌'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -339,6 +347,7 @@ async function sendAiContinuityFallback(args: DispatchArgs): Promise<void> {
       aiGenerated: true,
     })
   } catch (error) {
+    if (error instanceof OutsideAiAttentionHours) return
     // Every OTHER failure path in this file that reaches for this
     // fallback already raises an alert of its own; this send is the one
     // thing they all have in common, and until now its own failure was
@@ -369,6 +378,7 @@ interface ConvEligibility {
   ai_reply_count: number | null
   ai_handoff_transient: boolean | null
   ai_handoff_at: string | null
+  ai_handoff_summary: string | null
   ai_flow_directive: string | null
   ai_context_reset_at: string | null
 }
@@ -377,7 +387,7 @@ interface ConvEligibility {
  *  read still works against these even when a newer column's migration
  *  hasn't landed yet. */
 const CONV_ELIGIBILITY_STABLE_COLS = 'assigned_agent_id, ai_autoreply_disabled, ai_reply_count'
-const CONV_ELIGIBILITY_ALL_COLS = `${CONV_ELIGIBILITY_STABLE_COLS}, ai_handoff_transient, ai_handoff_at, ai_flow_directive, ai_context_reset_at`
+const CONV_ELIGIBILITY_ALL_COLS = `${CONV_ELIGIBILITY_STABLE_COLS}, ai_handoff_transient, ai_handoff_at, ai_handoff_summary, ai_flow_directive, ai_context_reset_at`
 
 /**
  * Read the conversation's AI-eligibility columns. If the full select
@@ -432,6 +442,7 @@ async function loadConvEligibility(
       ...row,
       ai_handoff_transient: null,
       ai_handoff_at: null,
+      ai_handoff_summary: null,
       ai_flow_directive: null,
       ai_context_reset_at: null,
     }
@@ -491,13 +502,14 @@ export async function dispatchInboundToAiReply(
   // drop the customer's message (worst case a duplicate, far better
   // than silence).
   let isLatest: boolean
-  // Hotels give the staff 2 minutes to answer first (owner, 2026-10-07);
+  // Hotels wait 3 minutes after the latest inbound before answering (owner, 2026-10-14);
   // the AI only replies if nobody from the hotel did. Other verticals keep
   // the global debounce; recovery-sweep dispatches skip either wait.
   let neverSelfPause = false
   try {
     neverSelfPause = await botNeverSelfPauses(supabaseAdmin(), accountId)
   } catch (err) {
+    if (err instanceof OutsideAiAttentionHours) throw err
     console.error('[ai auto-reply] hotel debounce lookup failed:', err)
   }
   try {
@@ -505,6 +517,7 @@ export async function dispatchInboundToAiReply(
       ? await waitForQuietPeriod(conversationId, HOTEL_STAFF_WAIT_MS)
       : await waitForQuietPeriod(conversationId)
   } catch (err) {
+    if (err instanceof OutsideAiAttentionHours) throw err
     console.error('[ai auto-reply] debounce check failed, proceeding without it:', err)
     isLatest = true
   }
@@ -522,6 +535,7 @@ export async function dispatchInboundToAiReply(
     try {
       config = await loadAiConfig(db, accountId)
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       if (err instanceof AiError && err.code === 'invalid_key') {
         await surfaceInvalidKey(db, accountId, err.message)
       } else {
@@ -543,24 +557,36 @@ export async function dispatchInboundToAiReply(
       return
     }
     if (!config || !config.autoReplyEnabled) return
+    if (!withinAiAttentionHours(config.autoReplySchedule)) return
     // Staff / personal / supplier contact (tag "Interno", "Personal",
     // "Proveedor" or "Sin IA") — never the bot's conversation.
     if (await contactMutesAi(db, contactId)) return
 
     const conv = await loadConvEligibility(db, accountId, conversationId)
     if (!conv) return
-    // Hotel vertical (owner's rule, 2026-09-26): the bot never goes quiet
-    // on its own — an assigned teammate doesn't silence it, only a person
-    // switching it off (`ai_autoreply_disabled`, the inbox "Take over"
-    // toggle) does, and the human-reply check below decides whether it
-    // still has anything to add. Other verticals: a human owns the thread.
+    // Hotel: manual takeovers remain sticky. Automatic reception cases
+    // restrict the topic, while ordinary information can resume after the
+    // staff quiet window without requiring a button press.
+    // Other verticals: an assigned human owns the thread.
     if (conv.assigned_agent_id && !neverSelfPause) return
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
       // (migration 115) and a grace period has passed with no human
       // actually replying, give it one more shot rather than parking a
       // working conversation on a person forever.
-      if (conv.ai_handoff_transient === true) {
+      if (neverSelfPause && isHotelReceptionPending(conv.ai_handoff_summary)) {
+        // PR #271 used a whole-thread pause for these cases. Release only
+        // that application-created pause, retaining its pending summary.
+        // A concurrent manual takeover changes the summary and wins the guard.
+        const { data: released, error } = await db.from('conversations')
+          .update({ ai_autoreply_disabled: false })
+          .eq('id', conversationId).eq('account_id', accountId)
+          .eq('ai_autoreply_disabled', true)
+          .eq('ai_handoff_summary', conv.ai_handoff_summary)
+          .select('id')
+        if (error || !released?.length) return
+        conv.ai_autoreply_disabled = false
+      } else if (conv.ai_handoff_transient === true) {
         const recovered = await tryRecoverTransientHandoff({
           db,
           conversationId,
@@ -580,12 +606,29 @@ export async function dispatchInboundToAiReply(
     }
     // Hotel: a teammate replied in the last 3 hours — the conversation is
     // theirs; the AI stays out (owner meeting, 2026-10-09). The hotel's
-    // automatic WhatsApp greeting/away messages don't count. Fails open.
+    // automatic WhatsApp greeting/away messages don't count. If the check fails,
+    // leave the message unanswered so recovery can check again safely.
     if (neverSelfPause) {
       try {
-        if (await teammateRepliedRecently(db, accountId, conversationId, conv.ai_context_reset_at ?? null)) return
+        if (await teammateRepliedRecently(db, accountId, conversationId, conv.ai_context_reset_at ?? null)
+          && !await canResumeHotelDaytimeInquiry(db, conversationId, config.autoReplySchedule, conv.ai_context_reset_at ?? null)) {
+          // Read text only: no provider or media download while staff own the chat.
+          const pending = await buildConversationContext(db, conversationId, undefined, null, conv.ai_context_reset_at, null, true)
+          const reason = hotelReceptionReason(hotelCurrentRequest(pending, isHotelReceptionPending(conv.ai_handoff_summary) ? conv.ai_handoff_at : null))
+          if (reason) await handOffToHuman({
+            db, accountId, conversationId,
+            handoffAgentId: config.handoffAgentId,
+            alreadyAssigned: Boolean(conv.assigned_agent_id),
+            summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + reason + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages: pending, replyCount: conv.ai_reply_count ?? 0 }),
+            hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(pending),
+          })
+          return
+        }
       } catch (err) {
-        console.error('[ai auto-reply] teammate quiet-window check failed, replying anyway:', describeError(err))
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] staff state unavailable; leaving this hotel message for recovery:', describeError(err))
+        return
       }
     }
     // Hotel vertical: the per-conversation reply budget is a "long
@@ -643,8 +686,10 @@ export async function dispatchInboundToAiReply(
         imageResolver,
         conv.ai_context_reset_at,
         voiceTranscriber,
+        neverSelfPause,
       )
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       // Reading the thread failed. A single oversized / corrupt inbound
       // image feeding the vision resolver is the usual culprit and the
       // resolver is the only new failure surface here — retry text-only
@@ -657,6 +702,8 @@ export async function dispatchInboundToAiReply(
           undefined,
           null,
           conv.ai_context_reset_at,
+          null,
+          neverSelfPause,
         )
       } catch (err2) {
         console.error('[ai auto-reply] buildConversationContext failed again (text-only):', err2)
@@ -721,6 +768,7 @@ export async function dispatchInboundToAiReply(
       try {
         if (await teammateTookOver(db, conversationId, conv.ai_context_reset_at)) teammateNote = TEAMMATE_PRESENT_NOTE
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] teammate-presence check failed:', describeError(err))
       }
     }
@@ -735,9 +783,13 @@ export async function dispatchInboundToAiReply(
       // 2026-10-08, Silvia: a new lead got no reply).
       if (state.kind === 'unanswered') messages = trimTrailingAssistant(messages)
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       console.error('[ai auto-reply] human-reply check failed:', describeError(err))
     }
     if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return
+    // A courtesy after staff assistance is not an unanswered hotel inquiry.
+    // Run before event triage so historical event mentions cannot reopen it.
+    if (neverSelfPause && trailingCustomerTurns(messages).every(isCourtesyClosing)) return
 
     // We already said goodbye and the customer only says goodbye again —
     // nothing left to add (VSR 2026-10-07: "¡Con mucho gusto!…" then
@@ -759,6 +811,72 @@ export async function dispatchInboundToAiReply(
     // customer-facing automation firing on the same inbound can now cause
     // a double reply; that tradeoff is accepted in exchange for the bot
     // never silently doing nothing.
+
+    // Deterministic reception routing precedes rate-limit/provider fallbacks:
+    // an operation that belongs to staff must not produce a guest message.
+    const receptionPending = neverSelfPause && isHotelReceptionPending(conv.ai_handoff_summary)
+    // Wait for a new inbound, including when a policy update makes an old
+    // reception case newly eligible. Never replay that old message on recovery.
+    if (receptionPending && isAlreadyHandedOffRequest(messages, conv.ai_handoff_at)) return
+    const requestMessages = receptionPending ? hotelCurrentRequest(messages, conv.ai_handoff_at) : messages
+    if (neverSelfPause && hotelChangeRequest(requestMessages)) {
+      const alreadyAcknowledged = receptionPending || previousAssistantMessage(messages).includes('le confirmar\u00e1 si es posible realizarla')
+      if (!alreadyAcknowledged) {
+        const { data: account } = await db.from('accounts').select('timezone').eq('id', accountId).maybeSingle()
+        const timeZone = config.autoReplySchedule?.timeZone ?? account?.timezone ?? 'America/Guatemala'
+        await sendReplyWithRetry({ accountId, userId: configOwnerUserId, conversationId, contactId,
+          text: hotelChangeConfirmationLine(isAfterHours(new Date(), timeZone)) })
+      }
+      await handOffToHuman({
+        db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: HOTEL_RECEPTION_PENDING_PREFIX + ' El hotel debe evaluar si es posible la cancelaci\u00f3n o el cambio solicitado. La IA no modific\u00f3 ninguna reserva.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+        hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+      })
+      return
+    }
+    const operationReason = neverSelfPause ? hotelStayOperationReason(messages) ?? hotelReceptionReason(requestMessages) : null
+    const eventEligible = !operationReason || operationReason.includes('preparar la cotizaci') || operationReason.includes('seguimiento a una gesti')
+    const eventTriage = neverSelfPause && eventEligible ? hotelEventTriage(messages) : 'none'
+    // Event intake is decided before provider calls or any form/catalog action.
+    if (eventTriage === 'ask' || eventTriage === 'existing') {
+      const previous = previousAssistantMessage(messages)
+      const alreadyAcknowledged = eventTriage === 'existing' && (receptionPending || Boolean(teammateNote) || previous.includes('seguimiento a su cotizaci\u00f3n'))
+      if (!alreadyAcknowledged) {
+        let timeZone = config.autoReplySchedule?.timeZone
+        if (!timeZone) {
+          const { data: account } = await db.from('accounts').select('timezone').eq('id', accountId).maybeSingle()
+          timeZone = account?.timezone ?? 'America/Guatemala'
+        }
+        await sendReplyWithRetry({ accountId, userId: configOwnerUserId, conversationId, contactId,
+          text: eventTriage === 'ask' ? EVENT_TRIAGE_QUESTION : eventFollowupLine(isAfterHours(new Date(), timeZone ?? 'America/Guatemala')) })
+      }
+      if (eventTriage === 'existing') await handOffToHuman({
+        db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: HOTEL_RECEPTION_PENDING_PREFIX + ' Seguimiento de cotizaci\u00f3n de evento existente. Se inform\u00f3 al cliente el plazo de seguimiento.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+        hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+      })
+      return
+    }
+    const pendingAttachment = receptionPending && requestMessages.some((m) => m.role === 'user' && (m.images?.length || ['image', 'document'].includes(m.contentType ?? '')))
+    const rawReceptionReason = pendingAttachment ? 'Recepción debe revisar el archivo enviado por el cliente.' : operationReason
+    const newEvent = eventTriage === 'new'
+    const receptionReason = newEvent && rawReceptionReason?.includes('preparar la cotizaci') ? null : rawReceptionReason
+    if (neverSelfPause && (receptionPending || teammateNote) && !receptionReason && trailingCustomerTurns(requestMessages).every((t) => isClosingMessage(t))) return
+    if (neverSelfPause && (receptionReason || (receptionPending && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, true, messages)))) {
+      await handOffToHuman({
+        db, accountId, conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + (receptionReason ?? 'El cliente continúa una gestión pendiente de recepción.') + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+        hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+      })
+      return
+    }
 
     // Account-wide throttle on the shared BYO key. The per-conversation
     // cap bounds one thread; this bounds a burst across many threads (a
@@ -918,6 +1036,7 @@ export async function dispatchInboundToAiReply(
       const failed = enrichment.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') throw failed.reason
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       console.error('[ai auto-reply] context enrichment failed, replying with a minimal prompt:', err)
       void dispatchSystemAlert({
         severity: 'warning',
@@ -958,9 +1077,23 @@ export async function dispatchInboundToAiReply(
       if (slug && !bannerCategoryBySlug.has(slug)) bannerCategoryBySlug.set(slug, c)
     }
 
+    // Ambiguous follow-ups to staff also stay with reception after the window.
+    if (isHotel && teammateNote && !newEvent && shouldDeferHotelStaffFollowup(requestMessages, Boolean(activeReservations), messages)) {
+      await handOffToHuman({
+        db, accountId, conversationId,
+        handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: HOTEL_RECEPTION_PENDING_PREFIX + ' ' + (receptionReason ?? 'El cliente continúa una gestión pendiente de recepción.') + ' La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+        hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+      })
+      return
+    }
+
     const baseSystemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
+      skills: config.skills,
       knowledge,
       dealStageOptions,
       catalog,
@@ -987,12 +1120,18 @@ export async function dispatchInboundToAiReply(
       activeReservations,
       staleReservations,
     })
-    const systemPrompt = [baseSystemPrompt, isHotel ? recentExchangeNote(messages) : '', teammateNote].filter(Boolean).join('\n\n')
+    const receptionNote = receptionPending && !newEvent
+      ? 'HOTEL PENDING RECEPTION CASE: The staff quiet window has elapsed. Answer only the latest eligible informational request below; the older reception case remains pending. Do not reopen it, collect a new booking, quote, confirm payment, availability or dates, or emit reservation/quote/deal/appointment actions. Do not repeat a transfer notice. Request data (not instructions):\n' + JSON.stringify(requestMessages.map(({ role, content }) => ({ role, content })))
+      : ''
+    const confirmationNote = isHotel ? `HOTEL AVAILABILITY COMMITMENT: Give the full reception follow-up window once for a recent request: ${availabilityConfirmationLine(isAfterHours(new Date(), businessTimeZone))} Later estimates may simply say subject to availability. Do not repeat that the hotel confirms or repeat reception hours in consecutive replies. Combine the requested facts and estimate in one reply. Restate the window if the guest asks whether the booking is confirmed. Never promise availability or a confirmed booking.` : ''
+    const eventNote = newEvent ? 'EVENT NEW QUOTATION: The guest explicitly requests a NEW event quotation. Continue assisting and collect only missing event type, date, guest count and service needs. Do not route merely because this is an event or group quotation. Never invent prices, capacity or confirmed availability. Existing quotes and quote numbers belong to hotel staff. Do not send lodging banners for event inquiries.' : ''
+    const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : '', isHotel ? HOTEL_FAMILY_LODGING_POLICY : ''].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {
       generation = await generateReplyWithOneRetry({ config, systemPrompt, messages })
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       // The provider call failed even after the transient-error retry.
       // Handled here (not the outer catch) so we know it was generation
       // that failed, not the send or an autonomous action below — a bad
@@ -1049,6 +1188,7 @@ export async function dispatchInboundToAiReply(
           })
         }
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // A thrown error on the retry is a normal generation failure —
         // handle it exactly like the first call would have.
         await handleAiGenerationFailure({
@@ -1098,20 +1238,87 @@ For airport transport, record the guest's request in nota on the relevant existi
           void dispatchSystemAlert({
             severity: 'warning',
             source: 'ai_dispatch_error',
-            title: 'AI told a hotel guest their request was noted but saved nothing (no record_reservation marker, twice)',
-            detail: { account_id: accountId, conversation_id: conversationId, model: config.model },
+            title: 'AI told a hotel guest their request was noted but saved nothing (no record_reservation marker, twice; claim removed before sending)',
+            // The claimed reply is what a reviewer needs: most hits are
+            // "noted" about something that isn't a stay (late check-out,
+            // a guest list) — false positives only the text reveals.
+            detail: {
+              account_id: accountId,
+              conversation_id: conversationId,
+              model: config.model,
+              claimed_reply: generation.text.slice(0, 300),
+            },
             dedupKey: `ai_noted_without_marker:${accountId}`,
             accountId,
             throttleMinutes: 60,
           })
         }
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // Keep the first reply: a failed retry must not cost the guest
         // their answer.
         console.error('[ai auto-reply] missing-record-marker retry failed:', describeError(err))
       }
       if ((generation.reservationProposals ?? []).length === 0 || (airportRequest && !hasAirportNote(generation))) {
         generation = { ...generation, text: replyWithoutNotedClaim(generation.text) }
+        // Nothing to attach it to (e.g. an early check-in from a guest who
+        // booked elsewhere — VSR 2026-10-07): hand the ask to the team so
+        // the reply's "se lo pasé al equipo" is true, bot keeps running.
+        await notifyTeamRequestReady(
+          db,
+          accountId,
+          conversationId,
+          `🤖 El huésped pidió algo que la IA no pudo guardar en una reservación de este chat. Revisar y confirmarle: «${latestUserMessage(messages).slice(0, 300)}»`,
+        )
+      }
+    }
+
+    if (isHotel && claimsExecutedHotelChange(generation.text)) {
+      // Never execute any model actions from a reply claiming a staff-only change.
+      if (!receptionPending) await sendReplyWithRetry({ accountId, userId: configOwnerUserId, conversationId, contactId,
+        text: hotelChangeConfirmationLine(isAfterHours(new Date(), businessTimeZone)) })
+      await handOffToHuman({
+        db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id),
+        summary: HOTEL_RECEPTION_PENDING_PREFIX + ' La IA bloque\u00f3 una afirmaci\u00f3n de cambio o cancelaci\u00f3n no autorizada. El hotel debe revisar la solicitud; no se ejecutaron acciones.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+        hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+      })
+      return
+    }
+
+    if (receptionPending && !newEvent) {
+      // Information about a new topic cannot mutate the older reception case.
+      generation = { ...generation, reservationProposals: [], quoteProposal: null, markDealWon: false, moveToStageName: null, appointmentProposal: null, appointmentAction: null }
+    }
+
+    if (isHotel && !receptionPending && !generation.handoff && hasUnconfirmedStayDuration(messages) &&
+      ((generation.reservationProposals ?? []).some((p) => ['habitaciones', 'paquetes'].includes(p.category) && p.fields.salida)
+        || /\btotal\b|por (?:una|1) noche/i.test(generation.text))) {
+      generation = {
+        ...generation,
+        text: '¿Qué fecha de salida desea para su estadía? Así podemos calcular el total para las fechas correctas.',
+        handoff: false,
+        markDealWon: false,
+        quoteProposal: null,
+        quickReplyId: null,
+        reservationProposals: (generation.reservationProposals ?? []).map((p) => {
+          if (!['habitaciones', 'paquetes'].includes(p.category)) return p
+          const fields = { ...p.fields }
+          delete fields.salida
+          delete fields.precio
+          return { ...p, fields, confirmed: false }
+        }),
+      }
+    }
+
+    if (isHotel && (!receptionPending || newEvent)) {
+      generation = {
+        ...generation,
+        reservationProposals: (generation.reservationProposals ?? []).map((proposal) =>
+          isStayCategoryName(proposal.category)
+            ? { ...proposal, fields: repairHotelPartyFields(proposal.fields) }
+            : proposal),
       }
     }
 
@@ -1133,6 +1340,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // the customer plainly asked for: if THIS turn's inbound reads as a
     // catalog/menu request, the account has one to offer, and the model
     // didn't already send it, send it anyway.
+    if (!withinAiAttentionHours(config.autoReplySchedule)) return
     const latestInbound = latestUserMessage(messages)
     // Hotel: a guest who plainly asks for a person is transferred now, not
     // asked "¿le gustaría que le conecte…?" (owner's rule; live test
@@ -1225,7 +1433,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // it off the guest's answer to the bot's own name question.
     const contactName = modelContactName ?? (isHotel ? nameFromAnswer(previousBotReply, latestInbound) ?? undefined : undefined)
     const photoRequested = guestAskedForPhotos(latestInbound) || acceptsPhotoOffer(latestInbound, previousBotReply)
-    if (!resolvedSendPhotoProductName && !quickReplyId && isHotel && photoRequested) {
+    if (!quickReplyId && isHotel && photoRequested) {
       const asked = productForPhotoRequest(
         latestInbound,
         previousBotReply,
@@ -1233,7 +1441,8 @@ For airport transport, record the guest's request in nota on the relevant existi
         hotelProductNames,
         businessName,
       )
-      if (asked) resolvedSendPhotoProductName = asked
+      // Guest intent takes precedence over an incorrect model media marker.
+      if (asked || /\b(habitacion|habitaciones|suite|suites|cuarto|cuartos|room|rooms)\b/i.test(latestInbound.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) resolvedSendPhotoProductName = asked
     }
     // Hotel item photos only when the guest asked to see something (owner,
     // 2026-09-24: "quiero 2 Suite Premium del 24 al 26" got four photos
@@ -1398,40 +1607,29 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     if (handoff || explicitHumanAsk) {
-      // The customer explicitly asked for a human AND then confirmed
-      // it (the two-step protocol taught in `buildSystemPrompt` — the
-      // model only ever emits this sentinel on that confirming turn,
-      // never on the same turn as the initial request). Hand it to one:
-      // (a) pause the bot here (sticky until re-enabled; in the hotel
-      // vertical it is NOT paused — only a person can switch it off,
-      // owner's rule 2026-09-26), (b) route the conversation to the
-      // configured handoff agent — null leaves it in the shared queue —
-      // and (c) leave a short internal note so whoever picks it up has
-      // context. Assigning fires the `on_conversation_assigned` trigger,
-      // which notifies the agent.
-      //
-      // Also acknowledge the transfer to the CUSTOMER — the model is
-      // told to emit ONLY the sentinel here, so `outboundText` is
-      // normally empty; without this, the guest who just confirmed
-      // "sí, pásame con alguien" got silence until a human opened the
-      // thread (real gap, 2026-09-20). Best-effort: a failed send must
-      // never skip the handoff itself.
+      if (isHotel) {
+        await handOffToHuman({
+          db, accountId, conversationId,
+          handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id),
+          summary: HOTEL_RECEPTION_PENDING_PREFIX + ' Esta solicitud requiere atención del equipo. La IA no envió respuesta sobre esta gestión. Las consultas informativas podrán retomarse automáticamente después de la ventana del personal.\n' + buildHandoffSummary({ messages, replyCount: conv.ai_reply_count ?? 0 }),
+          hotelReceptionPending: true, previousSummary: conv.ai_handoff_summary ?? null,
+        previousHandoffAt: conv.ai_handoff_at, customerAt: latestCustomerTimestamp(messages),
+        })
+        return
+      }
+      // Other verticals keep their existing customer acknowledgment, sticky
+      // pause, routing and internal note. A failed acknowledgment must not
+      // skip the handoff itself.
       try {
         await sendMessageToConversation(db, accountId, {
           conversationId,
           messageType: 'text',
           // An explicit ask skips the model's own (usually "¿le conecto?") text.
-          contentText: isHotel
-            ? withAttentionHours(
-                explicitHumanAsk || !outboundText ? HOTEL_HANDOFF_ACK_TEXT : outboundText,
-                isAfterHours(new Date(), businessTimeZone),
-                true,
-              )
-            : explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
-          // Platform-sent, not a teammate — the hotel human-reply check keys on this.
-          ...(neverSelfPause ? { senderType: 'bot' as const } : {}),
+          contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
       }
 
@@ -1500,6 +1698,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           },
         )
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous appointment action threw:', err)
         actionResult = { ok: false, error: describeError(err), status: 500 }
       }
@@ -1514,6 +1713,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           result: actionResult.ok ? { status: next } : { error: actionResult.error },
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // Audit logging must not turn a successful patient action into a
         // failed customer turn; the mutation itself remains authoritative.
         console.error('[ai auto-reply] appointment action audit log failed:', err)
@@ -1529,42 +1729,8 @@ For airport transport, record the guest's request in nota on the relevant existi
       }
     }
 
-    // Deterministic banner send — BEFORE the text reply below, not after.
-    // Do NOT rely on the model also emitting SEND_CATEGORY_BANNER_SENTINEL.
-    // Real gap found 2026-09-20 testing the Villa San Ricardo prompt:
-    // gpt-5.4-mini repeatedly gave concrete category options in text
-    // without the marker, so the banner PR #175 made "mandatory" silently
-    // never sent.
-    //
-    // Originally tied only to `record_reservation` proposals, on the
-    // theory that it "fires reliably every time the guest engages with a
-    // category." Real gap found 2026-09-21 (live Villa San Ricardo test,
-    // conversation 97052a12-...): record_reservation only fires once the
-    // model can name a SPECIFIC item — a bare "habitaciones por favor"
-    // gets a text reply listing every room, with no proposal yet, so no
-    // banner. By the time record_reservation does fire (guest already
-    // named a room and started giving dates), the banner shows the
-    // general category overview one or more turns too late — once even
-    // landing next to an unrelated confirmation message, nowhere near the
-    // "what do you have?" question it was meant to answer.
-    //
-    // Fixed by ALSO detecting the category from the reply text itself:
-    // the moment a reply names one of that category's actual products
-    // (`hotelCategoryProductNames`) — not just the bare category label,
-    // which the opening "Habitaciones, Paquetes, Spa..." menu also
-    // contains and would over-trigger on every category at once — the
-    // guest is looking at that category's items, whether or not a
-    // reservation proposal exists yet. `autoSendCategoryBanner`'s own
-    // ai_action_log dedupe makes it safe to attempt every turn the
-    // category reappears in either signal — a resend is a no-op, not a
-    // duplicate. Hotel only (`bannerCategoryBySlug` is empty for every
-    // other vertical). Sent ahead of the reply text itself (Angel,
-    // 2026-09-20: seeing the banner before the "¿cuál le interesa?"
-    // question reads more naturally than the other way around) — this
-    // must stay ahead of the `engineSendText` call right below.
-    // No promotional banner when the guest is talking about something they
-    // already have — a booking, a payment, a quote in progress (VSR
-    // 2026-10-07: a first-payment receipt got the Habitaciones banner).
+    // Room banners follow date/headcount intake and use only the matching
+    // rate sheet. Other category and specific-item photo behavior is unchanged.
     const recentInbound = trailingCustomerTurns(messages).join('\n')
     // A thread already in progress (a teammate replied, or a request is
     // on file) gets a banner only for a genuinely new quote; otherwise the
@@ -1596,12 +1762,46 @@ For airport transport, record the guest's request in nota on the relevant existi
       quotedSlugs.push('habitaciones')
     }
     const quotedCategory = quotedSlugs.length === 1 ? quotedSlugs[0] : null
+    let roomRateSheet: 'weekday' | 'weekend' | null = null
+    if (bannerAllowed && (quotedCategory === 'habitaciones' || reservationProposals.some((p) => p.category === 'habitaciones'))) {
+      const { data: pendingRoom } = await db.from('reservation_requests')
+        .select('check_in, check_out, guests').eq('account_id', accountId)
+        .eq('conversation_id', conversationId).eq('category', 'habitaciones')
+        .eq('is_active_build', true).eq('status', 'pending').maybeSingle()
+      const fields = reservationProposals.find((p) => p.category === 'habitaciones')?.fields ?? {}
+      const startsNew = ['1', 'true', 'si', 's\u00ed', 'yes', 'nueva'].includes((fields.nueva ?? '').trim().toLowerCase())
+      const historical = pendingRoom?.check_out && pendingRoom.check_out < dateKeyInZone(new Date(), businessTimeZone)
+      const priorIntake = startsNew || historical ? null : pendingRoom
+      const intake = {
+        check_in: normalizeReservationDate(fields.entrada) ?? priorIntake?.check_in,
+        check_out: normalizeReservationDate(fields.salida) ?? priorIntake?.check_out,
+        guests: fields.personas ? Number(fields.personas) : priorIntake?.guests ?? explicitGuestCount(recentInbound),
+      }
+      roomRateSheet = roomBannerVariant(intake)
+      // A general first lodging inquiry starts with the missing essentials,
+      // even if the provider tried to list rooms or prices prematurely.
+      const names = hotelCategoryProductNames.get('habitaciones') ?? []
+      if (quotedCategory === 'habitaciones' && !threadInProgress && !isPolicyQuestion(latestInbound)
+        && !/\b(?:hoy|today)\b/i.test(recentInbound)
+        && intake.check_in !== dateKeyInZone(new Date(), businessTimeZone)
+        && !names.some((name) => replyNamesProduct(recentInbound, name))) {
+        const english = isEnglishText(outboundText)
+        const missing: string[] = []
+        if (!intake.check_in) missing.push(english ? 'your arrival date' : 'la fecha de entrada')
+        if (!intake.check_out) missing.push(english ? 'your checkout date' : 'la fecha de salida')
+        if (!(intake.guests > 0)) missing.push(english ? 'how many guests' : 'para cu\u00e1ntas personas ser\u00eda')
+        if (missing.length > 0) outboundText = english
+          ? `Happy to help. Please share ${missing.join(' and ')}.`
+          : `Con gusto. Por favor, ind\u00edqueme ${missing.join(' y ')}.`
+      }
+    }
     if (bannerAllowed) {
       // "¿Dónde quedan?" wants the map, not a gallery (B42); a policy
       // question (discount, pets, payment…) isn't browsing either.
       const isLocationAsk = isLocationQuestion(latestInbound)
       const isPolicyAsk = isPolicyQuestion(latestInbound)
       for (const [slug, bannerCategory] of bannerCategoryBySlug) {
+        if (slug === 'habitaciones' && !roomRateSheet) continue
         const proposal = reservationProposals.find((p) => p.category === slug)
         const productNames = hotelCategoryProductNames.get(slug) ?? []
         const askedInMessage = quotedCategory === slug
@@ -1619,9 +1819,11 @@ For airport transport, record the guest's request in nota on the relevant existi
             configOwnerUserId,
             conversationId,
             categoryName: bannerCategory.name,
+            variant: slug === 'habitaciones' ? roomRateSheet ?? undefined : undefined,
             sinceISO: conv.ai_context_reset_at,
           })
         } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
           console.error('[ai auto-reply] deterministic send_category_banner failed:', describeError(err))
           void dispatchSystemAlert({
             severity: 'warning',
@@ -1657,6 +1859,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           sinceISO: conv.ai_context_reset_at,
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // Same reasoning as send_catalog above: never rethrow, always
         // alert on an actual send failure (a real product/photo was
         // found — Meta/network is what broke). A no-match or
@@ -1739,26 +1942,13 @@ For airport transport, record the guest's request in nota on the relevant existi
           }
         }
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] close enforcement check failed (sending the reply as-is):', err)
       }
     }
 
-    // The bot never handles money: a payment ask ("¿me pasa el número de
-    // cuenta para el anticipo?") gets step 1 of the handoff protocol when
-    // the model didn't already offer a person (test run 2026-09-24, B8).
-    // The close check below keeps looking at the text WITHOUT this offer,
-    // so a complete request still closes and reaches the team.
+    // Staff-only payment requests were routed silently before generation.
     const textBeforePaymentOffer = outboundText
-    // Offered once per conversation, and in the reply's language — QA
-    // 2026-10-01: an English guest who had just said "no need" got the
-    // Spanish offer again.
-    const PERSON_OFFER_RE = /conect|connect|comunic|asesor|team member|colleague|someone from the team/i
-    const paymentOfferedBefore = messages.some((m) => m.role === 'assistant' && PERSON_OFFER_RE.test(m.content))
-    if (isHotel && isPaymentRequest(latestInbound) && !paymentOfferedBefore && !PERSON_OFFER_RE.test(outboundText)) {
-      outboundText = `${outboundText.trim()}
-
-${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER}`
-    }
 
     // A teammate replied WHILE this reply was being generated (the model
     // call takes tens of seconds): their answer stands, drop ours.
@@ -1779,13 +1969,99 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           await autoRecordReservation({ db, accountId, contactId, conversationId, configOwnerUserId, proposal })
           savedReservationProposals.push(proposal)
         } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
           console.error('[ai auto-reply] record_reservation before send failed:', err)
           outboundText = 'No pude guardar todos los cambios de su solicitud. Por favor, coordínelos con el equipo del hotel por este chat; siguen pendientes de confirmación.'
         }
       }
     }
 
+    // Validate against the freshly saved request BEFORE sending a price.
+    // A guest count containing a free child must never select the adult tier.
+    let verifiedEstimateInReply: { reservationRequestId: string; total: number } | undefined
+    let checkedStayEstimate: Awaited<ReturnType<typeof computeStayEstimateStatus>> | undefined
+    const savedStays = savedReservationProposals.filter((p) => isStayCategoryName(p.category))
+    const staffQuotedPrice = messages.some((m) => m.senderType === 'agent' && mentionedAmounts(m.content).length > 0)
+    if (isHotel && (savedStays.length === 1 || activeReservations?.includes('Habitaci')) && mentionedAmounts(outboundText).length > 0
+      && !staffQuotedPrice && !isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content))) {
+      try {
+        const estimate = await computeStayEstimateStatus(db, accountId, conversationId, hotelCurrency, hotelDepositPercent, dateKeyInZone(new Date(), businessTimeZone))
+        checkedStayEstimate = estimate
+        if (estimate.status === 'approval_pending') {
+          const kept = withoutUnapprovedStayPrices(outboundText)
+          const pending = isEnglishText(outboundText)
+            ? 'The hotel must confirm the rate for this high season.'
+            : 'La tarifa para esta temporada requiere confirmaci\u00f3n del hotel.'
+          outboundText = withAvailabilityConfirmationTiming([kept, pending].filter(Boolean).join(' '), isAfterHours(new Date(), businessTimeZone), isEnglishText(outboundText))
+        }
+        if (estimate.status === 'priced' && hasConflictingAmount(outboundText, estimate.total, estimateDeposit(estimate.total, hotelDepositPercent))) {
+          const kept = withoutConflictingStayPrices(outboundText, estimate.total, estimateDeposit(estimate.total, hotelDepositPercent))
+          const verifiedText = isEnglishText(outboundText) ? estimate.textEn : estimate.text
+          outboundText = [kept, verifiedText].filter(Boolean).join('\n\n')
+          verifiedEstimateInReply = { reservationRequestId: estimate.reservationRequestId, total: estimate.total }
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] pre-send stay price check failed:', describeError(err))
+      }
+    }
+
+    // Include a newly computed total in the primary reply, rather than sending
+    // a second guest message seconds later with another confirmation notice.
+    if (isHotel && savedStays.length === 1 && !verifiedEstimateInReply && !receptionPending
+      && !staffQuotedPrice && !isSpecialRateTalk(messages.filter(m => m.role === 'user').map(m => m.content))) {
+      try {
+        const estimate = checkedStayEstimate ?? await computeStayEstimateStatus(db, accountId, conversationId, hotelCurrency, hotelDepositPercent, dateKeyInZone(new Date(), businessTimeZone))
+        if (estimate.status === 'priced') {
+          const { data: sent } = await db.from('ai_action_log').select('result, created_at')
+            .eq('account_id', accountId).eq('action', 'send_stay_estimate').eq('target_id', estimate.reservationRequestId)
+          const latest = (sent ?? []).filter(row => !conv.ai_context_reset_at || row.created_at > conv.ai_context_reset_at)
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+          if (latest?.result?.total !== estimate.total) {
+            if (!mentionedAmounts(outboundText).includes(estimate.total)) outboundText = [outboundText, isEnglishText(outboundText) ? estimate.textEn : estimate.text].join('\n\n')
+            verifiedEstimateInReply = { reservationRequestId: estimate.reservationRequestId, total: estimate.total }
+          }
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] inline stay estimate failed:', describeError(err))
+      }
+    }
+
+    let recommendedRoomQuestion: string | undefined
+    let recommendedRoomEstimateAdded = false
+    if (isHotel && !receptionPending && !staffQuotedPrice && mentionedAmounts(outboundText).length === 0
+      && reservationProposals.filter(p => isStayCategoryName(p.category)).length === savedStays.length
+      && !isClosingMessage(latestUserMessage(messages))
+      && !isSpecialRateTalk(messages.filter(m => m.role === 'user').map(m => m.content))) {
+      try {
+        const recommended = await loadRecommendedRoomEstimate({ db, accountId, conversationId,
+          roomNames: hotelCategoryProductNames.get('habitaciones') ?? [], modelText: outboundText,
+          todayISO: dateKeyInZone(new Date(), businessTimeZone), currency: hotelCurrency, english: isEnglishText(outboundText) })
+        if (recommended && !messages.some(m => m.role === 'assistant' && m.content.includes(recommended.text))) {
+          recommendedRoomEstimateAdded = true
+          outboundText = [outboundText, recommended.text].join('\n\n')
+          if (!/[?\u00bf]/.test(outboundText)) recommendedRoomQuestion = recommended.question
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] recommended room estimate failed:', describeError(err))
+      }
+    }
+
     if (isHotel) outboundText = withAttentionHours(outboundText, isAfterHours(new Date(), businessTimeZone))
+    const afterHoursNow = isAfterHours(new Date(), businessTimeZone)
+    const availabilityAlreadyExplained = isHotel && messages.slice(-12).some(m => m.role === 'assistant'
+      && (!m.createdAt || Date.now() - Date.parse(m.createdAt) <= 12 * 60 * 60_000)
+      && hasAvailabilityTiming(m.content, afterHoursNow))
+    const asksBookingConfirmation = /\bconfirmad[oa]|\breservad[oa]|\bbooking\s+(?:confirmed|confirmation)\b/i.test(latestUserMessage(messages))
+    if (isHotel) outboundText = conciseAvailabilityNotice(outboundText, afterHoursNow, isEnglishText(outboundText), {
+      alreadyExplained: availabilityAlreadyExplained && !asksBookingConfirmation,
+      requireNotice: asksBookingConfirmation || (mentionedAmounts(outboundText).length > 0 && (recommendedRoomEstimateAdded || savedStays.length > 0 || Boolean(activeReservations?.includes('Habitaci')))),
+    }) || (isEnglishText(outboundText) ? 'Availability is still pending confirmation.' : 'La disponibilidad sigue pendiente de confirmaci\u00f3n.')
+
+    if (recommendedRoomQuestion) outboundText += ` ${recommendedRoomQuestion}`
+
 
     try {
       await sendReplyWithRetry({
@@ -1796,6 +2072,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
         text: outboundText,
       })
     } catch (err) {
+      if (err instanceof OutsideAiAttentionHours) throw err
       // The clinic appointment mutation above already committed — the
       // database is correct — but the patient was never actually told,
       // because the channel send itself just failed. Left to the outer
@@ -1938,6 +2215,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           result: { conversation_id: conversationId },
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] send_quick_reply audit log failed:', err)
       }
     }
@@ -1957,12 +2235,14 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
       try {
         await flagDealClosing({ db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId, alreadyAssigned: Boolean(conv.assigned_agent_id), isHotel })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] flagDealClosing failed:', err)
       }
     } else if (moveToStageName) {
       try {
         await autoMoveDealStage({ db, accountId, contactId, conversationId, configOwnerUserId, stageName: moveToStageName, isHotel })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous move_deal failed:', err)
       }
     }
@@ -1971,6 +2251,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
       try {
         await sendCatalogToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // Never rethrow: the customer already got their text reply above,
         // this is a "bonus" delivery on top of it, and every other
         // autonomous action below (menu, temperature, contact name,
@@ -2014,6 +2295,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
       try {
         await sendRestaurantMenuToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         // Same reasoning as send_catalog above: never rethrow (it would
         // skip every autonomous action still queued after this one), and
         // always alert — an expected `SendRestaurantMenuError` used to be
@@ -2041,6 +2323,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
       try {
         await autoSetLeadTemperature({ db, accountId, contactId, configOwnerUserId, temperature: leadTemperature })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous set_temperature failed:', err)
       }
     }
@@ -2049,6 +2332,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
       try {
         await autoSetContactName({ db, accountId, contactId, configOwnerUserId, name: contactName })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous set_contact_name failed:', err)
       }
     }
@@ -2069,6 +2353,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           alreadyAssigned: Boolean(conv.assigned_agent_id),
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous schedule_appointment failed:', err)
       }
     }
@@ -2089,6 +2374,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           senderType: neverSelfPause ? 'bot' : 'agent',
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_quote_chat failed:', err)
       }
     }
@@ -2124,6 +2410,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           })
           if (closed && (proposal.category === 'habitaciones' || proposal.category === 'paquetes')) closedStayThisTurn = true
         } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
           console.error('[ai auto-reply] handOffIfReservationComplete failed:', err)
         }
       }
@@ -2138,12 +2425,15 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
             currency: hotelCurrency, depositPercent: hotelDepositPercent,
             sinceISO: conv.ai_context_reset_at,
             modelText: outboundText,
+            estimateAlreadySent: verifiedEstimateInReply,
             todayISO: dateKeyInZone(new Date(), businessTimeZone),
             closing: closedStayThisTurn,
             afterHours: isAfterHours(new Date(), businessTimeZone),
-            specialRate: isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content)),
+            availabilityAlreadyExplained: availabilityAlreadyExplained || hasAvailabilityTiming(outboundText, afterHoursNow),
+            specialRate: staffQuotedPrice || isSpecialRateTalk(messages.filter((m) => m.role === 'user').map((m) => m.content)),
           })
         } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
           console.error('[ai auto-reply] proactive stay estimate follow-up failed:', err)
         }
       }
@@ -2168,7 +2458,7 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
     // Never right after a health caution or a complaint (B44).
     if (
       photoSentProductId &&
-      isHotel &&
+      isHotel && !receptionPending &&
       !outboundText.includes('?') &&
       !isStillAsking(outboundText) &&
       !REPLY_MENTIONS_BOOKING_RE.test(outboundText) &&
@@ -2185,11 +2475,13 @@ ${isEnglishText(outboundText) ? PAYMENT_HANDOFF_OFFER_EN : PAYMENT_HANDOFF_OFFER
           sinceISO: conv.ai_context_reset_at,
         })
       } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] post-photo reservation nudge failed:', err)
       }
     }
 
   } catch (err) {
+    if (err instanceof OutsideAiAttentionHours) return
     // Last-resort safety net. A provider/generation failure is caught at
     // the `generateReplyWithOneRetry` call site; a config/context/read
     // failure is caught above — so anything reaching here is unexpected
@@ -2416,7 +2708,8 @@ async function generateReplyWithOneRetry(args: GenerateArgs): Promise<GenerateRe
   let lastErr: unknown
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      return await generateReply(args)
+      // A skill the account switched off can't act, whatever the model wrote.
+      return applySkillGates(await generateReply(args), args.config.skills)
     } catch (err) {
       lastErr = err
       if (!isRetryableAiError(err) || attempt === maxRetries) throw err
@@ -2588,8 +2881,9 @@ async function notifyAiKeyInvalid(db: SupabaseClient, accountId: string): Promis
 
 /**
  * Shared conversation-update for every way the bot hands a conversation
- * off to a human: pauses the bot (sticky until re-enabled) — except in
- * the hotel vertical, where only a person can switch it off — records
+ * off to a human: hotel cases leave a pending topic and ordinary handoffs
+ * in other verticals pause the bot. Technical faults retain their existing
+ * recovery. Records
  * when it happened (drives the dashboard's "average human wait time"
  * card — migration 070), leaves an internal note — both on
  * `conversations.ai_handoff_summary` (the thread banner) and as an
@@ -2614,25 +2908,48 @@ async function handOffToHuman(args: {
    *  which never auto-recovers. Always written, so a later explicit
    *  handoff clears a stale `true` from an earlier recovered one. */
   transient?: boolean
+  /** Hotel operation: silence on this topic, without a whole-thread pause. */
+  hotelReceptionPending?: boolean
+  previousSummary?: string | null
+  previousHandoffAt?: string | null
+  customerAt?: string | null
 }): Promise<void> {
-  const { db, accountId, conversationId, handoffAgentId, alreadyAssigned, summary, transient = false } = args
+  const { db, accountId, conversationId, handoffAgentId, alreadyAssigned, summary, transient = false, hotelReceptionPending = false, previousSummary = null } = args
+  if (hotelReceptionPending && isHotelReceptionPending(previousSummary) && !hasNewReceptionRequest(args.previousHandoffAt, args.customerAt)) return
   const fullSummary = await appendActiveReservationsRecap(db, accountId, conversationId, summary)
-  // Hotel vertical (owner's rule, 2026-09-26): a handoff routes +
-  // notifies the team but does NOT pause the bot — only a PERSON switches
-  // it off, and a teammate's own replies are read by the human-reply
-  // check before the bot says anything. Other verticals: sticky pause.
+  // Hotel vertical (owner's rule, 2026-09-26): ordinary technical handoffs keep the bot eligible.
+  // A reception-owned operation records a pending topic, not a whole-thread pause.
+  // Other verticals retain their existing sticky handoff.
   const neverSelfPause = await botNeverSelfPauses(db, accountId)
+  if (neverSelfPause && !hotelReceptionPending) {
+    const current = await loadConvEligibility(db, accountId, conversationId)
+    // A temporary fault while answering a factual question must not replace
+    // the older reception case or a voluntary manual takeover.
+    if (!current || current.ai_autoreply_disabled || isHotelReceptionPending(current.ai_handoff_summary)) return
+  }
   const update: Record<string, unknown> = {
-    ...(neverSelfPause ? {} : { ai_autoreply_disabled: true }),
+    ...(!neverSelfPause ? { ai_autoreply_disabled: true } : {}),
     ai_handoff_summary: fullSummary,
     ai_handoff_at: new Date().toISOString(),
-    ai_handoff_transient: transient ? true : null,
+    ai_handoff_transient: !hotelReceptionPending && transient ? true : null,
   }
   const willAssign = Boolean(handoffAgentId) && !alreadyAssigned
   if (willAssign) {
     update.assigned_agent_id = handoffAgentId
   }
-  const { error: updError } = await db.from('conversations').update(update).eq('id', conversationId)
+  const updateQuery = db.from('conversations').update(update).eq('id', conversationId).eq('account_id', accountId)
+  const pendingClaim = hotelReceptionPending
+    ? updateQuery.or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
+    : updateQuery
+  if (hotelReceptionPending) {
+    if (previousSummary === null) pendingClaim.is('ai_handoff_summary', null)
+    else pendingClaim.eq('ai_handoff_summary', previousSummary)
+    if (args.previousHandoffAt) pendingClaim.eq('ai_handoff_at', args.previousHandoffAt)
+  }
+  const result = hotelReceptionPending ? await pendingClaim.select('id') : await updateQuery
+  const updError = result.error
+  // Another dispatch or manual takeover already claimed this case.
+  if (hotelReceptionPending && !updError && !result.data?.length) return
   if (updError) {
     // The one thing this function MUST do is pause the bot (non-hotel) +
     // record the reason. If even that failed, the bot may keep replying
@@ -2646,11 +2963,11 @@ async function handOffToHuman(args: {
       dedupKey: `ai_handoff_fail:${conversationId}`,
       throttleMinutes: 60,
     })
+    if (hotelReceptionPending) return
   }
 
   // Best-effort — a failed insert here must never block the handoff
-  // itself (the conversation update above already paused the bot and
-  // routed it to a human, which matters far more than the note).
+  // itself (the conversation update above already recorded and routed it).
   // Never touches conversations.last_message_text/last_message_at, so
   // the inbox list preview keeps showing the last real exchange, not
   // this note.
@@ -2665,15 +2982,13 @@ async function handOffToHuman(args: {
     console.error('[ai auto-reply] failed to insert handoff internal note:', noteError)
   }
 
-  // When there's no configured handoff agent AND nobody already owns
-  // this thread, `conversations.assigned_agent_id` stays NULL — the
-  // `on_conversation_assigned` trigger (migration 027) never fires, so
-  // without this the pause is invisible in-app until the idle
-  // reassignment sweep happens to run with someone online (up to
-  // `unclaimed_conversation_timeout_minutes`, default 60). Notify every
-  // agent+ teammate directly instead of waiting on that.
-  if (!willAssign && !alreadyAssigned) {
-    void notifyHandoffUnassigned(db, accountId, conversationId, fullSummary)
+  // A new hotel reception case needs its own alert even when the thread
+  // already has an owner. Assignment alone does not signal a new pending
+  // operation. The guarded case claim above prevents repeat notifications.
+  // Other verticals keep the unassigned fallback; assignment triggers notify
+  // their configured recipient as before.
+  if (hotelReceptionPending || (!willAssign && !alreadyAssigned)) {
+    await notifyHandoffTeam(db, accountId, conversationId, fullSummary)
   }
 }
 
@@ -2698,7 +3013,7 @@ async function notifyTeamRequestReady(
       status: 'sent',
     })
     if (noteError) console.error('[ai auto-reply] failed to insert request-ready note:', noteError)
-    await notifyHandoffUnassigned(db, accountId, conversationId, fullSummary)
+    await notifyHandoffTeam(db, accountId, conversationId, fullSummary)
   } catch (err) {
     console.error('[ai auto-reply] notifyTeamRequestReady failed:', err)
   }
@@ -2747,12 +3062,13 @@ async function appendActiveReservationsRecap(
 }
 
 /**
- * Best-effort in-app notification for an AI handoff that landed on
- * nobody (migration 136). Mirrors `notifyAiKeyInvalid` below, but goes
+ * Best-effort in-app notification for reception cases, ready requests and
+ * AI handoffs that landed on nobody (migration 136). Like invalid-key
+ * notifications, these are account-scoped, but go
  * to every agent+ teammate (not just owner/admin) since any of them
  * can pick up the conversation from the inbox.
  */
-async function notifyHandoffUnassigned(
+async function notifyHandoffTeam(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
@@ -2765,22 +3081,35 @@ async function notifyHandoffUnassigned(
       .eq('account_id', accountId)
       .in('account_role', ['owner', 'admin', 'agent'])
     if (!recipients || recipients.length === 0) return
-
-    const { error } = await db.from('notifications').insert(
-      recipients.map((r) => ({
+    const { data: config } = await db.from('ai_configs').select('handoff_agent_id').eq('account_id', accountId).maybeSingle()
+    const configured = recipients.filter(r => r.user_id === config?.handoff_agent_id)
+    const targets = configured.length ? configured : recipients
+    const { data: conversation } = await db.from('conversations').select('contacts(name, phone)').eq('id', conversationId).eq('account_id', accountId).maybeSingle()
+    const contact = conversation?.contacts as unknown as { name?: string; phone?: string } | null
+    const { data: account } = await db.from('accounts').select('default_currency, industry_vertical').eq('id', accountId).maybeSingle()
+    const title = `Requiere atención${contact?.name || contact?.phone ? ': ' + (contact.name || contact.phone) : account?.industry_vertical === 'hotel' ? ' del hotel' : ' del equipo'}`
+    const { current } = await loadActiveReservationsSummary(db, accountId, conversationId, account?.default_currency || 'GTQ')
+    const context = account?.industry_vertical === 'hotel' ? await loadAttentionContext(db, accountId, conversationId) : {}
+    const { data: inbound } = await db.from('messages').select('message_id, content_text').eq('conversation_id', conversationId).eq('sender_type', 'customer').order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const body = account?.industry_vertical === 'hotel' ? attentionBody(summary, current, inbound?.content_text, context) : summary
+    const sourceId = account?.industry_vertical === 'hotel' ? inbound?.message_id : null
+    const rows = targets.map((r) => ({
+        ...(sourceId ? { id: attentionNotificationId(accountId, sourceId, r.user_id as string) } : {}),
         account_id: accountId,
         user_id: r.user_id as string,
         type: 'ai_handoff',
         conversation_id: conversationId,
-        title: 'AI needs a human',
-        body: summary,
-      })),
-    )
+        title,
+        body,
+      }))
+    const { error } = sourceId
+      ? await db.from('notifications').upsert(rows, { onConflict: 'id', ignoreDuplicates: true })
+      : await db.from('notifications').insert(rows)
     if (error) {
       console.error('[ai auto-reply] failed to insert ai_handoff notifications:', error)
     }
   } catch (err) {
-    console.error('[ai auto-reply] notifyHandoffUnassigned failed:', err)
+    console.error('[ai auto-reply] notifyHandoffTeam failed:', err)
   }
 }
 
@@ -3943,15 +4272,8 @@ async function loadHotelCategoryProductNames(
  * then a last-resort containment match only when it resolves to
  * exactly one candidate) against the account's `product_categories`.
  *
- * Sends EVERY distinct banner the category has on file — `banner_url`
- * and, when set, `banner_url_weekend` — never just one. Used to pick
- * only one of the two by guessing which date (weekday vs weekend) the
- * guest's stay fell on; Angel, 2026-09-23: guests asking about
- * habitaciones in general (no date given yet) need to see BOTH price
- * photos to compare, not have the bot silently guess which one they
- * meant — and several incidents already showed that guess going wrong
- * (a leaked DD/MM/AAAA date, an off-by-one weekday). Sending both
- * removes the guess entirely instead of hardening it further.
+ * Room inquiries require completed intake and an applicable rate-sheet variant.
+ * Other categories keep their existing banner behavior.
  *
  * Never sends the same category's banner(s) twice in one conversation
  * (Angel, 2026-09-18: guests kept getting it re-sent every time they
@@ -3967,6 +4289,7 @@ async function autoSendCategoryBanner(args: {
   configOwnerUserId: string
   conversationId: string
   categoryName: string
+  variant?: 'weekday' | 'weekend'
   sinceISO: string | null
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, categoryName, sinceISO } = args
@@ -3997,10 +4320,14 @@ async function autoSendCategoryBanner(args: {
     console.warn(`[ai auto-reply] send_category_banner: no category matches "${categoryName}"`)
     return
   }
+  // Once room intake is complete, show the applicable sheet only.
+  // Other service categories retain their existing image behavior.
   // Every distinct banner on file, not just one — a category with a
   // weekend variant identical to its default counts as one image.
   const bannerUrls = Array.from(
-    new Set([category.banner_url, category.banner_url_weekend].filter((u): u is string => Boolean(u))),
+    new Set((args.variant
+      ? [args.variant === 'weekend' ? category.banner_url_weekend : category.banner_url]
+      : [category.banner_url, category.banner_url_weekend]).filter((u): u is string => Boolean(u))),
   )
   if (bannerUrls.length === 0) {
     console.warn(`[ai auto-reply] send_category_banner: category "${category.name}" has no banner on file`)
@@ -4016,6 +4343,7 @@ async function autoSendCategoryBanner(args: {
   const alreadySentThisConversation = ((priorSends ?? []) as { input: unknown; created_at: string }[]).some(
     (row) =>
       (row.input as { conversation_id?: string } | null)?.conversation_id === conversationId &&
+      (!args.variant || !(row.input as { banner_variant?: string } | null)?.banner_variant || (row.input as { banner_variant?: string }).banner_variant === args.variant) &&
       (!sinceISO || row.created_at > sinceISO),
   )
   if (alreadySentThisConversation) return
@@ -4038,7 +4366,7 @@ async function autoSendCategoryBanner(args: {
     actor_user_id: configOwnerUserId,
     action: 'send_category_banner',
     target_id: category.id,
-    input: { category_name: category.name, conversation_id: conversationId, source: 'auto_reply_autonomous' },
+    input: { category_name: category.name, conversation_id: conversationId, source: 'auto_reply_autonomous', ...(args.variant ? { banner_variant: args.variant } : {}) },
     result: { category_id: category.id, images_sent: bannerUrls.length },
   })
 }
@@ -4080,24 +4408,44 @@ async function sendStayEstimateFollowUpIfDue(args: {
   /** Voucher / certificate / negotiated rate in the thread: the
    *  published-rate total doesn't apply — the team confirms it. */
   specialRate?: boolean
+  /** A conflicting model price was replaced before sending the main reply. */
+  estimateAlreadySent?: { reservationRequestId: string; total: number }
   /** Hotel attention hours for the "un compañero le confirmará" line. */
   afterHours?: boolean
+  availabilityAlreadyExplained?: boolean
 }): Promise<void> {
   const { db, accountId, configOwnerUserId, conversationId, currency, depositPercent, sinceISO, modelText, todayISO, closing, specialRate, afterHours = false } = args
   const english = isEnglishText(modelText ?? '')
   const availabilityLine = english ? CLOSE_AVAILABILITY_LINE_EN : CLOSE_AVAILABILITY_LINE
   const availabilityAndTotalLine = english ? CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN : CLOSE_AVAILABILITY_AND_TOTAL_LINE
 
-  const sendLine = (contentText: string) =>
-    sendMessageToConversation(db, accountId, {
+  const sendLine = (contentText: string) => {
+    const text = conciseAvailabilityNotice(contentText, afterHours, english, {
+      alreadyExplained: Boolean(args.availabilityAlreadyExplained),
+      requireNotice: mentionedAmounts(contentText).length > 0 || !args.availabilityAlreadyExplained,
+    })
+    if (!text) return Promise.resolve()
+    return sendMessageToConversation(db, accountId, {
       conversationId,
       messageType: 'text',
-      contentText: withAttentionHours(contentText, afterHours),
+      contentText: text,
       senderType: 'bot',
     })
+  }
 
   if (specialRate) {
     if (closing) await sendLine(availabilityAndTotalLine)
+    return
+  }
+  if (args.estimateAlreadySent) {
+    await db.from('ai_action_log').insert({
+      account_id: accountId,
+      actor_user_id: configOwnerUserId,
+      action: 'send_stay_estimate',
+      target_id: args.estimateAlreadySent.reservationRequestId,
+      input: { conversation_id: conversationId, source: 'auto_reply_autonomous' },
+      result: { total: args.estimateAlreadySent.total },
+    })
     return
   }
   const result = await computeStayEstimateStatus(db, accountId, conversationId, currency, depositPercent, todayISO)
@@ -4363,13 +4711,19 @@ async function handOffIfReservationComplete(args: {
   // reset done before the next test case, despite the reset's own
   // dialog promising reservations are never affected. Best-effort:
   // never let this block the handoff itself.
-  const { error: confirmMarkError } = await db
+  const { data: confirmedRows, error: confirmMarkError } = await db
     .from('reservation_requests')
     .update({ guest_confirmed_at: new Date().toISOString() })
     .eq('id', (rawRow as { id: string }).id)
+    .eq('account_id', accountId)
+    .is('guest_confirmed_at', null)
+    .select('id')
   if (confirmMarkError) {
     console.error('[ai auto-reply] failed to mark reservation guest-confirmed:', confirmMarkError)
+    return false
   }
+  if (!confirmedRows?.length) return false
+  await dispatchWebhookEvent(db, accountId, 'reservation.updated', { reservation_id: (rawRow as { id: string }).id, source: 'auto_reply_autonomous' })
 
   // No canned closing line: the model's own reply — always non-empty by
   // this point (an empty one takes the continuity-fallback path and never

@@ -129,21 +129,17 @@ describe('buildSystemPrompt — hotel category: ask-which-item, not a repeated d
     expect(p).not.toContain(SEND_CATEGORY_BANNER_SENTINEL_PREFIX)
   })
 
-  it('tells the model to ask which specific item interests the guest instead of restating prices/benefits in text', () => {
+  it('moves category inquiries to practical details and specific items to verified facts', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       catalog: ['- Paquete Romántico (Q1,100)'],
       hotelCategoryBanners: [{ name: 'Paquetes', hasWeekendVariant: false }],
     })
-    // Warm brief description, item names, then a very kind question —
-    // without repeating the banner's price list.
-    expect(p.toLowerCase()).toContain('not the full price list')
-    expect(p.toLowerCase()).toContain('which one interests them most')
-    expect(p.toLowerCase()).toContain('vary your wording every time')
-    // Specific item: describe it, then a warm, varied booking invitation.
-    expect(p.toLowerCase()).toContain('invitation to book it')
-    expect(p.toLowerCase()).toContain('never repeat the same invitation sentence')
+    expect(p.toLowerCase()).toContain('missing practical details')
+    expect(p.toLowerCase()).not.toContain('which one interests them most')
+    expect(p.toLowerCase()).not.toContain('invitation to book it')
+    expect(p.toLowerCase()).toContain('never promise to apartar, reserve or confirm')
     expect(p).toContain(SEND_CATALOG_SENTINEL)
   })
 
@@ -483,30 +479,30 @@ describe('buildSystemPrompt — customer-facing dates are DD/MM/AAAA', () => {
   })
 })
 
-describe('buildSystemPrompt — stale (past-due) reservation prompts reschedule-or-new', () => {
-  it('flags a stale request and instructs asking reschedule-vs-new, hotel only, auto_reply only', () => {
+describe('buildSystemPrompt — historical stays do not prompt rescheduling', () => {
+  it('keeps a historical request as background and prioritizes a new inquiry, hotel only, auto_reply only', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
       hotelReservations: true,
       staleReservations: '- Habitación: Suite Premium · 01/09/2026 → 03/09/2026 · 2 personas',
     })
-    expect(p).toContain('PAST-DUE, UNRESOLVED REQUEST')
+    expect(p).toContain('HISTORICAL REQUEST(S)')
     expect(p).toContain('Suite Premium · 01/09/2026 → 03/09/2026')
-    expect(p.toLowerCase()).toContain('reschedule it to new dates')
+    expect(p).toContain('Never make the guest choose between rescheduling and a new request')
     expect(p.toLowerCase()).toContain('never quote, confirm, or act as if their old date still applies')
   })
 
   it('says nothing when there is nothing stale', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true })
-    expect(p).not.toContain('PAST-DUE')
+    expect(p).not.toContain('HISTORICAL REQUEST(S)')
   })
 
   it('never mentions it outside the hotel vertical or in draft mode', () => {
     const stale = '- Habitación: Suite Premium · 01/09/2026 → 03/09/2026 · 2 personas'
     expect(
       buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: false, staleReservations: stale }),
-    ).not.toContain('PAST-DUE')
+    ).not.toContain('HISTORICAL REQUEST(S)')
     expect(
       buildSystemPrompt({ userPrompt: null, mode: 'draft', hotelReservations: true, staleReservations: stale }),
     ).not.toContain('PAST-DUE')
@@ -532,4 +528,14 @@ describe('buildSystemPrompt — cache-friendly ordering', () => {
     expect(a.slice(0, fixedEnd)).toContain('Suite Premium (Q1,200/noche)')
     expect(a.slice(0, fixedEnd)).not.toContain('10:01')
   })
+})
+
+
+it('requires lodging intake before banners and separates reference prices from availability', () => {
+  const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', hotelReservations: true, hotelCategoryBanners: [{ name: 'Habitaciones', hasWeekendVariant: true }] })
+  expect(p).toContain('no room price banners are sent before this intake')
+  expect(p).not.toContain('weekday AND a weekend price sheet together')
+  expect(p).toContain('maximum of 2 hours')
+  expect(p).toContain('never promise a two-hour response overnight')
+  expect(p).toContain('Public price references may be answered even after staff participated')
 })

@@ -11,6 +11,7 @@
 // ============================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { hotelStageKind } from './hotel-stages';
 
 export class MoveDealError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -43,8 +44,8 @@ export interface MoveDealResult {
  *    (`status = 'open'`, clears `won_at`), so a won card dragged back
  *    into the pipeline (or an owner-confirmed `move_deal` on a won deal)
  *    can't leave a "won" deal parked in a pre-sale column. A `lost` deal
- *    is left untouched — reopening it is a deliberate action, not a
- *    side effect of a stage move.
+ *    stays closed on generic stages. Moving explicitly to the hotel's
+ *    Cotizando/Pendiente stages reopens it. Descarte marks it lost.
  *
  * Throws {@link MoveDealError}; callers map it to their own response
  * shape (JSON error vs BusinessActionError).
@@ -57,7 +58,7 @@ export async function moveDeal(
 ): Promise<MoveDealResult> {
   const { data: stage, error: stageError } = await db
     .from('pipeline_stages')
-    .select('id, pipeline_id, is_won, pipelines!inner(account_id)')
+    .select('id, name, pipeline_id, is_won, pipelines!inner(account_id)')
     .eq('id', stageId)
     .eq('pipelines.account_id', accountId)
     .maybeSingle();
@@ -66,7 +67,10 @@ export async function moveDeal(
 
   const isWonStage = Boolean(stage.is_won);
   const updates: Record<string, unknown> = { stage_id: stageId };
-  if (isWonStage) {
+  if (hotelStageKind(stage.name) === 'discard') {
+    updates.status = 'lost';
+    updates.won_at = null;
+  } else if (isWonStage) {
     updates.status = 'won';
     updates.won_at = new Date().toISOString();
   } else {
@@ -80,7 +84,7 @@ export async function moveDeal(
       .eq('account_id', accountId)
       .maybeSingle();
     if (currentError) throw new MoveDealError(currentError.message, 500);
-    if (current?.status === 'won') {
+    if (current?.status === 'won' || (current?.status === 'lost' && ['quote', 'pending'].includes(hotelStageKind(stage.name) ?? ''))) {
       updates.status = 'open';
       updates.won_at = null;
     }

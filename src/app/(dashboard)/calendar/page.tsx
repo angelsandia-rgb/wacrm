@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
+import { useStoredChoice } from '@/hooks/use-stored-preference'
 import { readResponseJson } from '@/lib/http/response-json'
 import type { CalendarEvent, CalendarEventsResponse } from '@/lib/google-calendar/types'
 import {
@@ -27,6 +28,7 @@ import { AgendaList } from '@/components/calendar/agenda-list'
 import { EventDetailsDialog } from '@/components/calendar/event-details-dialog'
 
 type View = 'month' | 'week' | 'agenda'
+const VIEWS: readonly View[] = ['month', 'week', 'agenda']
 
 const VIEW_STORAGE_KEY = 'sandia:calendar:view'
 const AGENDA_DAYS = 45
@@ -54,7 +56,8 @@ export default function CalendarPage() {
   const { account } = useAuth()
   const isClinic = (account?.industry_vertical ?? 'generic') === 'clinica'
 
-  const [view, setView] = useState<View>('agenda')
+  // Last-used view (per-browser convenience only).
+  const [view, changeView] = useStoredChoice<View>(VIEW_STORAGE_KEY, 'agenda', VIEWS)
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()))
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,25 +66,6 @@ export default function CalendarPage() {
     { kind: 'ok'; email: string | null } | { kind: 'disconnected'; reason?: string } | { kind: 'error'; message: string } | null
   >(null)
   const [selected, setSelected] = useState<CalendarEvent | null>(null)
-
-  // Restore the last-used view (per-browser convenience only).
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(VIEW_STORAGE_KEY)
-      if (saved === 'month' || saved === 'week' || saved === 'agenda') setView(saved)
-    } catch {
-      /* private mode / blocked storage — fine, keep the default */
-    }
-  }, [])
-
-  const changeView = useCallback((next: View) => {
-    setView(next)
-    try {
-      localStorage.setItem(VIEW_STORAGE_KEY, next)
-    } catch {
-      /* ignore */
-    }
-  }, [])
 
   const range = useMemo(() => visibleRange(view, anchor), [view, anchor])
   const rangeKey = `${range.start.getTime()}-${range.end.getTime()}`

@@ -44,6 +44,16 @@ const MASKED_TOKEN = '••••••••••••••••';
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'zernio_api_error' | null;
 
+/** What a config load resolved to; `undefined` fields keep the current value. */
+interface FacebookSnapshot {
+  config: FacebookConfigType | null;
+  zernioAccountId: string;
+  zernioApiKey: string;
+  connectionStatus: ConnectionStatus;
+  resetReason: ResetReason | undefined;
+  statusMessage: string | undefined;
+}
+
 /**
  * Facebook's counterpart to `InstagramConfig`, minus the provider
  * toggle — Facebook has no direct-Meta path in wacrm (see migration
@@ -76,9 +86,10 @@ export function FacebookConfig() {
       ? `${window.location.origin}/api/facebook/webhook/zernio`
       : '';
 
-  const fetchConfig = useCallback(
-    async (acctId: string) => {
-      setLoading(true);
+  // Loads the row + health check without touching state, so the mount
+  // effect only applies the result from an async callback.
+  const loadConfig = useCallback(
+    async (acctId: string): Promise<FacebookSnapshot | null> => {
       try {
         const { data, error } = await supabase
           .from('facebook_config')
@@ -90,17 +101,14 @@ export function FacebookConfig() {
           console.error('Failed to load Facebook config row:', error);
         }
 
-        if (data) {
-          setConfig(data);
-          setZernioAccountId(data.zernio_account_id || '');
-          setZernioApiKey(data.zernio_api_key ? MASKED_TOKEN : '');
-          setZernioApiKeyEdited(false);
-        } else {
-          setConfig(null);
-          setZernioAccountId('');
-          setZernioApiKey('');
-          setZernioApiKeyEdited(false);
-        }
+        const snapshot: FacebookSnapshot = {
+          config: data ?? null,
+          zernioAccountId: data?.zernio_account_id || '',
+          zernioApiKey: data?.zernio_api_key ? MASKED_TOKEN : '',
+          connectionStatus: 'disconnected',
+          resetReason: null,
+          statusMessage: '',
+        };
 
         if (data) {
           try {
@@ -108,52 +116,72 @@ export function FacebookConfig() {
             const payload = await readResponseJson(res);
 
             if (payload.connected) {
-              setConnectionStatus('connected');
-              setResetReason(null);
+              snapshot.connectionStatus = 'connected';
               // Soft warning (e.g. Zernio's account list couldn't be
               // re-checked) — link is still live, keep "connected".
-              setStatusMessage(payload.verify_warning || '');
+              snapshot.statusMessage = payload.verify_warning || '';
             } else {
-              setConnectionStatus('disconnected');
-              setResetReason(
-                payload.needs_reset
-                  ? 'token_corrupted'
-                  : payload.reason === 'zernio_api_error'
-                    ? 'zernio_api_error'
-                    : null
-              );
-              setStatusMessage(payload.message || '');
+              snapshot.resetReason = payload.needs_reset
+                ? 'token_corrupted'
+                : payload.reason === 'zernio_api_error'
+                  ? 'zernio_api_error'
+                  : null;
+              snapshot.statusMessage = payload.message || '';
             }
           } catch (err) {
             console.error('Health check failed:', err);
-            setConnectionStatus('disconnected');
+            // Keep whatever reason/message was showing before.
+            snapshot.resetReason = undefined;
+            snapshot.statusMessage = undefined;
           }
-        } else {
-          setConnectionStatus('disconnected');
-          setResetReason(null);
-          setStatusMessage('');
         }
+        return snapshot;
       } catch (err) {
         console.error('fetchConfig error:', err);
         toast.error('Failed to load Facebook configuration');
-      } finally {
-        setLoading(false);
+        return null;
       }
     },
     [supabase]
+  );
+
+  const applyConfig = useCallback((snapshot: FacebookSnapshot | null) => {
+    if (snapshot) {
+      setConfig(snapshot.config);
+      setZernioAccountId(snapshot.zernioAccountId);
+      setZernioApiKey(snapshot.zernioApiKey);
+      setZernioApiKeyEdited(false);
+      setConnectionStatus(snapshot.connectionStatus);
+      if (snapshot.resetReason !== undefined)
+        setResetReason(snapshot.resetReason);
+      if (snapshot.statusMessage !== undefined)
+        setStatusMessage(snapshot.statusMessage);
+    }
+    setLoading(false);
+  }, []);
+
+  const fetchConfig = useCallback(
+    async (acctId: string) => {
+      setLoading(true);
+      applyConfig(await loadConfig(acctId));
+    },
+    [loadConfig, applyConfig]
   );
 
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoading(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchConfig(accountId);
-  }, [authLoading, profileLoading, user, accountId, fetchConfig]);
+    void loadConfig(accountId).then(applyConfig);
+  }, [authLoading, profileLoading, user, accountId, loadConfig, applyConfig]);
+
+  // Signed out (or no account) once auth settles: nothing to load.
+  const showLoading =
+    loading && (authLoading || profileLoading || (!!user && !!accountId));
 
   async function handleSave() {
     if (!zernioAccountId.trim()) {
@@ -302,7 +330,7 @@ export function FacebookConfig() {
     toast.success('Webhook secret copied to clipboard');
   }
 
-  if (loading) {
+  if (showLoading) {
     return (
       <section className="animate-in fade-in-50 duration-200">
         <SettingsPanelHead title={t('title')} description={t('description')} />

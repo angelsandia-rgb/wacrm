@@ -5001,3 +5001,252 @@ confirmó con Angel antes de tocar código en vez de proceder a ciegas:
   espera de handoff, merge de actividad de 5 fuentes) es riesgo real de
   bug silencioso en números que la empresa usa para decidir.
   **Angel confirmó: no proceder** — queda anotado, no implementado.
+
+---
+
+### 2026-10-19 — Claude Code (seguridad: actualización de dependencias vulnerables)
+
+**Qué cambia.** `npm audit` reportaba 18 vulnerabilidades (2 críticas). Se
+actualizó lo que sí corre en producción:
+
+- `next` 16.3.4 → **16.4.2** (crítica: RCE en `next/og` `ImageResponse` —
+  lo usa `src/app/icon.tsx` —, SSRF en `/_next/image`, envenenamiento de
+  caché SSG/ISR, fugas de información).
+- `nodemailer` ^9.1.1 → **^10.1.7** (alta: DoS en el parser de direcciones y
+  caché DNS compartida entre transportes SMTP). El único cambio incompatible
+  de la v10 es exigir Node ≥20 (el Docker usa Node 24); `src/lib/email/send.ts`
+  no requiere cambios.
+- Override de `sharp` → **^0.35.5** (CVE en librsvg).
+- `npm audit fix` (sin `--force`) para transitivas, y en `mcp-server/`
+  (queda en 0 vulnerabilidades).
+
+**Deliberadamente no se tocó.** `eslint-config-next` sigue en 16.2.12 y
+`eslint-plugin-react-hooks` se fijó en 7.0.1 en el lockfile: las versiones
+nuevas activan reglas del React Compiler (`set-state-in-effect`, etc.) que
+dan 84 errores de lint en ~60 componentes — eso es un PR aparte. Lo que
+`npm audit` sigue reportando (`braces`, `micromatch`, `fast-glob`, `ts-morph`)
+viene del CLI de `shadcn` y de ESLint: solo herramientas de desarrollo; de
+`shadcn` la app solo importa el CSS.
+
+**Validación.** `npm ci`, typecheck, lint (0 errores, igual que `main`),
+2672 tests, `npm run build` y build de `mcp-server` — todo en verde. Se
+verificó que el lockfile conserva los binarios musl (`@next/swc-linux-x64-musl`,
+`@img/sharp-linuxmusl-x64`) que necesita la imagen `node:24-alpine`.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (lint: subir `eslint-config-next` a 16.4.2)
+
+**Qué cambia.** Se alinea `eslint-config-next` con `next` 16.4.2 (y con ello
+`eslint-plugin-react-hooks` 7.0.1 → 7.1.1). Las versiones nuevas activaban
+reglas del React Compiler que daban 84 errores de lint:
+
+- `react-hooks/set-state-in-effect` (81) — se baja a **warning** en
+  `eslint.config.mjs`. Son efectos que hoy funcionan (carga de datos al
+  montar, reinicio de formularios al cambiar una prop, lectura de
+  `localStorage`); reescribirlos es un refactor de comportamiento que se hace
+  por área y probando en navegador, no dentro de un bump de lint. La regla
+  queda visible para que el código nuevo evite el patrón.
+- `react-hooks/purity` (1, `ai-assistant.tsx`) — falso positivo (`Date.now()`
+  dentro de un handler); se extrajo a `dueAtFromHours()` a nivel de módulo.
+- `react-hooks/preserve-manual-memoization` (2, `message-thread.tsx` y
+  `use-auth.tsx`) — se saca `user?.id` a una constante antes del
+  `useCallback` para que la dependencia declarada coincida con la inferida.
+  Sin efecto en runtime (el React Compiler no está activo).
+- `@next/next/no-location-assign-relative-destination` (5 avisos) — son
+  recargas completas intencionales tras cerrar sesión / unirse a una cuenta;
+  se documentan con `eslint-disable-next-line` y su motivo.
+
+**Validación.** Lint 0 errores (81 warnings de la regla bajada), typecheck,
+2672 tests y `npm run build` en verde.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (inbox: refactor de `set-state-in-effect`)
+
+**Qué cambia.** Se eliminan los 12 avisos de `react-hooks/set-state-in-effect`
+del inbox (incluidas las tarjetas de clínica y hotel que viven en él). Quedan
+69 en el resto de la app. Patrones usados:
+
+- **Paneles del inbox (`localStorage`)** → nuevo hook
+  `src/hooks/use-stored-boolean.ts` sobre `useSyncExternalStore`: el servidor
+  sigue renderizando el valor por defecto (sin error de hidratación) y el
+  valor guardado entra tras hidratar, sin un render extra. Sincroniza entre
+  pestañas y, si `localStorage` falla, recuerda el valor en memoria. Con tests.
+- **Estado "atado" a una conversación** (borrador de respuesta, pausa
+  optimista de la IA, último mensaje del cliente, tarjetas de clínica y
+  hotel) → el estado se guarda junto con la conversación/contacto al que
+  pertenece y se lee con esa comprobación — el mismo patrón que ya usaba el
+  visor de medios (`openMedia`). Cambiar de hilo invalida el valor sin un
+  efecto que lo resetee.
+- **Contact sidebar** → la carga se separa en `loadContactData` (pura) y
+  `applyContactData`; el efecto descarta respuestas viejas. **Corrige un bug
+  real:** al cambiar rápido de contacto podía pintarse la información
+  (negocios, notas, etiquetas) del contacto anterior.
+- **Grabación de voz** → el tope de 5 min se revisa en el propio tick del
+  temporizador, no en un efecto que observa los segundos.
+- **Respuestas rápidas** → la lista vive en un subcomponente que se monta con
+  cada apertura del diálogo, así empieza en "cargando" sin `setLoading(true)`.
+- **Reacciones** → se filtran por `conversation_id` al agruparlas en vez de
+  vaciar la lista en un efecto.
+
+**Validación.** Lint 0 errores (69 avisos, todos fuera del inbox), typecheck,
+2677 tests y `npm run build` en verde. No se pudo probar en navegador desde la
+sesión (requiere login real); conviene un recorrido manual del inbox.
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (Configuración: refactor de `set-state-in-effect`)
+
+**Qué cambia.** Se eliminan los 24 avisos de `react-hooks/set-state-in-effect`
+de `src/components/settings/` (17 archivos). Quedan 45 en el resto de la app.
+
+- **Cargadores** (API keys, webhooks y su log de entregas, miembros, push,
+  respuestas rápidas, médicos y plantillas de notas de la clínica, etiquetas,
+  plantillas de WhatsApp) → la consulta se separa en una función pura que
+  devuelve los datos; el efecto los aplica desde el `.then` y descarta
+  respuestas viejas. Las recargas tras guardar siguen usando la función de
+  siempre (`load`, `fetchTags`, …), que muestra el spinner.
+- **Integraciones** (Facebook, Instagram, Google Calendar, Google Sheets,
+  WhatsApp) → la carga devuelve un "snapshot" del estado y una función lo
+  aplica; se mantiene la guarda de "una vez por cuenta" (sin cancelación, para
+  no dejar el spinner pegado si el efecto se re-ejecuta). El "cargando" para un
+  usuario sin sesión se deriva en vez de apagarse en el efecto. El chequeo de
+  salud de WhatsApp sí descarta resultados viejos al cambiar de número.
+- **Borradores ligados al valor del servidor** (nombre de empresa y moneda en
+  Negocios, nombre y correo en Perfil) → la edición se guarda junto con el
+  valor del que partió; si el servidor cambia (perfil cargado o guardado) se
+  descarta, igual que antes, sin efecto de sincronización. Zona horaria y
+  enfriamiento de leads derivan "cargando" de la cuenta para la que llegaron
+  los datos.
+- **Plantillas** → `body_samples` se redimensiona al leer (`useMemo`) en vez de
+  reescribir el estado en un efecto.
+
+**Validación.** Lint 0 errores (45 avisos, todos fuera de Configuración),
+typecheck, 2677 tests y `npm run build` en verde. Sin prueba en navegador
+desde la sesión (requiere login real).
+
+---
+
+### 2026-10-19 (sesión posterior) — Claude Code (refactor de los últimos `set-state-in-effect` + regla de vuelta a error)
+
+**Qué cambia.** Se eliminan los 45 avisos restantes de
+`react-hooks/set-state-in-effect` (35 archivos: páginas del dashboard,
+panel de admin, clínica, contactos, productos, difusiones, flujos, hooks
+compartidos) y la regla **vuelve a ser error** en `eslint.config.mjs` (se
+quita el override a `warn` del PR #284). El lint queda en 0 problemas.
+
+Patrones (los mismos de #285/#286):
+
+- **Cargadores** → consulta pura + aplicación en el `.then` con cancelación;
+  las recargas tras guardar siguen igual. Donde la carga depende de filtros o
+  de un id (contactos, citas, pacientes, KPIs, archivos de clínica, alertas,
+  tareas), el "cargando" se deriva de la clave para la que llegaron los
+  datos en vez de prenderse en el efecto.
+- **Formularios que se rellenan o resetean** al abrir o al cambiar una prop
+  (diálogos de citas/visitas/reprogramación, formularios de contacto y
+  producto, cotizador, catálogo, reporte de soporte, deep link
+  `?patient=`) → ajuste durante el render (patrón recomendado por React),
+  sin un render intermedio con datos viejos.
+- **Borradores ligados al valor del servidor** (detalle de empresa en
+  /admin, enlace/banner del catálogo) → como en Configuración.
+- **Preferencias en `localStorage`** → `src/hooks/use-stored-boolean.ts` se
+  renombra a `use-stored-preference.ts` y suma `useStoredChoice` (vista del
+  calendario). La demo de IA de /admin restaura su borrador con
+  `useSyncExternalStore` y solo guarda lo que el operador edita.
+
+**Bugs corregidos de paso.**
+- Audiencia de difusiones: el conteo estimado no se cancelaba; una respuesta
+  lenta de una selección anterior podía pisar el número de la actual.
+- Tareas de un contacto: si la carga fallaba al cambiar de contacto, podían
+  quedar visibles las del contacto anterior.
+
+**Validación.** Lint 0 problemas (regla en error), typecheck, 2679 tests y
+`npm run build` en verde. Sin prueba en navegador desde la sesión (requiere
+login real).
+
+### 2026-10-24 — Claude Code (infra: firewall del VPS, respaldo cifrado a R2, grants explícitos)
+
+**Origen.** Tres avisos externos: Contabo (Auto Backup y CVE de PHP) y
+Supabase (desde el 30-oct ya no da grants automáticos a tablas nuevas).
+
+- **CVE de PHP:** no aplica. Ni el VPS ni los contenedores tienen PHP.
+- **Firewall del VPS (`ufw`):** estaba apagado, con el panel de EasyPanel
+  (:3000) y los puertos de control de Docker Swarm (2377/7946) abiertos a
+  internet. Ahora solo entran 22/80/443; el :3000, que Docker publica por
+  fuera de `ufw`, se bloquea con una regla `DOCKER-USER` en
+  `/etc/ufw/after.rules`. El panel se usa en `https://kmencc.easypanel.host`.
+  - **Incidente:** el webhook de deploy de GitHub apuntaba a
+    `http://<ip>:3000/api/deploy/...`, así que el firewall cortó el
+    auto-deploy de 23:44 a 04:05 UTC (producción siguió arriba con la versión
+    anterior). El webhook ahora usa `https://kmencc.easypanel.host/...`
+    (la clave del deploy ya no viaja en texto plano) y el :3000 queda cerrado.
+- **Respaldo fuera del VPS (PR #300):** el script nocturno sube el dump
+  y todos los archivos de Storage a Cloudflare R2, cifrados con `rclone crypt`
+  (RUNBOOK §9). Script y clave ya están en el VPS. **Falta:** activar R2 en
+  Cloudflare (checkout con método de pago, lo hace el owner) y cargar el
+  token en `backup.env`.
+- **Grants explícitos (PR #301, migración 168, aplicada):** fija los grants
+  actuales de producción para que un proyecto reconstruido desde las
+  migraciones (RUNBOOK §9) funcione después del 30-oct. Un test exige `GRANT`
+  en toda migración ≥169 que cree una tabla en `public`.
+
+**Validación.** Typecheck, 2800 tests y build en verde; deploy `4a411df`
+en línea con health 200; ping del webhook por HTTPS con :3000 cerrado: 200.
+
+### 2026-11-01 — Claude Code (CI: pruebas del banner vencidas por fecha)
+
+**Qué pasó.** El CI de `main` se puso en rojo el 1-nov sin ningún cambio de
+código: 16 pruebas del banner de hotel en `auto-reply.test.ts` usaban una
+estadía fija del 26 al 28-oct; al pasar esa fecha, la guarda de "fecha
+pasada" la trataba como reservación vieja y no mandaba el banner. La app no
+tenía ningún problema.
+
+**Arreglo (PR #306).** Esos dos bloques fijan `Date` en
+`2026-10-20T18:00:00Z` (`vi.useFakeTimers({ toFake: ['Date'] })` +
+`useRealTimers()` en `afterEach`), como ya hacían otros bloques del archivo.
+Solo pruebas. **Regla:** toda prueba con fechas de estadía fijas debe fijar
+el reloj, o vence sola.
+
+**Otros de la sesión.** PR #305 cerrado (duplicado de #304, ya en `main`).
+MCP del repo registrado en Claude Code con una API key de la cuenta Chat
+Sandia. Zernio: Facebook desconectado para quedar en las 2 cuentas gratis.
+Pendiente del owner: la key de Anthropic de Chat Sandia es inválida desde
+el 29-sep (bot sin responder) y Google Sheets de Chat Sandia sigue
+desconectado.
+
+**Validación.** Typecheck, 2804 tests y build en verde; CI del PR en verde.
+
+### 2026-11-01 (sesión posterior) — Claude Code (paridad con respond.io: 6 funciones)
+
+Se exploró respond.io por dentro (organización de prueba "Chat Sandia",
+vence 2026-11-07) y se implementaron las 6 brechas más valiosas, un PR
+cada una, todas desplegadas el 1-nov:
+
+| PR | Qué | Migración |
+|---|---|---|
+| #308 | Resumen con IA al cerrar (categoría, resumen, sentimiento) + cierre automático por inactividad. Configuración → Cierre de conversaciones (apagado por defecto). Corre en el cron de conversaciones. | 169 (aplicada) |
+| #309 | Paso de automatización **Hacer una pregunta**: estaciona la corrida (`awaiting_reply`) hasta que el cliente responde; la respuesta se guarda en un campo o `{{ vars.x }}` y no dispara IA ni otras automatizaciones. | 170 (aplicada) |
+| #310 | Disparadores **Conversación cerrada**, **Campo de contacto actualizado** y **Webhook entrante** (`/api/automations/webhook/<token>`). Los campos personalizados ahora se guardan por `PUT /api/contacts/[id]/custom-values`. | — |
+| #311 | Asignación **rotativa real** (antes siempre el primer perfil), **al de menos chats** y **solo en línea**. | — |
+| #312 | Botón **Mejorar con IA** en la bandeja: tono, corregir, simplificar, traducir (`/api/ai/rewrite`). | — |
+| #313 | **Habilidades de la IA**: cada acción del bot se puede apagar o recibir una regla de "cuándo"; lo apagado se elimina del resultado del modelo en un solo punto. Sin configuración = comportamiento idéntico. | 171 (aplicada) |
+
+**Reglas nuevas.** Un cierre o una escritura hecha por una automatización
+nunca vuelve a disparar automatizaciones (evita bucles). `ai_configs.skills`
+se lee con una consulta aparte y tolerante a errores para no repetir la
+caída de `media_type`.
+
+**Validación.** Typecheck, lint, 2824 tests y build en verde en cada PR y
+combinados; migraciones probadas con `BEGIN … ROLLBACK` antes de aplicarse;
+cada deploy verificado (GIT_SHA en el contenedor, healthy, health 200);
+rutas nuevas responden 401/404 sin sesión.
+
+**#314 — Embudo por etapa y ranking por asesor (/kpis).** Embudo por
+pipeline (negocios creados en el periodo y hasta qué etapa llegaron; sin
+historial de etapas, cuenta la etapa actual) y ranking del equipo
+(abiertos asignados, cerrados, respuestas, mediana de tiempo de respuesta,
+ventas ganadas). Hotel y clínica lo ven con 30 días. Los envíos desde la
+bandeja ahora guardan `messages.sender_id` (antes siempre nulo), así que
+respuestas y tiempo de respuesta por asesor cuentan desde este deploy. Sin
+migración. Desplegado `e6164e7`. Calendly queda pendiente.

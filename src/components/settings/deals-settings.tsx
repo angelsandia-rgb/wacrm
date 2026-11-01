@@ -44,7 +44,19 @@ export function DealsSettings() {
     refreshProfile,
   } = useAuth();
 
-  const [selected, setSelected] = useState(defaultCurrency);
+  // Edits are paired with the server value they started from, so a new
+  // server value (profile resolving, or a save round-tripping through
+  // refreshProfile) replaces them without a sync effect.
+  const [currencyDraft, setCurrencyDraft] = useState<{
+    base: string;
+    value: string;
+  } | null>(null);
+  const selected =
+    currencyDraft && currencyDraft.base === defaultCurrency
+      ? currencyDraft.value
+      : defaultCurrency;
+  const setSelected = (value: string) =>
+    setCurrencyDraft({ base: defaultCurrency, value });
   const [saving, setSaving] = useState(false);
   const t = useTranslations('Settings.deals');
 
@@ -53,12 +65,18 @@ export function DealsSettings() {
   // text: that route already validates length/emptiness and rate-limits
   // renames, and duplicating that here would just be a second place for
   // those rules to drift out of sync.
-  const [companyName, setCompanyName] = useState(account?.name ?? '');
+  const savedCompanyName = account?.name ?? '';
+  const [companyNameDraft, setCompanyNameDraft] = useState<{
+    base: string;
+    value: string;
+  } | null>(null);
+  const companyName =
+    companyNameDraft && companyNameDraft.base === savedCompanyName
+      ? companyNameDraft.value
+      : savedCompanyName;
+  const setCompanyName = (value: string) =>
+    setCompanyNameDraft({ base: savedCompanyName, value });
   const [companyNameSaving, setCompanyNameSaving] = useState(false);
-
-  useEffect(() => {
-    setCompanyName(account?.name ?? '');
-  }, [account?.name]);
 
   const companyNameDirty =
     companyName.trim() !== (account?.name ?? '') &&
@@ -86,12 +104,6 @@ export function DealsSettings() {
       setCompanyNameSaving(false);
     }
   }
-
-  // Keep the select in sync once the profile (and its account default)
-  // resolves, and after a save round-trips through refreshProfile.
-  useEffect(() => {
-    setSelected(defaultCurrency);
-  }, [defaultCurrency]);
 
   const dirty = selected !== defaultCurrency;
 
@@ -121,12 +133,15 @@ export function DealsSettings() {
   // scheduling (see src/lib/timezone.ts / src/lib/ai/defaults.ts).
   const [timezone, setTimezone] = useState<string | null>(null);
   const [timezoneSaving, setTimezoneSaving] = useState(false);
-  const [timezoneLoading, setTimezoneLoading] = useState(true);
+  // Which account the loaded timezone belongs to; loading until it matches.
+  const [timezoneLoadedFor, setTimezoneLoadedFor] = useState<string | null>(
+    null
+  );
+  const timezoneLoading = timezoneLoadedFor !== accountId;
 
   useEffect(() => {
     if (!accountId) return;
     let cancelled = false;
-    setTimezoneLoading(true);
     (async () => {
       try {
         const { data } = await supabase
@@ -137,7 +152,7 @@ export function DealsSettings() {
         if (cancelled) return;
         setTimezone(data?.timezone ?? 'America/Guatemala');
       } finally {
-        if (!cancelled) setTimezoneLoading(false);
+        if (!cancelled) setTimezoneLoadedFor(accountId);
       }
     })();
     return () => {
@@ -165,13 +180,15 @@ export function DealsSettings() {
   // src/lib/contacts/temperature-sweep.ts (migrations 152/153).
   const [cooldownEnabled, setCooldownEnabled] = useState(false);
   const [cooldownDays, setCooldownDays] = useState(14);
-  const [cooldownLoading, setCooldownLoading] = useState(true);
+  const [cooldownLoadedFor, setCooldownLoadedFor] = useState<string | null>(
+    null
+  );
+  const cooldownLoading = cooldownLoadedFor !== accountId;
   const [cooldownSaving, setCooldownSaving] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
     let cancelled = false;
-    setCooldownLoading(true);
     (async () => {
       try {
         const { data } = await supabase
@@ -185,7 +202,7 @@ export function DealsSettings() {
           typeof data.lead_cooldown_days === 'number' ? data.lead_cooldown_days : 14,
         );
       } finally {
-        if (!cancelled) setCooldownLoading(false);
+        if (!cancelled) setCooldownLoadedFor(accountId);
       }
     })();
     return () => {

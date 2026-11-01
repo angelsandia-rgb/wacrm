@@ -1,6 +1,7 @@
 'use client';
 
 import { readResponseJson } from '@/lib/http/response-json';
+import { RewriteMenu } from './rewrite-menu';
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent } from 'react';
 import {
@@ -733,6 +734,12 @@ export function MessageComposer({
     [removeStaged]
   );
 
+  const stopRecording = useCallback(() => {
+    clearTimer();
+    setRecording(false);
+    void recorderRef.current?.stop().catch(() => {});
+  }, [clearTimer]);
+
   const startRecording = useCallback(async () => {
     if (inputsDisabled || busy || recording) return;
     if (
@@ -762,22 +769,20 @@ export function MessageComposer({
       await recorder.start();
       setRecording(true);
       setRecordSeconds(0);
-      timerRef.current = setInterval(
-        () => setRecordSeconds((s) => s + 1),
-        1000
-      );
+      let elapsed = 0;
+      timerRef.current = setInterval(() => {
+        elapsed += 1;
+        setRecordSeconds(elapsed);
+        // Auto-stop at the cap so a forgotten recording can't blow the
+        // upload size limit.
+        if (elapsed >= MAX_RECORDING_SECONDS) stopRecording();
+      }, 1000);
     } catch {
       void recorderRef.current?.stop().catch(() => {});
       recorderRef.current = null;
       toast.error('Microphone access denied or unavailable.');
     }
-  }, [inputsDisabled, busy, recording, finalizeRecording]);
-
-  const stopRecording = useCallback(() => {
-    clearTimer();
-    setRecording(false);
-    void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+  }, [inputsDisabled, busy, recording, finalizeRecording, stopRecording]);
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
@@ -785,14 +790,6 @@ export function MessageComposer({
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
   }, [clearTimer]);
-
-  // Auto-stop at the cap so a forgotten recording can't blow the
-  // upload size limit.
-  useEffect(() => {
-    if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
-      stopRecording();
-    }
-  }, [recording, recordSeconds, stopRecording]);
 
   // ---- Draft send / discard -----------------------------------------
 
@@ -1175,6 +1172,15 @@ export function MessageComposer({
               <Sparkles className="h-4 w-4" />
             )}
           </GatedButton>
+
+          <RewriteMenu
+            text={text}
+            disabled={readOnly}
+            onRewrite={(next) => {
+              setText(next);
+              requestAnimationFrame(() => adjustHeight());
+            }}
+          />
 
           <GatedButton
             variant="ghost"

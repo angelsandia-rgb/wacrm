@@ -290,6 +290,16 @@ La única copia es un `pg_dump` nocturno que corre en el VPS
   corre en unas 60 h, aparece la alerta de heartbeat vencido en `/admin`.
 - Los dumps contienen tokens cifrados y los secretos de los crons: `chmod
   600`, solo root. No copiarlos fuera del VPS sin cifrarlos.
+- **Copia fuera del VPS (Cloudflare R2):** si `R2_ACCOUNT_ID` está definido
+  en `backup.env`, el mismo script sube el dump de la noche (`db/`, 30 días)
+  y **todos los archivos de Supabase Storage** (`storage/`) al bucket
+  `sandia-backups`, cifrados en el VPS con `rclone crypt`
+  (`R2_CRYPT_PASSWORD`). R2 solo ve contenido cifrado. Si la subida falla,
+  el heartbeat `db_backup` reporta error. **`R2_CRYPT_PASSWORD` también debe
+  guardarse fuera del VPS** (gestor de contraseñas): sin ella la copia en R2
+  no se puede descifrar. Restaurar desde R2 en otra máquina: definir las
+  mismas variables `RCLONE_CONFIG_R2*` que arma el script y correr
+  `rclone copy r2c:db/<archivo> .` (o `r2c:storage/ ./storage`).
 
 ### Instalación (una vez)
 

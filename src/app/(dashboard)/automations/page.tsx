@@ -63,6 +63,24 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
   follow_up_reminder: PhoneCall,
 };
 
+async function fetchAutomations(): Promise<
+  { automations: Automation[] } | { error: string }
+> {
+  try {
+    const supabase = createClient();
+    const { data, error: fetchErr } = await supabase
+      .from('automations')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (fetchErr) throw fetchErr;
+    return { automations: (data ?? []) as Automation[] };
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to load automations',
+    };
+  }
+}
+
 export default function AutomationsPage() {
   const router = useRouter();
   const canCreate = useCan('send-messages');
@@ -73,23 +91,24 @@ export default function AutomationsPage() {
   const [deleting, setDeleting] = useState(false);
 
   async function load() {
-    try {
-      const supabase = createClient();
-      const { data, error: fetchErr } = await supabase
-        .from('automations')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (fetchErr) throw fetchErr;
-      setAutomations((data ?? []) as Automation[]);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load automations'
-      );
-    }
+    applyAutomations(await fetchAutomations());
+  }
+
+  function applyAutomations(
+    result: Awaited<ReturnType<typeof fetchAutomations>>
+  ) {
+    if ('error' in result) setError(result.error);
+    else setAutomations(result.automations);
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    void fetchAutomations().then((result) => {
+      if (!cancelled) applyAutomations(result);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function toggleActive(a: Automation, next: boolean) {

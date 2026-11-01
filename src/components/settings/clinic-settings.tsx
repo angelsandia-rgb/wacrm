@@ -64,23 +64,38 @@ export function ClinicSettings() {
   const [newName, setNewName] = useState('')
   const [newSpecialty, setNewSpecialty] = useState('')
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const fetchDoctors = useCallback(async (): Promise<ApiResult | null> => {
     try {
       const res = await fetch('/api/doctors')
       const body = await readResponseJson<ApiResult>(res)
-      if (res.ok) setData(body)
-      else toast.error(t('loadError'))
+      if (res.ok) return body
+      toast.error(t('loadError'))
     } catch {
       toast.error(t('loadError'))
-    } finally {
-      setLoading(false)
     }
+    return null
   }, [t])
 
+  // Reloads after a save show the spinner again; the first load starts
+  // with `loading` already true.
+  const load = useCallback(async () => {
+    setLoading(true)
+    const loaded = await fetchDoctors()
+    if (loaded) setData(loaded)
+    setLoading(false)
+  }, [fetchDoctors])
+
   useEffect(() => {
-    void load()
-  }, [load])
+    let cancelled = false
+    void fetchDoctors().then((loaded) => {
+      if (cancelled) return
+      if (loaded) setData(loaded)
+      setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchDoctors])
 
   const addDoctor = async () => {
     const name = newName.trim()
@@ -588,6 +603,12 @@ interface NoteTemplate {
   body: string
 }
 
+async function fetchNoteTemplates(): Promise<NoteTemplate[]> {
+  const res = await fetch('/api/note-templates')
+  const b = await readResponseJson<{ templates: NoteTemplate[] }>(res)
+  return res.ok ? b.templates ?? [] : []
+}
+
 export function NoteTemplatesManager() {
   const t = useTranslations('Clinic.noteTemplates')
   const canEdit = useCan('send-messages')
@@ -601,16 +622,24 @@ export function NoteTemplatesManager() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/note-templates')
-      const b = await readResponseJson<{ templates: NoteTemplate[] }>(res)
-      setTemplates(res.ok ? b.templates ?? [] : [])
+      setTemplates(await fetchNoteTemplates())
     } finally {
       setLoading(false)
     }
   }, [])
   useEffect(() => {
-    void load()
-  }, [load])
+    let cancelled = false
+    void fetchNoteTemplates()
+      .then((loaded) => {
+        if (!cancelled) setTemplates(loaded)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const add = async () => {
     if (name.trim().length < 2) return

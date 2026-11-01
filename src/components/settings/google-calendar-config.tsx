@@ -37,6 +37,12 @@ type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
  * with `?connected=1` or `?error=...` — read once on mount to show the
  * right toast, then stripped from the URL so a refresh doesn't re-fire it.
  */
+interface CalendarStatusPayload {
+  connected?: boolean;
+  calendar_email?: string | null;
+  message?: string;
+}
+
 export function GoogleCalendarConfig() {
   const t = useTranslations('Settings.googleCalendar');
   const { user, accountId, loading: authLoading, profileLoading } = useAuth();
@@ -52,43 +58,48 @@ export function GoogleCalendarConfig() {
   const loadedAccountIdRef = useRef<string | null>(null);
   const consumedRedirectRef = useRef(false);
 
-  const fetchStatus = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/google-calendar/config');
-      const payload = await readResponseJson<{
-        connected?: boolean;
-        calendar_email?: string | null;
-        message?: string;
-      }>(res);
-      if (payload.connected) {
-        setStatus('connected');
-        setCalendarEmail(payload.calendar_email ?? null);
-        setStatusMessage('');
-      } else {
-        setStatus('disconnected');
-        setCalendarEmail(null);
-        setStatusMessage(payload.message || '');
+  // null = the request failed; status flips to disconnected and the
+  // email/message shown before are kept.
+  const loadStatus =
+    useCallback(async (): Promise<CalendarStatusPayload | null> => {
+      try {
+        const res = await fetch('/api/google-calendar/config');
+        return await readResponseJson<CalendarStatusPayload>(res);
+      } catch (err) {
+        console.error('[google-calendar] status fetch failed:', err);
+        return null;
       }
-    } catch (err) {
-      console.error('[google-calendar] status fetch failed:', err);
+    }, []);
+
+  const applyStatus = useCallback((payload: CalendarStatusPayload | null) => {
+    if (payload?.connected) {
+      setStatus('connected');
+      setCalendarEmail(payload.calendar_email ?? null);
+      setStatusMessage('');
+    } else if (payload) {
       setStatus('disconnected');
-    } finally {
-      setLoading(false);
+      setCalendarEmail(null);
+      setStatusMessage(payload.message || '');
+    } else {
+      setStatus('disconnected');
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoading(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchStatus();
-  }, [authLoading, profileLoading, user, accountId, fetchStatus]);
+    void loadStatus().then(applyStatus);
+  }, [authLoading, profileLoading, user, accountId, loadStatus, applyStatus]);
+
+  // Signed out (or no account) once auth settles: nothing to load.
+  const showLoading =
+    loading && (authLoading || profileLoading || (!!user && !!accountId));
 
   // Reflect the OAuth callback's redirect result once, then clean the
   // URL so refreshing this tab doesn't replay the same toast.
@@ -101,12 +112,12 @@ export function GoogleCalendarConfig() {
 
     if (connected) {
       toast.success(t('toastConnected'));
-      fetchStatus();
+      void loadStatus().then(applyStatus);
     } else if (error) {
       toast.error(t('toastConnectFailed', { error }));
     }
     router.replace(`${pathname}?tab=google-calendar`);
-  }, [searchParams, router, pathname, t, fetchStatus]);
+  }, [searchParams, router, pathname, t, loadStatus, applyStatus]);
 
   async function handleDisconnect() {
     if (!confirm(t('disconnectConfirm'))) return;
@@ -133,7 +144,7 @@ export function GoogleCalendarConfig() {
     }
   }
 
-  if (loading) {
+  if (showLoading) {
     return (
       <section className="animate-in fade-in-50 duration-200">
         <SettingsPanelHead title={t('title')} description={t('description')} />

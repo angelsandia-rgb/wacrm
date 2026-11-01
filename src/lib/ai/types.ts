@@ -1,3 +1,4 @@
+import type { AutoReplySchedule } from './auto-reply-schedule'
 // ============================================================
 // Shared types for the AI reply assistant (bring-your-own-key).
 //
@@ -19,6 +20,8 @@ export interface AiConfig {
   apiKey: string
   systemPrompt: string | null
   isActive: boolean
+  /** Optional per-account schedule for automatic attention only. */
+  autoReplySchedule?: AutoReplySchedule | null
   autoReplyEnabled: boolean
   autoReplyMaxPerConversation: number
   /** Master switch for the AI to autonomously book a real Google
@@ -44,6 +47,9 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
+  /** Per-account skill switches + rules (migration 171, ./skills.ts).
+   *  Empty/undefined == every skill on, no extra rules. */
+  skills?: import('./skills').AiSkillsConfig
 }
 
 /** An inbound customer photo, decoded and ready to hand to a provider
@@ -59,6 +65,11 @@ export interface ChatImage {
  *  auto-reply path only) carries photos the customer sent with that
  *  turn. Absent/empty `images` = a plain text turn, unchanged. */
 export interface ChatMessage {
+  /** Source timestamp for request routing; provider adapters omit this metadata. */
+  createdAt?: string
+  /** Present on hotel staff turns so their messages are not attributed to the bot. */
+  senderType?: 'agent'
+  contentType?: string
   role: 'user' | 'assistant'
   content: string
   images?: ChatImage[]

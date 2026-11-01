@@ -51,26 +51,44 @@ function emptyDraft(): DraftState {
   };
 }
 
+/** The account's quick replies, or null when the request is rejected. */
+async function fetchQuickReplies(): Promise<QuickReply[] | null> {
+  const res = await fetch('/api/quick-replies', { cache: 'no-store' });
+  const data = await readResponseJson(res).catch(() => ({}));
+  return res.ok ? ((data.quick_replies as QuickReply[]) ?? []) : null;
+}
+
 export function QuickRepliesManager() {
   const [items, setItems] = useState<QuickReply[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Reloads after a save show the spinner again; the first load starts
+  // with `loading` already true.
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/quick-replies', { cache: 'no-store' });
-      const data = await readResponseJson(res).catch(() => ({}));
-      if (res.ok) setItems((data.quick_replies as QuickReply[]) ?? []);
+      const loaded = await fetchQuickReplies();
+      if (loaded) setItems(loaded);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    void fetchQuickReplies()
+      .then((loaded) => {
+        if (!cancelled && loaded) setItems(loaded);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openCreate = () => setDraft(emptyDraft());
   const openEdit = (qr: QuickReply) =>

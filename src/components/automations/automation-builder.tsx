@@ -29,6 +29,7 @@ import {
   GitBranch,
   Webhook,
   CircleSlash,
+  MessageCircleQuestion,
   AlertTriangle,
   ArrowRightLeft,
   ClipboardList,
@@ -145,6 +146,11 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
     icon: PencilLine,
     border: 'border-l-primary',
   },
+  ask_question: {
+    label: 'ask_question',
+    icon: MessageCircleQuestion,
+    border: 'border-l-primary',
+  },
   create_deal: {
     label: 'create_deal',
     icon: Briefcase,
@@ -205,6 +211,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   'remove_tag',
   'assign_conversation',
   'update_contact_field',
+  'ask_question',
   'create_deal',
   'move_deal',
   'create_task',
@@ -223,6 +230,9 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: 'new_contact_created' },
   { value: 'conversation_assigned' },
   { value: 'tag_added' },
+  { value: 'contact_field_updated' },
+  { value: 'conversation_closed' },
+  { value: 'incoming_webhook' },
   { value: 'time_based' },
 ];
 
@@ -293,6 +303,8 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { mode: 'round_robin' };
     case 'update_contact_field':
       return { field: 'name', value: '' };
+    case 'ask_question':
+      return { question: '', field: '', var_name: 'respuesta', timeout_hours: 24 };
     case 'create_deal':
       return { pipeline_id: '', stage_id: '', title: '', value: 0 };
     case 'move_deal':
@@ -503,10 +515,16 @@ function ContactFieldSelect({
   value,
   onChange,
   t,
+  allowNone = false,
+  noneLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   t: ReturnType<typeof useTranslations>;
+  /** Adds an option stored as '' ("don't save" / "any field"). */
+  allowNone?: boolean;
+  /** Label of that '' option; defaults to "don't save to a field". */
+  noneLabel?: string;
 }) {
   const { customFields } = useResources();
   const customValue = value.startsWith('custom:') ? value : '';
@@ -514,10 +532,11 @@ function ContactFieldSelect({
     customValue && customFields.some((f) => `custom:${f.id}` === customValue);
   return (
     <select
-      value={value || 'name'}
+      value={value || (allowNone ? '' : 'name')}
       onChange={(e) => onChange(e.target.value)}
       className={SELECT_CLASS}
     >
+      {allowNone && <option value="">{noneLabel ?? t('fields.none')}</option>}
       <option value="name">{t('fields.name')}</option>
       <option value="email">{t('fields.email')}</option>
       <option value="company">{t('fields.company')}</option>
@@ -1180,6 +1199,23 @@ function TriggerCard({
                 />
               </div>
             )}
+            {type === 'contact_field_updated' && (
+              <div>
+                <label className="text-muted-foreground mb-1 block text-xs font-medium">
+                  {t('config.fieldLabel')}
+                </label>
+                <ContactFieldSelect
+                  value={(config.field as string) ?? ''}
+                  onChange={(v) => onConfigChange({ ...config, field: v })}
+                  t={t}
+                  allowNone
+                  noneLabel={t('anyField')}
+                />
+              </div>
+            )}
+            {type === 'incoming_webhook' && (
+              <IncomingWebhookConfig config={config} onChange={onConfigChange} t={t} />
+            )}
             {type === 'time_based' && (
               <div>
                 <label className="text-muted-foreground mb-1 block text-xs font-medium">
@@ -1201,6 +1237,59 @@ function TriggerCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function newWebhookToken(): string {
+  return crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+}
+
+/** Secret URL for the incoming_webhook trigger. The token is generated
+ *  client-side the first time the trigger is picked and saved with the
+ *  automation; "Generate new URL" invalidates the old one on save. */
+function IncomingWebhookConfig({
+  config,
+  onChange,
+  t,
+}: {
+  config: Record<string, unknown>;
+  onChange: (c: Record<string, unknown>) => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const token = typeof config.token === 'string' ? config.token : '';
+  useEffect(() => {
+    if (!token) onChange({ ...config, token: newWebhookToken() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const url =
+    token && typeof window !== 'undefined'
+      ? `${window.location.origin}/api/automations/webhook/${token}`
+      : '';
+  return (
+    <div className="space-y-1.5">
+      <label className="text-muted-foreground block text-xs font-medium">{t('webhookUrl')}</label>
+      <div className="flex gap-2">
+        <Input readOnly value={url} className="bg-muted text-foreground font-mono text-xs" />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void navigator.clipboard?.writeText(url)}
+          disabled={!url}
+        >
+          {t('copy')}
+        </Button>
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => onChange({ ...config, token: newWebhookToken() })}
+      >
+        {t('regenerate')}
+      </Button>
+      <p className="text-muted-foreground text-[11px]">{t.raw('webhookHelp')}</p>
     </div>
   );
 }
@@ -1697,9 +1786,20 @@ function StepEditor({
               <option value="round_robin">
                 {t('config.modes.round_robin')}
               </option>
+              <option value="least_open">{t('config.modes.least_open')}</option>
               <option value="specific">{t('config.modes.specific')}</option>
             </select>
           </FieldBlock>
+          {cfg.mode !== 'specific' && (
+            <label className="text-foreground flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={cfg.online_only === true}
+                onChange={(e) => set({ online_only: e.target.checked })}
+              />
+              {t('config.onlineOnly')}
+            </label>
+          )}
           {cfg.mode === 'specific' && (
             <FieldBlock label={t('config.agentLabel')}>
               <AgentSelect
@@ -1729,6 +1829,47 @@ function StepEditor({
               className="bg-muted text-foreground"
             />
           </FieldBlock>
+        </>
+      );
+    case 'ask_question':
+      return (
+        <>
+          <FieldBlock label={t('config.questionLabel')}>
+            <Textarea
+              value={(cfg.question as string) ?? ''}
+              onChange={(e) => set({ question: e.target.value })}
+              rows={2}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t('config.answerFieldLabel')}>
+            <ContactFieldSelect
+              value={(cfg.field as string) ?? ''}
+              onChange={(v) => set({ field: v })}
+              t={t}
+              allowNone
+            />
+          </FieldBlock>
+          <FieldBlock label={t.raw('config.answerVarLabel')}>
+            <Input
+              value={(cfg.var_name as string) ?? ''}
+              onChange={(e) => set({ var_name: e.target.value.replace(/[^\w]/g, '') })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t('config.answerTimeoutLabel')}>
+            <Input
+              type="number"
+              min={1}
+              max={168}
+              value={(cfg.timeout_hours as number) ?? 24}
+              onChange={(e) =>
+                set({ timeout_hours: Math.min(168, Math.max(1, Math.floor(Number(e.target.value) || 1))) })
+              }
+              className="bg-muted text-foreground w-28"
+            />
+          </FieldBlock>
+          <p className="text-muted-foreground text-xs">{t('config.askQuestionHint')}</p>
         </>
       );
     case 'create_deal':
@@ -1997,6 +2138,8 @@ function previewFor(step: BuilderStep, products: ProductOption[]): string {
       return (step.step_config.template_name as string) || 'pick a template';
     case 'create_task':
       return (step.step_config.title as string) || 'no title yet';
+    case 'ask_question':
+      return (step.step_config.question as string) || 'no question yet';
     case 'send_photo': {
       const productId = step.step_config.product_id as string;
       const product = products.find((p) => p.id === productId);

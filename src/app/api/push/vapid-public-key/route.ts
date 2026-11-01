@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { getVapidConfig } from '@/lib/push/vapid';
+
+export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/push/vapid-public-key
@@ -10,5 +13,8 @@ import { NextResponse } from 'next/server';
  * on `pushsubscriptionchange`.
  */
 export function GET() {
-  return NextResponse.json({ key: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? null });
+  const config = getVapidConfig();
+  return NextResponse.json({ key: config?.publicKey ?? null, configured: Boolean(config) }, {
+    headers: { 'Cache-Control': 'no-store' },
+  });
 }

@@ -466,14 +466,19 @@ function PublicCatalogPageInner() {
   const [resvMinutes, setResvMinutes] = useState('');
   const [resvSubmitting, setResvSubmitting] = useState(false);
   const [resvResult, setResvResult] = useState<string | null>(null);
-  useEffect(() => {
+  // A fresh form per product. Reset while rendering (React's pattern for
+  // reacting to a changed input) rather than in an effect, so the old
+  // product's dates never flash on the new one.
+  const [resvFormFor, setResvFormFor] = useState(selectedProduct?.id);
+  if (resvFormFor !== selectedProduct?.id) {
+    setResvFormFor(selectedProduct?.id);
     setStayCheckIn('');
     setStayCheckOut('');
     setStayGuests(2);
     setResvUseDate('');
     setResvMinutes('');
     setResvResult(null);
-  }, [selectedProduct?.id]);
+  }
 
   const stayQuote =
     (selectedHotelCategory === 'habitaciones' || selectedHotelCategory === 'paquetes') &&

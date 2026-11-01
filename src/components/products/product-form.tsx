@@ -248,8 +248,14 @@ export function ProductForm({
   const optionFileInputRef = useRef<HTMLInputElement>(null);
   const pendingOptionIndexRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  // Seed the form whenever it opens (or its product changes while open) —
+  // while rendering, React's pattern for reacting to changed inputs.
+  const [seededFor, setSeededFor] = useState<{ product: typeof product } | null>(
+    null
+  );
+  if (!open && seededFor) setSeededFor(null);
+  if (open && (!seededFor || seededFor.product !== product)) {
+    setSeededFor({ product });
     setName(product?.name ?? '');
     setDescription(product?.description ?? '');
     setPrice(product ? String(product.price) : '');
@@ -281,7 +287,7 @@ export function ProductForm({
     const blocks = rowsToBlocks(product?.rates);
     setBaseRates(blocks.base);
     setSeasons(blocks.seasons);
-  }, [open, product]);
+  }
 
   // Load the account's catalog categories (hotel vertical) when the
   // dialog opens.

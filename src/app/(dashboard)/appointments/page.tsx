@@ -104,7 +104,15 @@ function AppointmentsPageInner() {
   const [loading, setLoading] = useState(true)
   const [doctors, setDoctors] = useState<{ id: string; display_name: string }[]>([])
   const [services, setServices] = useState<{ id: string; name: string }[]>([])
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(!!presetPatient)
+  // A `?patient=` deep link opens the new-appointment dialog. Adjusted
+  // while rendering (React's pattern for reacting to a changed input)
+  // rather than in an effect.
+  const [openedForPatient, setOpenedForPatient] = useState(presetPatient)
+  if (presetPatient !== openedForPatient) {
+    setOpenedForPatient(presetPatient)
+    if (presetPatient) setDialogOpen(true)
+  }
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null)
   const [visitDraft, setVisitDraft] = useState<VisitDraft | null>(null)
 
@@ -124,12 +132,7 @@ function AppointmentsPageInner() {
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
-    if (presetPatient) setDialogOpen(true)
-  }, [presetPatient])
-
-  const load = useCallback(async () => {
-    setLoading(true)
+  const fetchRows = useCallback(async (): Promise<Row[]> => {
     try {
       const { from, to } = rangeBounds(range, tz)
       const params = new URLSearchParams({ from, to })
@@ -139,17 +142,39 @@ function AppointmentsPageInner() {
       if (debounced) params.set('search', debounced)
       const res = await fetch(`/api/appointments?${params.toString()}`)
       const body = await readResponseJson<{ appointments: Row[] }>(res)
-      setRows(res.ok ? body.appointments ?? [] : [])
+      return res.ok ? body.appointments ?? [] : []
     } catch {
-      setRows([])
-    } finally {
-      setLoading(false)
+      return []
     }
   }, [range, tz, doctorFilter, serviceFilter, statusFilter, debounced])
 
+  // Which filters the rows on screen answer; loading until it matches.
+  const queryKey = JSON.stringify([range, tz, doctorFilter, serviceFilter, statusFilter, debounced])
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+
+  const applyRows = useCallback((key: string, next: Row[]) => {
+    setRows(next)
+    setLoadedKey(key)
+    setLoading(false)
+  }, [])
+
+  // Reload after a create/reschedule/visit.
+  const load = useCallback(async () => {
+    setLoading(true)
+    applyRows(queryKey, await fetchRows())
+  }, [applyRows, queryKey, fetchRows])
+
   useEffect(() => {
-    void load()
-  }, [load])
+    let cancelled = false
+    void fetchRows().then((next) => {
+      if (!cancelled) applyRows(queryKey, next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchRows, applyRows, queryKey])
+
+  const showLoading = loading || loadedKey !== queryKey
 
   const fmtDate = useMemo(
     () => new Intl.DateTimeFormat('es-GT', { weekday: 'short', day: '2-digit', month: 'short', timeZone: tz }),
@@ -259,7 +284,7 @@ function AppointmentsPageInner() {
         />
       </div>
 
-      {loading ? (
+      {showLoading ? (
         <div className="bg-muted/40 h-64 animate-pulse rounded-lg" />
       ) : rows.length === 0 ? (
         <div className="border-border text-muted-foreground rounded-lg border border-dashed py-14 text-center text-sm">

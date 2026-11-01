@@ -17,6 +17,9 @@ import {
   ListTodo,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { es } from "date-fns/locale";
+import { notificationDisplayText } from "@/lib/push/notification-payload";
+import { enrichAssignment } from "@/lib/push/assignment-details";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -50,10 +53,10 @@ export default function NotificationsPage() {
       .order("created_at", { ascending: false })
       .limit(100);
     if (fetchErr) {
-      setError(fetchErr.message);
+      setError("No se pudieron cargar las notificaciones. Volv\u00e9 a intentarlo.");
       return;
     }
-    setNotifications((data ?? []) as Notification[]);
+    setNotifications(await Promise.all(((data ?? []) as Notification[]).map(row => enrichAssignment(supabase, row))));
   }, [accountId]);
 
   useEffect(() => {
@@ -70,16 +73,16 @@ export default function NotificationsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
+        async (payload) => {
           if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
+            const row = await enrichAssignment(supabase, payload.new as Notification);
             setNotifications((prev) => {
               if (!prev) return [row];
               if (prev.some((n) => n.id === row.id)) return prev;
               return [row, ...prev];
             });
           } else if (payload.eventType === "UPDATE") {
-            const row = payload.new as Notification;
+            const row = await enrichAssignment(supabase, payload.new as Notification);
             setNotifications((prev) =>
               prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
               prev,
@@ -118,7 +121,7 @@ export default function NotificationsPage() {
         .eq("id", id)
         .is("read_at", null);
       if (updateErr) {
-        toast.error("Failed to mark notification as read");
+        toast.error("No se pudo marcar la notificaci\u00f3n como le\u00edda");
         load();
       }
     },
@@ -151,7 +154,7 @@ export default function NotificationsPage() {
       .is("read_at", null);
     setMarkingAll(false);
     if (updateErr) {
-      toast.error("Failed to mark all as read");
+      toast.error("No se pudieron marcar todas como le\u00eddas");
       load();
     }
   }, [unreadIds.length, load]);
@@ -161,7 +164,7 @@ export default function NotificationsPage() {
       <div className="flex h-64 flex-col items-center justify-center gap-2">
         <p className="text-sm text-destructive">{error}</p>
         <Button variant="outline" onClick={() => window.location.reload()}>
-          Retry
+          Reintentar
         </Button>
       </div>
     );
@@ -179,9 +182,9 @@ export default function NotificationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Notifications</h1>
+          <h1 className="text-2xl font-bold text-foreground">Notificaciones</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Conversation assignments and AI account alerts show up here.
+            Consultas pendientes del equipo, conversaciones asignadas y avisos del sistema.
           </p>
         </div>
         <Button
@@ -195,7 +198,7 @@ export default function NotificationsPage() {
           ) : (
             <CheckCheck className="h-4 w-4" />
           )}
-          Mark all as read
+          Marcar todas como leídas
         </Button>
       </div>
 
@@ -205,16 +208,16 @@ export default function NotificationsPage() {
             <Bell className="h-6 w-6 text-primary" />
           </div>
           <p className="mt-3 text-sm font-medium text-foreground">
-            No notifications yet
+            No tenés notificaciones
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            You&apos;ll see an alert here when someone assigns you a
-            conversation, or if the AI stops replying.
+            Aquí aparecerán las consultas que requieren seguimiento y los avisos importantes.
           </p>
         </div>
       ) : (
         <ul className="space-y-2">
           {notifications.map((n) => {
+            const text = notificationDisplayText(n);
             const Icon = TYPE_ICON[n.type] ?? Bell;
             const isUnread = !n.read_at;
             return (
@@ -247,27 +250,28 @@ export default function NotificationsPage() {
                     <div className="flex items-center gap-2">
                       <span
                         className={cn(
-                          "truncate text-sm font-semibold",
+                          "min-w-0 flex-1 break-words text-sm font-semibold",
                           isUnread ? "text-foreground" : "text-muted-foreground",
                         )}
                       >
-                        {n.title}
+                        {text.title}
                       </span>
                       {isUnread && (
                         <span
-                          aria-label="Unread"
+                          aria-label="Sin leer"
                           className="h-2 w-2 flex-shrink-0 rounded-full bg-primary"
                         />
                       )}
                     </div>
-                    {n.body && (
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {n.body}
+                    {text.body && (
+                      <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-muted-foreground">
+                        {text.body}
                       </p>
                     )}
                     <p className="mt-1 text-[11px] text-muted-foreground/70">
                       {formatDistanceToNow(new Date(n.created_at), {
                         addSuffix: true,
+                        locale: es,
                       })}
                     </p>
                   </div>

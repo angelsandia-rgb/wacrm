@@ -8,6 +8,7 @@ import {
   nameFromAnswer,
   stripTrailingAttachmentOffer,
   hasConflictingAmount,
+  withoutConflictingStayPrices,
   isPastDate,
   mentionedAmounts,
   stripTrailingPermissionQuestion,
@@ -151,10 +152,10 @@ describe('nameFromAnswer', () => {
 describe('replyWithoutNotedClaim', () => {
   it('keeps the answer and drops only the false "noted" claim', () => {
     expect(replyWithoutNotedClaim('Estamos en el Km 82.5, a unas 2 horas. Sobre el transporte, le dejo anotada su consulta.\nhttps://maps.app.goo.gl/x'))
-      .toBe('Estamos en el Km 82.5, a unas 2 horas.\n\nhttps://maps.app.goo.gl/x\n\nEl equipo del hotel se lo confirma por este chat en breve.')
+      .toBe('Estamos en el Km 82.5, a unas 2 horas.\n\nhttps://maps.app.goo.gl/x\n\nYa le pasé su solicitud al equipo del hotel; se la confirman por este chat en breve.')
   })
   it('falls back to a team line when nothing is left', () => {
-    expect(replyWithoutNotedClaim('Queda anotada su solicitud.')).toBe('El equipo del hotel le confirma esta petición por este chat en breve.')
+    expect(replyWithoutNotedClaim('Queda anotada su solicitud.')).toBe('Ya le pasé su solicitud al equipo del hotel; se la confirman por este chat en breve.')
   })
 })
 
@@ -180,4 +181,11 @@ describe('replyWithoutNotedClaim — no duplicated team line', () => {
     expect(replyWithoutNotedClaim('Con gusto, el equipo le escribe para el ingreso temprano. Le dejo anotada su solicitud.'))
       .toBe('Con gusto, el equipo le escribe para el ingreso temprano.')
   })
+})
+
+
+it('detects a room total even when the same sentence mentions a child', () => {
+  const text = 'Para la Junior Suite Familiar con 4 adultos y 1 niño de 5 años, la tarifa es Q1,800. El niño no paga. ?A nombre de quién?'
+  expect(hasConflictingAmount(text, 1500, 750)).toBe(true)
+  expect(withoutConflictingStayPrices(text, 1500, 750)).toBe('El niño no paga. ?A nombre de quién?')
 })

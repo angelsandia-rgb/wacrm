@@ -40,6 +40,7 @@ export function SessionsCard() {
         toast.error(t('signOutFailed', { message: error.message }));
         return;
       }
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload drops all in-memory session state after sign-out.
       window.location.href = '/login';
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';

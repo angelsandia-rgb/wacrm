@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { reassignUnclaimedConversations } from './reassign'
+import { leastLoaded, nextRoundRobin, reassignUnclaimedConversations } from './reassign'
 
 const NOW = new Date('2026-08-15T12:00:00Z').getTime()
 const minsAgo = (m: number) => new Date(NOW - m * 60_000).toISOString()
@@ -234,5 +234,21 @@ describe('reassignUnclaimedConversations', () => {
     const result = await reassignUnclaimedConversations(db, NOW)
     expect(result).toEqual({ processed: 1, assigned: 1 })
     expect(claims).toEqual([{ id: 'conv-1', agent: 'agent-1' }])
+  })
+})
+
+describe('nextRoundRobin / leastLoaded', () => {
+  it('rotates in order and wraps; starts at the first with no cursor', () => {
+    expect(nextRoundRobin(['a', 'b', 'c'], undefined)).toBe('a')
+    expect(nextRoundRobin(['a', 'b', 'c'], 'a')).toBe('b')
+    expect(nextRoundRobin(['a', 'b', 'c'], 'c')).toBe('a')
+    expect(nextRoundRobin(['a', 'b'], 'gone')).toBe('a')
+    expect(nextRoundRobin([], 'a')).toBeUndefined()
+  })
+
+  it('picks the fewest open conversations, first on a tie', () => {
+    expect(leastLoaded(['a', 'b', 'c'], new Map([['a', 3], ['b', 1], ['c', 1]]))).toBe('b')
+    expect(leastLoaded(['a', 'b'], new Map())).toBe('a')
+    expect(leastLoaded([], new Map())).toBeUndefined()
   })
 })

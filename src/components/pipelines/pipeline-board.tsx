@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { hotelStageDescription } from "@/lib/pipelines/hotel-stages";
 import {
   DndContext,
   DragOverlay,
@@ -253,6 +254,7 @@ function StageColumn({
       <p className="text-xs text-muted-foreground">
         {formatCurrency(totalValue, currency)}
       </p>
+      {hotelStageDescription(stage.name) && <p className="mt-1 text-xs text-muted-foreground">{hotelStageDescription(stage.name)}</p>}
 
       <div
         ref={setNodeRef}

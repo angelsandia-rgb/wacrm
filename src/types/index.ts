@@ -204,6 +204,13 @@ export interface Conversation {
   channel?: 'whatsapp' | 'instagram' | 'facebook';
   /** Which WhatsApp connection owns this thread (migration 050). Null for non-WhatsApp channels. */
   whatsapp_config_id?: string | null;
+  /** AI close insights (migration 169), filled a few minutes after the
+   *  conversation closes when the account turned them on. */
+  closed_at?: string | null;
+  close_category?: string | null;
+  close_summary?: string | null;
+  close_sentiment?: 'positive' | 'neutral' | 'negative' | null;
+  close_sentiment_reason?: string | null;
 }
 
 // ============================================================
@@ -669,7 +676,14 @@ export type AutomationTriggerType =
   | 'time_based'
   /** Customer tapped a reply button / list row whose id matches; lets
    *  multi-step menus be chained across automations. */
-  | 'interactive_reply';
+  | 'interactive_reply'
+  /** A conversation was closed by a person, the AI or auto-close (not by
+   *  another automation — that would loop). */
+  | 'conversation_closed'
+  /** A contact field changed (built-in or custom); optionally one field. */
+  | 'contact_field_updated'
+  /** An external system POSTed to the automation's secret URL. */
+  | 'incoming_webhook';
 
 export type AutomationStepType =
   | 'send_message'
@@ -687,7 +701,10 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
-  | 'close_conversation';
+  | 'close_conversation'
+  /** Sends a question, parks the run until the customer answers (or
+   *  `timeout_hours` passes), saves the answer, then continues. */
+  | 'ask_question';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
 
@@ -720,12 +737,24 @@ export interface InteractiveReplyTriggerConfig {
   reply_ids: string[];
 }
 
+export interface ContactFieldTriggerConfig {
+  /** Same encoding as `UpdateContactFieldStepConfig.field`; '' = any field. */
+  field: string;
+}
+
+export interface IncomingWebhookTriggerConfig {
+  /** Secret path segment of POST /api/automations/webhook/<token>. */
+  token: string;
+}
+
 export type AutomationTriggerConfig =
   | Record<string, never>
   | KeywordMatchTriggerConfig
   | TagTriggerConfig
   | TimeBasedTriggerConfig
   | InteractiveReplyTriggerConfig
+  | ContactFieldTriggerConfig
+  | IncomingWebhookTriggerConfig
   | Record<string, unknown>;
 
 export interface SendMessageStepConfig {
@@ -751,8 +780,14 @@ export interface TagStepConfig {
 }
 
 export interface AssignConversationStepConfig {
-  mode: 'specific' | 'round_robin';
+  /** round_robin = rotate through the agents in turn; least_open = the
+   *  agent with the fewest open conversations right now. */
+  mode: 'specific' | 'round_robin' | 'least_open';
   agent_id?: string;
+  /** round_robin / least_open: only agents online now (presence). */
+  online_only?: boolean;
+  /** round_robin cursor — written back by the engine, not the builder. */
+  last_agent_id?: string;
 }
 
 export interface UpdateContactFieldStepConfig {
@@ -766,6 +801,18 @@ export interface UpdateContactFieldStepConfig {
   field: string;
   /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation at runtime. */
   value: string;
+}
+
+export interface AskQuestionStepConfig {
+  /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation. */
+  question: string;
+  /** Where the answer is saved — same encoding as
+   *  `UpdateContactFieldStepConfig.field`; '' = only the variable. */
+  field: string;
+  /** The answer is also available to later steps as `{{ vars.<var_name> }}`. */
+  var_name: string;
+  /** No answer after this many hours → continue without one (1–168). */
+  timeout_hours: number;
 }
 
 export interface CreateDealStepConfig {
@@ -853,6 +900,7 @@ export type AutomationStepConfig =
   | TagStepConfig
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
+  | AskQuestionStepConfig
   | CreateDealStepConfig
   | MoveDealStepConfig
   | CreateTaskStepConfig

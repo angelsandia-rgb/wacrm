@@ -115,8 +115,15 @@ export function QuoteBuilder({
   const [customerAddress, setCustomerAddress] = useState('');
   const [saving, setSaving] = useState<'draft' | 'send' | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  // Fresh quote whenever the builder opens (or its contact changes while
+  // open) — reset while rendering, React's pattern for reacting to
+  // changed inputs.
+  const [seededFor, setSeededFor] = useState<{ contact: typeof contact } | null>(
+    null
+  );
+  if (!open && seededFor) setSeededFor(null);
+  if (open && (!seededFor || seededFor.contact !== contact)) {
+    setSeededFor({ contact });
     setSelectedContact(contact ?? null);
     setContactSearch('');
     setContactResults([]);
@@ -134,7 +141,10 @@ export function QuoteBuilder({
     setStayCheckIn('');
     setStayCheckOut('');
     setStayOccupancy('standard');
+  }
 
+  useEffect(() => {
+    if (!open) return;
     // Via the API so each product carries its `rates` (migration 106).
     fetch('/api/products', { cache: 'no-store' })
       .then((res) => (res.ok ? readResponseJson<{ products?: Product[] }>(res) : { products: [] }))
@@ -151,7 +161,7 @@ export function QuoteBuilder({
         .then((data) => setCategories(data.categories ?? []))
         .catch(() => setCategories([]));
     }
-  }, [open, contact, isHotel]);
+  }, [open, isHotel]);
 
   const searchContacts = useCallback(async (term: string) => {
     if (!term.trim()) {

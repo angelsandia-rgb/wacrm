@@ -1,3 +1,4 @@
+import { hasPendingSeasonRates } from '@/lib/products/rate-approval'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
 import { formatDateEs, summarizeRates, type DayOfWeek } from '@/lib/products/rates'
@@ -80,12 +81,15 @@ export async function loadCatalogContext(
   }
 
   return typed.map((p) => {
-    const desc = p.description ? ` — ${truncate(p.description, MAX_DESCRIPTION_CHARS)}` : ''
+    const desc = p.description ? ` — ${truncate(p.description, account?.industry_vertical === 'hotel' ? 1200 : MAX_DESCRIPTION_CHARS)}` : ''
     const rates = ratesByProduct.get(p.id) ?? []
     if (rates.length > 0) {
       const cap = maxGuestsByProduct.get(p.id)
       const capNote = cap ? ` · capacidad máx. ${cap} personas (adultos + niños)` : ''
-      return `- ${p.name}: ${formatRateSummary(rates, currency)}${capNote}${desc}`
+      const pending = hasPendingSeasonRates(p.description)
+      const visibleRates = pending ? rates.filter(r => !r.date_from && !r.date_to) : rates
+      const approvalNote = pending ? ' TEMPORADA ALTA: precio pendiente de confirmaci\u00f3n del hotel; no cotizar las tarifas de adulto de esas temporadas.' : ''
+      return `- ${p.name}: ${formatRateSummary(visibleRates, currency)}${capNote}${desc}${approvalNote}`
     }
     return `- ${p.name} (${formatCurrency(p.price, currency)})${desc}`
   })

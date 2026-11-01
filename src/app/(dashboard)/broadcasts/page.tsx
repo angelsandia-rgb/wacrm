@@ -69,7 +69,9 @@ export default function BroadcastsPage() {
   // Used to kick off polling only while something is actively sending.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchBroadcasts = useCallback(async () => {
+  const loadBroadcasts = useCallback(async (): Promise<
+    { broadcasts: Broadcast[] } | { error: string }
+  > => {
     try {
       const supabase = createClient();
       const { data, error: fetchError } = await supabase
@@ -78,17 +80,34 @@ export default function BroadcastsPage() {
         .order('created_at', { ascending: false });
 
       if (fetchError) throw fetchError;
-      setBroadcasts(data ?? []);
+      return { broadcasts: data ?? [] };
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('errorLoad'));
-    } finally {
-      setLoading(false);
+      return { error: err instanceof Error ? err.message : t('errorLoad') };
     }
   }, [t]);
 
+  const applyBroadcasts = useCallback(
+    (result: Awaited<ReturnType<typeof loadBroadcasts>>) => {
+      if ('error' in result) setError(result.error);
+      else setBroadcasts(result.broadcasts);
+      setLoading(false);
+    },
+    []
+  );
+
+  const fetchBroadcasts = useCallback(async () => {
+    applyBroadcasts(await loadBroadcasts());
+  }, [loadBroadcasts, applyBroadcasts]);
+
   useEffect(() => {
-    fetchBroadcasts();
-  }, [fetchBroadcasts]);
+    let cancelled = false;
+    void loadBroadcasts().then((result) => {
+      if (!cancelled) applyBroadcasts(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadBroadcasts, applyBroadcasts]);
 
   const anySending = useMemo(
     () => broadcasts.some((b) => b.status === 'sending'),

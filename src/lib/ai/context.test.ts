@@ -246,3 +246,27 @@ describe('buildConversationContext', () => {
     })
   })
 })
+
+it('preserves staff attachments and author identity for hotel short follow-ups', async () => {
+  const messages = await buildConversationContext(fakeDb([
+    { sender_type: 'customer', content_type: 'text', content_text: 'Disculpe, no entiendo…' },
+    { sender_type: 'agent', content_type: 'text', content_text: '[interactive]' },
+    { sender_type: 'agent', content_type: 'image', content_text: null, media_url: 'https://example.com/image' },
+    { sender_type: 'bot', content_type: 'text', content_text: 'Que tenga linda noche.' },
+  ]), 'conv', undefined, null, null, null, true)
+  expect(messages[1]).toMatchObject({ senderType: 'agent', contentType: 'image' })
+  expect(messages[2]).toMatchObject({ senderType: 'agent', contentType: 'text' })
+  const note = recentExchangeNote(messages)
+  expect(note).toContain('senderType=agent')
+  expect(note).toContain('contenido no está disponible')
+  expect(note).not.toContain('Que tenga linda noche.')
+})
+
+
+it('retains source timestamps for routing new questions after an internal handoff', async () => {
+  const messages = await buildConversationContext(fakeDb([
+    { sender_type: 'customer', content_type: 'text', content_text: '¿Tienen parqueo?', created_at: '2026-10-14T19:00:00.000Z' },
+    { sender_type: 'customer', content_type: 'text', content_text: 'Quiero cancelar mi reserva', created_at: '2026-10-14T14:59:00.000Z' },
+  ]), 'conv', undefined, null, null, null, true)
+  expect(messages.map(m => m.createdAt)).toEqual(['2026-10-14T14:59:00.000Z', '2026-10-14T19:00:00.000Z'])
+})

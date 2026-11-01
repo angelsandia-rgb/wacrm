@@ -30,7 +30,6 @@ export default function Icon() {
           overflow: "hidden",
         }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element -- ImageResponse (satori) renders this itself; next/image isn't available here. */}
         <img
           src={MARK_DATA_URI}
           alt=""

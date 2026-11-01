@@ -46,6 +46,20 @@ type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason =
   'token_corrupted' | 'meta_api_error' | 'zernio_api_error' | null;
 
+/** What a config load resolved to; `undefined` fields keep the current value. */
+interface InstagramSnapshot {
+  config: InstagramConfigType | null;
+  provider: Provider | undefined;
+  igAccountId: string;
+  pageId: string;
+  accessToken: string;
+  zernioAccountId: string;
+  zernioApiKey: string;
+  connectionStatus: ConnectionStatus;
+  resetReason: ResetReason | undefined;
+  statusMessage: string | undefined;
+}
+
 /**
  * Instagram's counterpart to `WhatsAppConfig` (whatsapp-config.tsx).
  * Structurally identical (same load/save/test/reset lifecycle, same
@@ -102,9 +116,10 @@ export function InstagramConfig() {
       ? `${window.location.origin}/api/instagram/webhook${provider === 'zernio' ? '/zernio' : ''}`
       : '';
 
-  const fetchConfig = useCallback(
-    async (acctId: string) => {
-      setLoading(true);
+  // Loads the row + health check without touching state, so the mount
+  // effect only applies the result from an async callback.
+  const loadConfig = useCallback(
+    async (acctId: string): Promise<InstagramSnapshot | null> => {
       try {
         const { data, error } = await supabase
           .from('instagram_config')
@@ -116,28 +131,23 @@ export function InstagramConfig() {
           console.error('Failed to load Instagram config row:', error);
         }
 
-        if (data) {
-          setConfig(data);
-          setProvider(data.provider === 'zernio' ? 'zernio' : 'meta');
-          setIgAccountId(data.ig_account_id || '');
-          setPageId(data.page_id || '');
-          setAccessToken(MASKED_TOKEN);
-          setVerifyToken('');
-          setTokenEdited(false);
-          setZernioAccountId(data.zernio_account_id || '');
-          setZernioApiKey(data.zernio_api_key ? MASKED_TOKEN : '');
-          setZernioApiKeyEdited(false);
-        } else {
-          setConfig(null);
-          setIgAccountId('');
-          setPageId('');
-          setAccessToken('');
-          setVerifyToken('');
-          setTokenEdited(false);
-          setZernioAccountId('');
-          setZernioApiKey('');
-          setZernioApiKeyEdited(false);
-        }
+        const snapshot: InstagramSnapshot = {
+          config: data ?? null,
+          // No row → keep whichever provider tab is selected.
+          provider: data
+            ? data.provider === 'zernio'
+              ? 'zernio'
+              : 'meta'
+            : undefined,
+          igAccountId: data?.ig_account_id || '',
+          pageId: data?.page_id || '',
+          accessToken: data ? MASKED_TOKEN : '',
+          zernioAccountId: data?.zernio_account_id || '',
+          zernioApiKey: data?.zernio_api_key ? MASKED_TOKEN : '',
+          connectionStatus: 'disconnected',
+          resetReason: null,
+          statusMessage: '',
+        };
 
         if (data) {
           try {
@@ -145,55 +155,81 @@ export function InstagramConfig() {
             const payload = await readResponseJson(res);
 
             if (payload.connected) {
-              setConnectionStatus('connected');
-              setResetReason(null);
+              snapshot.connectionStatus = 'connected';
               // A soft warning (e.g. Zernio's account list couldn't be
               // reached to re-verify) — the link is still live, so stay
               // "connected" but surface the note.
-              setStatusMessage(payload.verify_warning || '');
+              snapshot.statusMessage = payload.verify_warning || '';
             } else {
-              setConnectionStatus('disconnected');
-              setResetReason(
-                payload.needs_reset
-                  ? 'token_corrupted'
-                  : payload.reason === 'meta_api_error'
-                    ? 'meta_api_error'
-                    : payload.reason === 'zernio_api_error'
-                      ? 'zernio_api_error'
-                      : null
-              );
-              setStatusMessage(payload.message || '');
+              snapshot.resetReason = payload.needs_reset
+                ? 'token_corrupted'
+                : payload.reason === 'meta_api_error'
+                  ? 'meta_api_error'
+                  : payload.reason === 'zernio_api_error'
+                    ? 'zernio_api_error'
+                    : null;
+              snapshot.statusMessage = payload.message || '';
             }
           } catch (err) {
             console.error('Health check failed:', err);
-            setConnectionStatus('disconnected');
+            // Keep whatever reason/message was showing before.
+            snapshot.resetReason = undefined;
+            snapshot.statusMessage = undefined;
           }
-        } else {
-          setConnectionStatus('disconnected');
-          setResetReason(null);
-          setStatusMessage('');
         }
+        return snapshot;
       } catch (err) {
         console.error('fetchConfig error:', err);
         toast.error('Failed to load Instagram configuration');
-      } finally {
-        setLoading(false);
+        return null;
       }
     },
     [supabase]
+  );
+
+  const applyConfig = useCallback((snapshot: InstagramSnapshot | null) => {
+    if (snapshot) {
+      setConfig(snapshot.config);
+      if (snapshot.provider) setProvider(snapshot.provider);
+      setIgAccountId(snapshot.igAccountId);
+      setPageId(snapshot.pageId);
+      setAccessToken(snapshot.accessToken);
+      setVerifyToken('');
+      setTokenEdited(false);
+      setZernioAccountId(snapshot.zernioAccountId);
+      setZernioApiKey(snapshot.zernioApiKey);
+      setZernioApiKeyEdited(false);
+      setConnectionStatus(snapshot.connectionStatus);
+      if (snapshot.resetReason !== undefined)
+        setResetReason(snapshot.resetReason);
+      if (snapshot.statusMessage !== undefined)
+        setStatusMessage(snapshot.statusMessage);
+    }
+    setLoading(false);
+  }, []);
+
+  const fetchConfig = useCallback(
+    async (acctId: string) => {
+      setLoading(true);
+      applyConfig(await loadConfig(acctId));
+    },
+    [loadConfig, applyConfig]
   );
 
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoading(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchConfig(accountId);
-  }, [authLoading, profileLoading, user, accountId, fetchConfig]);
+    void loadConfig(accountId).then(applyConfig);
+  }, [authLoading, profileLoading, user, accountId, loadConfig, applyConfig]);
+
+  // Signed out (or no account) once auth settles: nothing to load.
+  const showLoading =
+    loading && (authLoading || profileLoading || (!!user && !!accountId));
 
   async function handleSave() {
     if (provider === 'zernio') {
@@ -421,7 +457,7 @@ export function InstagramConfig() {
     setWebhookSecret(null);
   }
 
-  if (loading) {
+  if (showLoading) {
     return (
       <section className="animate-in fade-in-50 duration-200">
         <SettingsPanelHead title={t('title')} description={t('description')} />

@@ -5,7 +5,7 @@ import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation, shouldAdoptProfileName } from '@/lib/contacts/dedupe'
 import { reopenClosedConversation } from '@/lib/conversations/reopen'
 import { verifyZernioWebhookSignature } from '@/lib/zernio/webhook-signature'
-import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { consumeAwaitingAnswer, runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { startTypingIndicatorLoop } from '@/lib/whatsapp/typing-indicator'
@@ -649,7 +649,17 @@ async function processInboundMessage(message: ZernioWebhookMessage, config: any,
     message: { kind: 'text', text: contentText ?? '', meta_message_id: message.platformMessageId },
     isFirstInboundMessage,
   })
-  const flowConsumed = flowResult.consumed
+  // An automation `ask_question` step waiting on this customer takes the
+  // message as its answer; it then counts as consumed, like a flow reply,
+  // so it can't re-fire content triggers or get an AI reply.
+  const flowConsumed =
+    flowResult.consumed ||
+    (await consumeAwaitingAnswer({
+      accountId,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      text: contentText ?? '',
+    }))
 
   const inboundText = contentText ?? ''
   const automationTriggers: (

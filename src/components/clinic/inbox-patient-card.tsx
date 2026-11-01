@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { UserRoundCheck, CalendarPlus } from 'lucide-react'
@@ -27,40 +27,44 @@ export function InboxPatientCard({ contactId }: { contactId: string }) {
   const tz = account?.timezone || undefined
   const isClinic = (account?.industry_vertical ?? 'generic') === 'clinica'
 
-  const [patientId, setPatientId] = useState<string | null>(null)
-  const [agg, setAgg] = useState<Agg | null>(null)
-  const [checked, setChecked] = useState(false)
-
-  const load = useCallback(async (cid: string, alive: () => boolean) => {
-    setChecked(false)
-    setPatientId(null)
-    setAgg(null)
-    try {
-      const res = await fetch(`/api/patients?contact_id=${encodeURIComponent(cid)}`)
-      const b = await readResponseJson<{ patient: { id: string } | null }>(res)
-      if (!alive()) return
-      const id = b?.patient?.id ?? null
-      setPatientId(id)
-      if (id) {
-        const pr = await fetch(`/api/patients/${id}`)
-        const p = await readResponseJson<{ aggregate: Agg }>(pr)
-        if (alive()) setAgg(p?.aggregate ?? null)
-      }
-    } catch {
-      /* leave empty */
-    } finally {
-      if (alive()) setChecked(true)
-    }
-  }, [])
+  // Tagged with the contact it answers, so switching contacts reads as
+  // "not checked yet" until that contact's lookup lands.
+  const [result, setResult] = useState<{
+    contactId: string
+    patientId: string | null
+    agg: Agg | null
+  } | null>(null)
 
   useEffect(() => {
     if (!isClinic || !contactId) return
     let on = true
-    void load(contactId, () => on)
+    void (async () => {
+      let patientId: string | null = null
+      let agg: Agg | null = null
+      try {
+        const res = await fetch(`/api/patients?contact_id=${encodeURIComponent(contactId)}`)
+        const b = await readResponseJson<{ patient: { id: string } | null }>(res)
+        if (!on) return
+        patientId = b?.patient?.id ?? null
+        if (patientId) {
+          const pr = await fetch(`/api/patients/${patientId}`)
+          const p = await readResponseJson<{ aggregate: Agg }>(pr)
+          agg = p?.aggregate ?? null
+        }
+      } catch {
+        /* leave empty */
+      } finally {
+        if (on) setResult({ contactId, patientId, agg })
+      }
+    })()
     return () => {
       on = false
     }
-  }, [isClinic, contactId, load])
+  }, [isClinic, contactId])
+
+  const checked = result?.contactId === contactId
+  const patientId = checked ? result.patientId : null
+  const agg = checked ? result.agg : null
 
   if (!isClinic || !checked) return null
 

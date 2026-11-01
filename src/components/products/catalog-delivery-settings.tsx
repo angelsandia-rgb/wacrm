@@ -66,16 +66,34 @@ export function CatalogDeliverySettings() {
   // Public link (`catalog_slug`) + banner (`catalog_banner_url`) — both
   // live on `account` already, saved via PATCH /api/account (slug needs
   // uniqueness + format validation the direct client update can't give).
-  const [slug, setSlug] = useState("");
-  const [bannerUrl, setBannerUrl] = useState("");
+  // Edits are paired with the saved values they started from; a new
+  // saved value (profile load, or a save via refreshProfile) replaces
+  // them, the same reset the old sync effect did.
+  const brandingBase = JSON.stringify([
+    account?.catalog_slug ?? "",
+    account?.catalog_banner_url ?? "",
+  ]);
+  const [brandingEdits, setBrandingEdits] = useState<{
+    base: string;
+    slug?: string;
+    bannerUrl?: string;
+  } | null>(null);
+  const currentBranding =
+    brandingEdits?.base === brandingBase ? brandingEdits : null;
+  const slug = currentBranding?.slug ?? account?.catalog_slug ?? "";
+  const bannerUrl =
+    currentBranding?.bannerUrl ?? account?.catalog_banner_url ?? "";
+  const editBranding = (patch: { slug?: string; bannerUrl?: string }) =>
+    setBrandingEdits((prev) => ({
+      ...(prev?.base === brandingBase ? prev : null),
+      ...patch,
+      base: brandingBase,
+    }));
+  const setSlug = (value: string) => editBranding({ slug: value });
+  const setBannerUrl = (value: string) => editBranding({ bannerUrl: value });
   const [bannerUploading, setBannerUploading] = useState(false);
   const [brandingSaving, setBrandingSaving] = useState(false);
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    setSlug(account?.catalog_slug ?? "");
-    setBannerUrl(account?.catalog_banner_url ?? "");
-  }, [account?.catalog_slug, account?.catalog_banner_url]);
 
   const publicBase =
     (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
@@ -87,7 +105,9 @@ export function CatalogDeliverySettings() {
     slug.trim() !== (account?.catalog_slug ?? "") ||
     bannerUrl.trim() !== (account?.catalog_banner_url ?? "");
 
-  const [loading, setLoading] = useState(true);
+  // Which account the loaded settings belong to; loading until it matches.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const loading = loadedFor !== accountId;
   const [mode, setMode] = useState<CatalogMode>("digital");
   const [quoteMode, setQuoteMode] = useState<QuoteMode>("pdf");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -115,7 +135,6 @@ export function CatalogDeliverySettings() {
   useEffect(() => {
     if (!accountId) return;
     let cancelled = false;
-    setLoading(true);
     (async () => {
       const { data } = await supabase
         .from("accounts")
@@ -134,7 +153,7 @@ export function CatalogDeliverySettings() {
       setPhotoUrls(loadedPhotos);
       setMenuUrl(loadedMenu);
       setOriginal({ mode: loadedMode, quoteMode: loadedQuoteMode, pdfUrl: loadedPdf, photoUrls: loadedPhotos, menuUrl: loadedMenu });
-      setLoading(false);
+      setLoadedFor(accountId);
     })();
     return () => {
       cancelled = true;

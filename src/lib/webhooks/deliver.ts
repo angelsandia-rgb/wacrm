@@ -68,6 +68,14 @@ export async function dispatchWebhookEvent(
   data: unknown
 ): Promise<void> {
   try {
+    if (event === 'message.received') {
+      const { notifyHotelStaffInbound } = await import('@/lib/push/hotel-attention');
+      await notifyHotelStaffInbound(db, accountId, data);
+    }
+    if (event === 'reservation.updated' && data && typeof data === 'object' && 'reservation_id' in data && typeof data.reservation_id === 'string') {
+      const { syncHotelReservationDeal } = await import('@/lib/pipelines/sync-hotel-reservation');
+      await syncHotelReservationDeal(db, accountId, data.reservation_id);
+    }
     // Same event feed also lands in a connected Google Sheet, if the
     // account set one up. Independent of webhook endpoints — fired
     // first, awaited (we're already in an after()/best-effort context)
