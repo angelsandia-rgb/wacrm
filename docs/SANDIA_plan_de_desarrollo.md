@@ -5250,3 +5250,14 @@ ventas ganadas). Hotel y clínica lo ven con 30 días. Los envíos desde la
 bandeja ahora guardan `messages.sender_id` (antes siempre nulo), así que
 respuestas y tiempo de respuesta por asesor cuentan desde este deploy. Sin
 migración. Desplegado `e6164e7`. Calendly queda pendiente.
+
+**#259 — Panel de alertas de /admin usable en celular.** La tabla de 8
+columnas pasa a filas apiladas en pantallas chicas. Se actualizó con
+`main` (choque con #287, se conservó la carga nueva). Desplegado `96ef7c9`.
+
+**#316 — Historial de etapas de negocios.** Migración 172
+`deal_stage_history` (aplicada): un trigger en `deals` registra cada
+entrada a una etapa, venga del tablero, la IA, automatizaciones, API o la
+sincronización de hotel. Solo lectura para miembros. El embudo de /kpis
+cuenta cada negocio hasta la etapa más avanzada a la que llegó; los movidos
+antes del 1-nov cuentan desde su etapa actual. Desplegado `a9163a3`.
