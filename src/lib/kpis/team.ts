@@ -49,20 +49,28 @@ export interface TeamReport {
 type Stage = { id: string; pipeline_id: string; name: string; position: number; color: string | null }
 type Deal = { id: string; pipeline_id: string; stage_id: string | null; status: string }
 
-/** Cohort funnel: a deal "reached" every stage up to its current one
- *  (by position); a won deal reached them all. No stage history exists,
- *  so a deal moved backwards counts only up to where it sits now. */
+/** Cohort funnel: a deal "reached" every stage up to the furthest one it
+ *  ever sat in — its current stage or any in `history` (deal_stage_history,
+ *  migration 172; deals moved before it count from their current stage).
+ *  A won deal reached them all. */
 export function pipelineFunnels(
   pipelines: { id: string; name: string }[],
   stages: Stage[],
   deals: Deal[],
+  history: { deal_id: string; to_stage_id: string | null }[] = [],
 ): PipelineFunnel[] {
+  const visited = new Map<string, string[]>()
+  for (const h of history) if (h.to_stage_id) visited.set(h.deal_id, [...(visited.get(h.deal_id) ?? []), h.to_stage_id])
   return pipelines
     .map((p) => {
       const own = stages.filter((s) => s.pipeline_id === p.id).sort((a, b) => a.position - b.position)
       const index = new Map(own.map((s, i) => [s.id, i]))
       const cohort = deals.filter((d) => d.pipeline_id === p.id)
-      const depth = cohort.map((d) => (d.status === 'won' ? own.length - 1 : (index.get(d.stage_id ?? '') ?? 0)))
+      const depth = cohort.map((d) =>
+        d.status === 'won'
+          ? own.length - 1
+          : Math.max(...[d.stage_id ?? '', ...(visited.get(d.id) ?? [])].map((id) => index.get(id) ?? 0)),
+      )
       return {
         pipelineId: p.id,
         name: p.name,
@@ -183,6 +191,12 @@ export async function loadTeamReport(db: SupabaseClient, window: DateWindow): Pr
   ).sort((a, b) => a.created_at.localeCompare(b.created_at))
   const responses = agentResponseMinutes(thread)
 
+  // Tolerates the table not existing yet (code deployed before migration 172).
+  const history = await fetchAllRowsIn<{ id: string; deal_id: string; to_stage_id: string | null }>(
+    deals.map((d) => d.id),
+    (chunk) => db.from('deal_stage_history').select('id, deal_id, to_stage_id').in('deal_id', chunk),
+  ).catch(() => [])
+
   const count = <T>(rows: T[], key: (r: T) => string | null) => {
     const m = new Map<string, number>()
     for (const r of rows) {
@@ -220,5 +234,5 @@ export async function loadTeamReport(db: SupabaseClient, window: DateWindow): Pr
     }))
     .sort((a, b) => b.closed - a.closed || b.replies - a.replies || a.name.localeCompare(b.name))
 
-  return { funnels: pipelineFunnels(pipelines, stages, deals), agents }
+  return { funnels: pipelineFunnels(pipelines, stages, deals, history), agents }
 }

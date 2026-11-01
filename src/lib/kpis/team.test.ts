@@ -22,6 +22,20 @@ describe('pipelineFunnels', () => {
     expect([f.total, f.won, f.lost]).toEqual([3, 1, 1])
   })
 
+  it('counts the furthest stage in the history, not just the current one', () => {
+    const [f] = pipelineFunnels(
+      [{ id: 'p', name: 'Ventas' }],
+      stages,
+      [{ id: 'a', pipeline_id: 'p', stage_id: 's1', status: 'open' }],
+      [
+        { deal_id: 'a', to_stage_id: 's1' },
+        { deal_id: 'a', to_stage_id: 's2' },
+        { deal_id: 'a', to_stage_id: 's1' },
+      ],
+    )
+    expect(f.stages.map((s) => s.reached)).toEqual([1, 1, 0])
+  })
+
   it('drops pipelines with no deals in the window', () => {
     expect(pipelineFunnels([{ id: 'p', name: 'Ventas' }], stages, [])).toEqual([])
   })
