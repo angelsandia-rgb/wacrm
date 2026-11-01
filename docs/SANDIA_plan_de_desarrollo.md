@@ -5216,3 +5216,28 @@ el 29-sep (bot sin responder) y Google Sheets de Chat Sandia sigue
 desconectado.
 
 **Validación.** Typecheck, 2804 tests y build en verde; CI del PR en verde.
+
+### 2026-11-01 (sesión posterior) — Claude Code (paridad con respond.io: 6 funciones)
+
+Se exploró respond.io por dentro (organización de prueba "Chat Sandia",
+vence 2026-11-07) y se implementaron las 6 brechas más valiosas, un PR
+cada una, todas desplegadas el 1-nov:
+
+| PR | Qué | Migración |
+|---|---|---|
+| #308 | Resumen con IA al cerrar (categoría, resumen, sentimiento) + cierre automático por inactividad. Configuración → Cierre de conversaciones (apagado por defecto). Corre en el cron de conversaciones. | 169 (aplicada) |
+| #309 | Paso de automatización **Hacer una pregunta**: estaciona la corrida (`awaiting_reply`) hasta que el cliente responde; la respuesta se guarda en un campo o `{{ vars.x }}` y no dispara IA ni otras automatizaciones. | 170 (aplicada) |
+| #310 | Disparadores **Conversación cerrada**, **Campo de contacto actualizado** y **Webhook entrante** (`/api/automations/webhook/<token>`). Los campos personalizados ahora se guardan por `PUT /api/contacts/[id]/custom-values`. | — |
+| #311 | Asignación **rotativa real** (antes siempre el primer perfil), **al de menos chats** y **solo en línea**. | — |
+| #312 | Botón **Mejorar con IA** en la bandeja: tono, corregir, simplificar, traducir (`/api/ai/rewrite`). | — |
+| #313 | **Habilidades de la IA**: cada acción del bot se puede apagar o recibir una regla de "cuándo"; lo apagado se elimina del resultado del modelo en un solo punto. Sin configuración = comportamiento idéntico. | 171 (aplicada) |
+
+**Reglas nuevas.** Un cierre o una escritura hecha por una automatización
+nunca vuelve a disparar automatizaciones (evita bucles). `ai_configs.skills`
+se lee con una consulta aparte y tolerante a errores para no repetir la
+caída de `media_type`.
+
+**Validación.** Typecheck, lint, 2824 tests y build en verde en cada PR y
+combinados; migraciones probadas con `BEGIN … ROLLBACK` antes de aplicarse;
+cada deploy verificado (GIT_SHA en el contenedor, healthy, health 200);
+rutas nuevas responden 401/404 sin sesión.
