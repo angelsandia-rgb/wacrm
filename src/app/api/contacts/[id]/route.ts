@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
+import { notifyContactFieldsUpdated } from '@/lib/automations/events'
 import type { LeadTemperature } from '@/types'
 
 const LEAD_TEMPERATURES = new Set<LeadTemperature>(['cold', 'warm', 'hot'])
@@ -35,7 +36,7 @@ export async function PATCH(
 
     const { data: existing, error: fetchError } = await supabase
       .from('contacts')
-      .select('id, lead_temperature')
+      .select('id, name, phone, email, company, lead_temperature')
       .eq('id', id)
       .eq('account_id', accountId)
       .maybeSingle()
@@ -85,6 +86,14 @@ export async function PATCH(
     }
     if (!data) {
       return NextResponse.json({ error: 'Contact not found' }, { status: 404 })
+    }
+
+    // contact_field_updated automations, for each field whose value moved.
+    const changedFields = ['name', 'phone', 'email', 'company', 'lead_temperature'].filter(
+      (f) => f in updates && (updates[f] ?? null) !== ((existing as Record<string, unknown>)[f] ?? null),
+    )
+    if (changedFields.length > 0) {
+      after(() => notifyContactFieldsUpdated({ accountId, contactId: data.id, fields: changedFields }))
     }
 
     if (temperatureChanged) {

@@ -1553,6 +1553,18 @@
           "label": "버튼 / 목록 응답",
           "hint": "고객이 id가 일치하는 버튼이나 목록 행을 탭했을 때 — 자동화 간 메뉴를 연결할 수 있습니다"
         },
+        "conversation_closed": {
+          "label": "대화 종료됨",
+          "hint": "사람, AI 또는 자동 종료로 대화가 닫힐 때 (다른 자동화 제외)"
+        },
+        "contact_field_updated": {
+          "label": "연락처 필드 업데이트",
+          "hint": "연락처 필드 값이 바뀔 때 — 하나를 고르거나 모든 필드로 두세요"
+        },
+        "incoming_webhook": {
+          "label": "수신 웹훅",
+          "hint": "다른 시스템(n8n, 양식, 웹사이트)이 이 자동화의 비밀 URL로 JSON을 보낼 때"
+        },
         "new_contact_created": {
           "label": "새 연락처 생성됨",
           "hint": "수신 메시지로 연락처가 자동 생성되었을 때"
@@ -1578,6 +1590,11 @@
       "replyIdsHint": "yes, no, more_info",
       "replyIdsHelp": "정확히 일치시킬 버튼/목록 행 id를 쉼표로 구분해 입력하세요. 버튼 보내기 / 목록 보내기 단계에서 설정한 것과 같은 id를 사용하세요.",
       "schedule": "일정",
+      "anyField": "모든 필드",
+      "webhookUrl": "웹훅 URL (비밀로 유지)",
+      "webhookHelp": "JSON 객체를 POST하세요. \"phone\"(E.164)을 포함하면 해당 연락처로 실행됩니다(없으면 생성). 최상위 값은 {{ vars.key }}로 사용할 수 있습니다.",
+      "regenerate": "새 URL 생성",
+      "copy": "복사",
       "scheduleHint": "Cron 표현식 (예: 0 9 * * 1-5)",
       "active": "활성",
       "activeAria": "활성",

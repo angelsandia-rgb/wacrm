@@ -101,6 +101,18 @@
           "label": "Respuesta de botón / lista",
           "hint": "El cliente toca un botón o fila de lista cuyo id coincide — encadena menús entre automatizaciones"
         },
+        "conversation_closed": {
+          "label": "Conversación cerrada",
+          "hint": "Cuando una persona, la IA o el cierre automático cierran una conversación (no otra automatización)"
+        },
+        "contact_field_updated": {
+          "label": "Campo de contacto actualizado",
+          "hint": "Cuando cambia el valor de un campo del contacto — elige uno o déjalo en cualquier campo"
+        },
+        "incoming_webhook": {
+          "label": "Webhook entrante",
+          "hint": "Cuando otro sistema (n8n, un formulario, tu sitio web) envía JSON a la URL secreta de esta automatización"
+        },
         "new_contact_created": {
           "label": "Nuevo contacto creado",
           "hint": "Cuando se crea automáticamente un contacto a partir de un mensaje entrante"
@@ -126,6 +138,11 @@
       "replyIdsHint": "si, no, mas_info",
       "replyIdsHelp": "Lista separada por comas de ids de botón/fila de lista a coincidir, exactos. Usa los mismos ids que definiste en un paso de Enviar botones / Enviar lista.",
       "schedule": "Horario",
+      "anyField": "Cualquier campo",
+      "webhookUrl": "URL del webhook (mantenla en secreto)",
+      "webhookHelp": "Envía un objeto JSON por POST. Incluye \"phone\" (E.164) para correrla para ese contacto (se crea si no existe); cada valor de primer nivel queda como {{ vars.clave }}.",
+      "regenerate": "Generar URL nueva",
+      "copy": "Copiar",
       "scheduleHint": "Expresión cron (ej. 0 9 * * 1-5)",
       "active": "Activa",
       "activeAria": "Activa",

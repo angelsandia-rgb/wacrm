@@ -639,6 +639,29 @@ describe("triggerMatches — interactive_reply", () => {
   });
 });
 
+describe("triggerMatches — contact_field_updated / incoming_webhook", () => {
+  function automation(trigger_type: Automation["trigger_type"], trigger_config: Record<string, unknown>): Automation {
+    return {
+      id: "a1", account_id: ACCOUNT, user_id: "u1", name: "x", trigger_type, trigger_config,
+      is_active: true, execution_count: 0, created_at: "", updated_at: "",
+    };
+  }
+
+  it("contact_field_updated: '' matches any field, a set field only itself", () => {
+    expect(triggerMatches(automation("contact_field_updated", { field: "" }), { field: "email" })).toBe(true);
+    expect(triggerMatches(automation("contact_field_updated", { field: "email" }), { field: "email" })).toBe(true);
+    expect(triggerMatches(automation("contact_field_updated", { field: "email" }), { field: "custom:f1" })).toBe(false);
+    expect(triggerMatches(automation("contact_field_updated", { field: "" }), {})).toBe(false);
+  });
+
+  it("incoming_webhook only runs the automation whose token was called", () => {
+    const a = automation("incoming_webhook", { token: "t".repeat(32) });
+    expect(triggerMatches(a, { webhook_token: "t".repeat(32) })).toBe(true);
+    expect(triggerMatches(a, { webhook_token: "u".repeat(32) })).toBe(false);
+    expect(triggerMatches(a, {})).toBe(false);
+  });
+});
+
 describe("triggerMatches — tag_added", () => {
   function automation(tagId?: string): Automation {
     return {

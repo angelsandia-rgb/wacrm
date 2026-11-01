@@ -273,6 +273,10 @@ export function validateTriggerForActivation(
     if (!nonEmpty(cfg.tag_id)) {
       issues.push({ path: 'trigger.tag_id', message: 'tag is required' })
     }
+  } else if (triggerType === 'incoming_webhook') {
+    if (typeof cfg.token !== 'string' || !/^[\w-]{24,}$/.test(cfg.token)) {
+      issues.push({ path: 'trigger.token', message: 'webhook token is missing — regenerate the URL' })
+    }
   } else if (triggerType === 'interactive_reply') {
     const ids = cfg.reply_ids
     if (!Array.isArray(ids) || ids.length === 0) {

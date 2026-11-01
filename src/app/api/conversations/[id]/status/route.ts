@@ -1,6 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
-import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { notifyConversationClosed } from '@/lib/automations/events'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 
 const VALID_STATUSES = new Set(['open', 'pending', 'closed'])
@@ -34,6 +34,13 @@ export async function PATCH(
       )
     }
 
+    const { data: before } = await supabase
+      .from('conversations')
+      .select('status')
+      .eq('id', id)
+      .eq('account_id', accountId)
+      .maybeSingle()
+
     const { data, error } = await supabase
       .from('conversations')
       .update({ status })
@@ -50,11 +57,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
-    if (status === 'closed') {
-      void dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.closed', {
-        conversation_id: data.id,
-        closed_by: 'human',
-      })
+    // Only a real transition — re-saving 'closed' must not re-fire
+    // conversation_closed automations.
+    if (status === 'closed' && before?.status !== 'closed') {
+      after(() =>
+        notifyConversationClosed(supabaseAdmin(), { accountId, conversationId: data.id, closedBy: 'human' }),
+      )
     }
 
     return NextResponse.json({ success: true, conversation: data })
