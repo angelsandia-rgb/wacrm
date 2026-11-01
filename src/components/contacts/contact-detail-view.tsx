@@ -493,26 +493,14 @@ export function ContactDetailView({
     setSavingCustom(true);
 
     try {
-      // Delete existing values and re-insert
-      await supabase
-        .from('contact_custom_values')
-        .delete()
-        .eq('contact_id', contactId);
-
-      const rows = Object.entries(customValues)
-        .filter(([, val]) => val.trim())
-        .map(([fieldId, val]) => ({
-          contact_id: contactId,
-          custom_field_id: fieldId,
-          value: val.trim(),
-        }));
-
-      if (rows.length > 0) {
-        const { error } = await supabase
-          .from('contact_custom_values')
-          .insert(rows);
-        if (error) throw error;
-      }
+      // Server-side so a changed value fires contact_field_updated
+      // automations (src/app/api/contacts/[id]/custom-values).
+      const res = await fetch(`/api/contacts/${contactId}/custom-values`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: customValues }),
+      });
+      if (!res.ok) throw new Error(`custom values save failed: ${res.status}`);
 
       toast.success(t('toastCustomFieldsSaved'));
     } catch {

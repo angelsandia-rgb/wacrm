@@ -36,6 +36,7 @@ import {
 import { SettingsPanelHead } from './settings-panel-head';
 import { AiKnowledgeCard } from './ai-knowledge';
 import { AiFollowupsCard, type FollowupStepUI } from './ai-followups-card';
+import { AiSkillsCard } from './ai-skills-card';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import type { AiProvider } from '@/lib/ai/types';
 import type { AccountMember } from '@/types';
@@ -642,6 +643,8 @@ export function AiConfig() {
           onStepsChange={setFollowupSteps}
           disabled={disabled}
         />
+
+        <AiSkillsCard canEdit={canEdit} />
 
         <AiKnowledgeCard
           accountId={accountId}

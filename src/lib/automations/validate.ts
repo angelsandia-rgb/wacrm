@@ -53,6 +53,7 @@ const KNOWN_STEP_TYPES = new Set([
   'send_message', 'send_buttons', 'send_list', 'send_template',
   'add_tag', 'remove_tag', 'assign_conversation', 'update_contact_field',
   'create_deal', 'move_deal', 'create_task', 'send_photo', 'wait', 'condition', 'send_webhook', 'close_conversation',
+  'ask_question',
 ])
 
 export function validateStepTypesKnown(steps: StepLike[]): ValidationIssue[] {
@@ -141,6 +142,22 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
     case 'move_deal':
       if (!nonEmpty(c.stage_id)) {
         issues.push({ path: `${path}.stage_id`, message: 'stage is required' })
+      }
+      break
+    case 'ask_question':
+      if (!nonEmpty(c.question)) {
+        issues.push({ path: `${path}.question`, message: 'question is required' })
+      }
+      if (!nonEmpty(c.field) && !nonEmpty(c.var_name)) {
+        issues.push({ path: `${path}.field`, message: 'save the answer to a field or a variable' })
+      }
+      if (
+        typeof c.timeout_hours !== 'number' ||
+        !Number.isInteger(c.timeout_hours) ||
+        c.timeout_hours < 1 ||
+        c.timeout_hours > 168
+      ) {
+        issues.push({ path: `${path}.timeout_hours`, message: 'timeout must be 1 to 168 hours' })
       }
       break
     case 'create_task':
@@ -255,6 +272,10 @@ export function validateTriggerForActivation(
   } else if (triggerType === 'tag_added') {
     if (!nonEmpty(cfg.tag_id)) {
       issues.push({ path: 'trigger.tag_id', message: 'tag is required' })
+    }
+  } else if (triggerType === 'incoming_webhook') {
+    if (typeof cfg.token !== 'string' || !/^[\w-]{24,}$/.test(cfg.token)) {
+      issues.push({ path: 'trigger.token', message: 'webhook token is missing — regenerate the URL' })
     }
   } else if (triggerType === 'interactive_reply') {
     const ids = cfg.reply_ids

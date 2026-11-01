@@ -101,6 +101,7 @@ import { teammateRepliedRecently,
   trailingCustomerTurns,
   trimTrailingAssistant,
 } from './human-reply'
+import { applySkillGates } from './skills'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -1092,6 +1093,7 @@ export async function dispatchInboundToAiReply(
     const baseSystemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
+      skills: config.skills,
       knowledge,
       dealStageOptions,
       catalog,
@@ -2706,7 +2708,8 @@ async function generateReplyWithOneRetry(args: GenerateArgs): Promise<GenerateRe
   let lastErr: unknown
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      return await generateReply(args)
+      // A skill the account switched off can't act, whatever the model wrote.
+      return applySkillGates(await generateReply(args), args.config.skills)
     } catch (err) {
       lastErr = err
       if (!isRetryableAiError(err) || attempt === maxRetries) throw err

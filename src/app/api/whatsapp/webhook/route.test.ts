@@ -168,6 +168,7 @@ vi.mock('@/lib/whatsapp/template-webhook', () => ({
 }))
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: h.runAutomationsForTrigger,
+  consumeAwaitingAnswer: vi.fn(async () => false),
 }))
 vi.mock('@/lib/flows/engine', () => ({
   dispatchInboundToFlows: h.dispatchInboundToFlows,
