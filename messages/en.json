@@ -2508,6 +2508,7 @@
       "fields": "Fields & tags",
       "deals": "Deals & currency",
       "csat": "Satisfaction (CSAT)",
+      "conversations": "Conversation closing",
       "members": "Team members",
       "api": "API keys",
       "webhooks": "Webhooks",

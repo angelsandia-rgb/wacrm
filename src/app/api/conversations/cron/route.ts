@@ -6,6 +6,7 @@ import { pruneEmptyStaleConversations } from '@/lib/conversations/prune-empty'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { checkAiLiveness } from '@/lib/ai/liveness'
 import { recoverUnansweredInbound } from '@/lib/ai/inbound-recovery'
+import { runAutoClose, runCloseInsights } from '@/lib/conversations/close-insights'
 
 /**
  * Auto-assigns open conversations that have sat unclaimed past their
@@ -47,6 +48,10 @@ export async function GET(request: Request) {
     console.error('[conversations/cron] ai liveness check failed:', err)
     return { checkedAccounts: 0, deadAccounts: [] }
   })
+  const closed = await runAutoClose(supabaseAdmin()).catch((err) => {
+    console.error('[conversations/cron] auto-close failed:', err)
+    return { autoClosed: 0 }
+  })
   await recordHeartbeat('conversations_cron')
   // Customer messages whose AI reply was lost (e.g. to a deploy restart
   // mid-debounce) — re-dispatched after the response, since each can
@@ -58,6 +63,14 @@ export async function GET(request: Request) {
     } catch (err) {
       console.error('[conversations/cron] inbound recovery failed:', err)
     }
+    // AI category / summary / sentiment for freshly closed threads
+    // (close-insights.ts) — one provider call each, so after the response.
+    try {
+      const insights = await runCloseInsights(supabaseAdmin())
+      if (insights.failed > 0) console.warn('[conversations/cron] close insights:', insights)
+    } catch (err) {
+      console.error('[conversations/cron] close insights failed:', err)
+    }
   })
-  return NextResponse.json({ ...result, ...pruned, aiLiveness })
+  return NextResponse.json({ ...result, ...pruned, ...closed, aiLiveness })
 }

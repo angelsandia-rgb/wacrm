@@ -2508,6 +2508,7 @@
       "fields": "필드 & 태그",
       "deals": "딜 & 통화",
       "csat": "만족도 (CSAT)",
+      "conversations": "대화 종료",
       "members": "팀원",
       "api": "API 키",
       "webhooks": "웹훅",
