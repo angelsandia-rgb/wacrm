@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 // Shopify Admin GraphQL, custom-app token (Settings → Shopify,
-// migration 173). The token needs read_products, read_inventory,
+// migration 173). The token needs read_products, read_inventory, read_orders,
 // write_orders and write_draft_orders.
 const API_VERSION = '2026-10'
 

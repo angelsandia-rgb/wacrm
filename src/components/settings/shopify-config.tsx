@@ -170,7 +170,7 @@ export function ShopifyConfig() {
               placeholder={connected ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : 'shpat_…'}
             />
             <p className="text-muted-foreground text-xs">
-              Permisos: read_products, read_inventory, write_orders, write_draft_orders. Se guarda cifrado.
+              Permisos: read_products, read_inventory, read_orders, write_orders, write_draft_orders. Se guarda cifrado.
             </p>
           </div>
           <div className="space-y-1.5">
