@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone,
+  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone,
   PAYMENT_GATEWAYS, ShopifyError,
 } from './api'
 
@@ -95,9 +95,23 @@ export async function createShopifyOrderFromChat(args: {
 
   await attachOrderToDeal({ db, accountId, userId: configOwnerUserId, contactId, order, currency })
 
-  const payLine = proposal.payment === 'cod'
-    ? `Pagas ${formatCurrency(order.total, currency)} al recibir.`
-    : `Te enviaremos por aquí el link de pago con tarjeta por ${formatCurrency(order.total, currency)}.`
+  const totalText = formatCurrency(order.total, currency)
+  let payLine = `Pagas ${totalText} al recibir.`
+  let paymentLink: string | null = null
+  if (proposal.payment === 'card') {
+    if (cfg.recurrenteSecretKey) {
+      try {
+        paymentLink = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
+          title: `Pedido ${order.name}`, total: order.total, currency, orderId: order.id,
+        })
+      } catch (err) {
+        console.error('[shopify] recurrente checkout failed:', err instanceof Error ? err.message : err)
+      }
+    }
+    payLine = paymentLink
+      ? `Paga ${totalText} con tarjeta aquí: ${paymentLink} — en cuanto se confirme el pago preparamos tu envío.`
+      : `Un asesor te enviará por aquí el link de pago con tarjeta por ${totalText}.`
+  }
   try {
     await sendText(
       `✅ Pedido ${order.name} registrado: ${label}. Envío a ${proposal.address}, ${proposal.departamento}. ${payLine}`,
@@ -106,12 +120,15 @@ export async function createShopifyOrderFromChat(args: {
     console.error('[shopify] order confirmation send failed:', err)
   }
 
-  if (order.draft || proposal.payment === 'card') {
-    // Draft = a human must complete it in Shopify; card = a human must send the
-    // Recurrente link. Either way the team needs to see this chat now.
-    await handoff(
-      `🛒 Pedido ${order.name} (${label}, ${formatCurrency(order.total, currency)}, ${PAYMENT_GATEWAYS[proposal.payment]})` +
-        (order.draft ? ' creado como BORRADOR en Shopify: complétalo para que llegue a Dropi.' : ': envía el link de pago con tarjeta.'),
-    )
+  if (order.draft) {
+    // A human has to finish it in Shopify: a card order once Recurrente shows
+    // it paid (mark it paid there, so Dropi never collects cash), or any order
+    // while "Crear pedidos reales" is off.
+    const todo = proposal.payment === 'card'
+      ? (paymentLink
+          ? 'se envió el link de Recurrente; cuando el pago aparezca, completa el borrador como PAGADO para que llegue a Dropi.'
+          : 'envía el link de pago con tarjeta y, cuando se pague, completa el borrador como PAGADO.')
+      : 'complétalo para que llegue a Dropi.'
+    await handoff(`🛒 Borrador ${order.name} en Shopify (${label}, ${totalText}, ${PAYMENT_GATEWAYS[proposal.payment]}): ${todo}`)
   }
 }

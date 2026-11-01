@@ -5278,3 +5278,12 @@ y actualiza el negocio. Con el interruptor apagado (por defecto) crea un
 **borrador** de pedido, que no llega a Dropi hasta completarlo en Shopify.
 Webhook `orders/create` en `/api/shopify/webhook` (HMAC): pedidos de la tienda
 web crean contacto + negocio y reciben la plantilla de confirmación.
+Ampliación (misma rama): migración 174 (aplicada) `shopify_config.recurrente_secret_key`
+cifrada. **Tarjeta:** el pedido siempre queda como borrador etiquetado
+`pago-tarjeta` (aunque "Crear pedidos reales" esté encendido) y la IA envía un
+checkout de Recurrente por el total exacto; sin llave, avisa que un asesor manda
+el link. El equipo completa el borrador como pagado cuando Recurrente confirma,
+así Dropi nunca envía sin pago ni cobra en efectivo. **Estado de pedido:** cuando
+el cliente pregunta por su pedido/guía, se leen en vivo de Shopify sus pedidos
+(los ligados a sus negocios, o un `#1234` cuyo teléfono coincide) con pago,
+preparación, entrega y guía (Dropify escribe la guía de Dropi en el fulfillment).

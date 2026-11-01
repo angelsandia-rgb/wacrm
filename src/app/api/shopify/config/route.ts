@@ -9,7 +9,7 @@ export async function GET() {
     const { supabase, accountId } = await getCurrentAccount()
     const { data } = await supabase
       .from('shopify_config')
-      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at')
+      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key')
       .eq('account_id', accountId)
       .maybeSingle()
     if (!data) return NextResponse.json({ connected: false })
@@ -17,6 +17,7 @@ export async function GET() {
       connected: true,
       shop_domain: data.shop_domain,
       has_webhook_secret: Boolean(data.webhook_secret),
+      has_recurrente_key: Boolean(data.recurrente_secret_key),
       orders_live: data.orders_live,
       confirmation_template_name: data.confirmation_template_name,
       confirmation_template_language: data.confirmation_template_language,
@@ -29,7 +30,8 @@ export async function GET() {
 
 /**
  * PUT — connect or update. Body: { shop_domain, access_token?, webhook_secret?,
- * orders_live?, confirmation_template_name?, confirmation_template_language? }.
+ * orders_live?, confirmation_template_name?, confirmation_template_language?,
+ * recurrente_secret_key? }. Secrets omitted = keep the stored ones.
  * access_token is required on first connect; omitted = keep the stored one.
  * A new token is verified against the store before it is saved.
  */
@@ -45,6 +47,7 @@ export async function PUT(request: Request) {
     }
     const token = typeof body.access_token === 'string' ? body.access_token.trim() : ''
     const secret = typeof body.webhook_secret === 'string' ? body.webhook_secret.trim() : ''
+    const recurrenteKey = typeof body.recurrente_secret_key === 'string' ? body.recurrente_secret_key.trim() : ''
 
     const { data: existing } = await supabase
       .from('shopify_config').select('id').eq('account_id', accountId).maybeSingle()
@@ -75,6 +78,7 @@ export async function PUT(request: Request) {
     }
     if (token) row.access_token = encrypt(token)
     if (secret) row.webhook_secret = encrypt(secret)
+    if (recurrenteKey) row.recurrente_secret_key = encrypt(recurrenteKey)
 
     const { error } = existing
       ? await supabase.from('shopify_config').update(row).eq('account_id', accountId)

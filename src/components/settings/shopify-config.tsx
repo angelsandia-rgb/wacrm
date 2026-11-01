@@ -18,6 +18,7 @@ interface ConfigPayload {
   connected?: boolean;
   shop_domain?: string;
   has_webhook_secret?: boolean;
+  has_recurrente_key?: boolean;
   orders_live?: boolean;
   confirmation_template_name?: string | null;
   confirmation_template_language?: string | null;
@@ -33,6 +34,7 @@ export function ShopifyConfig() {
   const [shop, setShop] = useState('');
   const [token, setToken] = useState('');
   const [secret, setSecret] = useState('');
+  const [recurrenteKey, setRecurrenteKey] = useState('');
   const [ordersLive, setOrdersLive] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateLang, setTemplateLang] = useState('es');
@@ -68,6 +70,7 @@ export function ShopifyConfig() {
           shop_domain: shop,
           access_token: token || undefined,
           webhook_secret: secret || undefined,
+          recurrente_secret_key: recurrenteKey || undefined,
           orders_live: ordersLive,
           confirmation_template_name: templateName,
           confirmation_template_language: templateLang,
@@ -83,6 +86,7 @@ export function ShopifyConfig() {
       toast.success(data.shop_name ? `Conectado a ${data.shop_name}` : 'Guardado');
       setToken('');
       setSecret('');
+      setRecurrenteKey('');
       await load();
     } finally {
       setSaving(false);
@@ -181,6 +185,18 @@ export function ShopifyConfig() {
               Webhooks, crea &quot;Creación de pedido&quot; (JSON) hacia <code>{webhookUrl}</code> y pega aquí la clave que muestra Shopify.
             </p>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="sh-recurrente">Llave secreta de Recurrente (pagos con tarjeta)</Label>
+            <Input
+              id="sh-recurrente" type="password" autoComplete="off" value={recurrenteKey}
+              onChange={(e) => setRecurrenteKey(e.target.value)}
+              placeholder={cfg.has_recurrente_key ? 'Guardada — escribe una nueva solo para reemplazarla' : 'sk_live_…'}
+            />
+            <p className="text-muted-foreground text-xs">
+              Recurrente → Desarrolladores. Con la llave, la IA envía el link de pago por el total exacto; sin ella, avisa que un asesor lo enviará.
+              Los pedidos con tarjeta quedan como borrador etiquetado &quot;pago-tarjeta&quot; hasta que confirmes el pago.
+            </p>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="sh-tpl">Plantilla de confirmación</Label>
@@ -198,7 +214,8 @@ export function ShopifyConfig() {
               Crear pedidos reales
               <span className="text-muted-foreground block text-xs">
                 Apagado: la IA crea borradores de pedido (no llegan a Dropi hasta que los completes en Shopify).
-                Encendido: crea el pedido real y la tienda lo envía a Dropi.
+                Encendido: los pedidos contra entrega se crean reales y la tienda los envía a Dropi (los de tarjeta siempre
+                quedan como borrador hasta confirmar el pago).
               </span>
             </span>
           </label>

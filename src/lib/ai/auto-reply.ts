@@ -52,6 +52,7 @@ import { formatWithOffset, describeNowInZone, describeUpcomingWeekdaysInZone, da
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
+import { describeOrderStatuses, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
   missingReservationFields,
@@ -926,6 +927,7 @@ export async function dispatchInboundToAiReply(
     let clinicSafetyMode = false
     let hasRestaurantMenu = false
     let shopifyOrders = false
+    let shopifyOrderStatus: string | null = null
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
@@ -961,6 +963,18 @@ export async function dispatchInboundToAiReply(
       if (enrichment[3].status === 'fulfilled') quickReplies = enrichment[3].value
       if (enrichment[4].status === 'fulfilled') knownContactFacts = enrichment[4].value
       if (enrichment[5].status === 'fulfilled') shopifyOrders = Boolean(enrichment[5].value.data)
+      // Order-status questions only: one live Shopify read, never on ordinary turns.
+      const latestText = latestUserMessage(messages)
+      if (shopifyOrders && ORDER_STATUS_QUESTION_RE.test(latestText)) {
+        try {
+          const { data: contactRow } = await db.from('contacts').select('phone').eq('id', contactId).eq('account_id', accountId).maybeSingle()
+          shopifyOrderStatus = describeOrderStatuses(await loadOrderStatuses({
+            db, accountId, contactId, contactPhone: (contactRow?.phone as string | null) ?? '', text: latestText,
+          }))
+        } catch (err) {
+          console.error('[ai auto-reply] shopify order status lookup failed:', err)
+        }
+      }
 
       // How the catalog is delivered (migration 068) + the vertical +
       // whether a restaurant menu PDF is on file (migration 114).
@@ -1107,6 +1121,7 @@ export async function dispatchInboundToAiReply(
       askCustomerTaxInfo: config.askCustomerTaxInfo,
       hotelReservations: isHotel,
       shopifyOrders,
+      shopifyOrderStatus,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -2921,6 +2936,9 @@ async function notifyAiKeyInvalid(db: SupabaseClient, accountId: string): Promis
  * never stomps an existing human assignment. Assigning fires the
  * `on_conversation_assigned` trigger, which notifies the agent.
  */
+/** "¿dónde va mi pedido?", "mi guía", "#1042", "ya lo enviaron?" — gates the live Shopify order lookup. */
+export const ORDER_STATUS_QUESTION_RE = /#\s?\d{3,}|\bgu[ií]a\b|rastre|tracking|\b(?:mi|el|del|su) (?:pedido|orden|paquete|env[ií]o)\b|(?:ya )?(?:lo |la )?(?:enviaron|mandaron|despacharon)|cu[aá]ndo (?:me )?llega/i
+
 async function handOffToHuman(args: {
   db: SupabaseClient
   accountId: string

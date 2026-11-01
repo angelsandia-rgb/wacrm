@@ -19,6 +19,7 @@ export const PAYMENT_GATEWAYS = {
 export type PaymentMethod = keyof typeof PAYMENT_GATEWAYS
 
 export const ORDER_TAG = 'chat-sandia'
+export const CARD_TAG = 'pago-tarjeta'
 
 export class ShopifyError extends Error {
   constructor(message: string, readonly status = 502) { super(message) }
@@ -31,13 +32,14 @@ export interface ShopifyConfig {
   webhookSecret: string | null
   templateName: string | null
   templateLanguage: string
+  recurrenteSecretKey: string | null
 }
 
 /** Decrypted config for `accountId`, or null when no store is connected. */
 export async function loadShopifyConfig(db: SupabaseClient, accountId: string): Promise<ShopifyConfig | null> {
   const { data } = await db
     .from('shopify_config')
-    .select('shop_domain, access_token, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language')
+    .select('shop_domain, access_token, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key')
     .eq('account_id', accountId)
     .maybeSingle()
   if (!data) return null
@@ -48,6 +50,7 @@ export async function loadShopifyConfig(db: SupabaseClient, accountId: string): 
     webhookSecret: data.webhook_secret ? decrypt(data.webhook_secret as string) : null,
     templateName: (data.confirmation_template_name as string | null) || null,
     templateLanguage: (data.confirmation_template_language as string | null) || 'es',
+    recurrenteSecretKey: data.recurrente_secret_key ? decrypt(data.recurrente_secret_key as string) : null,
   }
 }
 
@@ -208,7 +211,7 @@ const GT_DEPARTAMENTOS: Record<string, string> = {
 }
 
 export function departamentoCode(name: string): string | undefined {
-  return GT_DEPARTAMENTOS[name.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase()]
+  return GT_DEPARTAMENTOS[name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()]
 }
 
 /** Pure: the `orderCreate` input for a confirmed chat order. */
@@ -235,7 +238,7 @@ export function buildOrderInput(req: OrderRequest) {
     shippingLines: [{ title: 'Envío gratis', priceSet: money(0) }],
     financialStatus: 'PENDING',
     transactions: [{ kind: 'SALE', status: 'PENDING', gateway: PAYMENT_GATEWAYS[req.payment], amountSet: money(total) }],
-    tags: [ORDER_TAG],
+    tags: req.payment === 'card' ? [ORDER_TAG, CARD_TAG] : [ORDER_TAG],
     sourceName: ORDER_TAG,
     note: req.note,
   }
@@ -256,12 +259,15 @@ const DRAFT_ORDER_CREATE = `mutation($input: DraftOrderInput!) {
 }`
 
 /** Creates the Shopify order — a real one (→ Dropify → Dropi) only when
- *  the account turned `orders_live` on; otherwise a draft order a human
- *  completes from Shopify admin. */
+ *  the account turned `orders_live` on AND it's cash on delivery.
+ *  Otherwise a draft order a human completes from Shopify admin: card
+ *  orders always stay drafts until the Recurrente payment is confirmed,
+ *  because a pending real order would ship right away and Dropi would
+ *  collect it as cash on delivery. */
 export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) {
   const input = buildOrderInput(req)
   const total = req.lines.reduce((s, l) => s + l.price * l.quantity, 0)
-  if (cfg.ordersLive) {
+  if (cfg.ordersLive && req.payment === 'cod') {
     const data = await shopifyGraphql<{ orderCreate: { order: { id: string; name: string } | null; userErrors: { message: string }[] } }>(
       cfg, ORDER_CREATE, { order: input },
     )
@@ -332,4 +338,91 @@ export function verifyShopifyHmac(rawBody: string, header: string | null, secret
   const expected = Buffer.from(createHmac('sha256', secret).update(rawBody, 'utf8').digest('base64'))
   const got = Buffer.from(header)
   return got.length === expected.length && timingSafeEqual(got, expected)
+}
+
+// ------------------------------------------------------------ order status
+
+export interface OrderStatus {
+  name: string
+  createdAt: string
+  cancelledAt: string | null
+  displayFinancialStatus: string | null
+  displayFulfillmentStatus: string
+  phone: string | null
+  shippingAddress: { phone: string | null } | null
+  fulfillments: { displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[]
+}
+
+const ORDER_FIELDS = `name createdAt cancelledAt displayFinancialStatus displayFulfillmentStatus phone
+  shippingAddress { phone }
+  fulfillments(first: 5) { displayStatus trackingInfo { company number url } }`
+
+const digitsTail = (p: string | null | undefined) => (p ?? '').replace(/\D/g, '').slice(-8)
+
+/**
+ * The customer's orders for an order-status question: the ones linked to
+ * their deals (chat + web-store orders), plus any `#1234` they typed —
+ * but only when that order's phone matches theirs, so a guessed number
+ * never reveals someone else's order. Dropi's tracking reaches us through
+ * the Shopify fulfillment Dropify writes back.
+ */
+export async function loadOrderStatuses(args: {
+  db: SupabaseClient; accountId: string; contactId: string; contactPhone: string; text: string
+}): Promise<OrderStatus[]> {
+  const { db, accountId, contactId, contactPhone, text } = args
+  const cfg = await loadShopifyConfig(db, accountId)
+  if (!cfg) return []
+  const { data: deals } = await db
+    .from('deals').select('shopify_order_id')
+    .eq('account_id', accountId).eq('contact_id', contactId).not('shopify_order_id', 'is', null)
+    .order('updated_at', { ascending: false }).limit(3)
+  // Drafts (gid://shopify/DraftOrder/…) aren't orders yet; nothing to track.
+  const ids = (deals ?? []).map((d) => d.shopify_order_id as string).filter((id) => id.includes('/Order/'))
+  const found: OrderStatus[] = []
+  if (ids.length) {
+    const data = await shopifyGraphql<{ nodes: (OrderStatus | null)[] }>(
+      cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } } }`, { ids },
+    )
+    found.push(...data.nodes.filter((n): n is OrderStatus => Boolean(n?.name)))
+  }
+  const number = text.match(/#\s?(\d{3,})/)?.[1]
+  if (number && !found.some((o) => o.name === `#${number}`)) {
+    const data = await shopifyGraphql<{ orders: { nodes: OrderStatus[] } }>(
+      cfg, `query($q: String!) { orders(first: 1, query: $q) { nodes { ${ORDER_FIELDS} } } }`, { q: `name:#${number}` },
+    )
+    const order = data.orders.nodes[0]
+    const mine = digitsTail(contactPhone)
+    if (order && mine && [order.phone, order.shippingAddress?.phone].some((p) => digitsTail(p) === mine)) found.push(order)
+  }
+  return found
+}
+
+/** One prompt line per order — data for the model, not instructions. */
+export function describeOrderStatuses(orders: OrderStatus[]): string {
+  return orders.map((o) => {
+    const tracking = o.fulfillments.flatMap((f) => f.trackingInfo.map((t) => [t.company, t.number, t.url].filter(Boolean).join(' ')))
+      .filter(Boolean)
+    const delivery = o.fulfillments.map((f) => f.displayStatus).filter(Boolean).join(', ')
+    return `- ${o.name} (creado ${o.createdAt.slice(0, 10)})${o.cancelledAt ? ' CANCELADO' : ''}: pago ${o.displayFinancialStatus ?? 'desconocido'}, ` +
+      `preparación ${o.displayFulfillmentStatus}${delivery ? `, entrega ${delivery}` : ''}, ` +
+      (tracking.length ? `guía ${tracking.join(' / ')}` : 'aún sin número de guía')
+  }).join('\n')
+}
+
+// -------------------------------------------------------------- recurrente
+
+/** Recurrente hosted checkout for the exact order total (GTQ cents). */
+export async function createRecurrenteCheckout(secretKey: string, args: { title: string; total: number; currency: string; orderId: string }) {
+  const res = await fetch('https://app.recurrente.com/api/checkouts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-SECRET-KEY': secretKey },
+    body: JSON.stringify({
+      items: [{ name: args.title, currency: args.currency, amount_in_cents: Math.round(args.total * 100), quantity: 1 }],
+      metadata: { shopify_order_id: args.orderId },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  })
+  const json = (await res.json().catch(() => null)) as { checkout_url?: string; message?: string } | null
+  if (!res.ok || !json?.checkout_url) throw new ShopifyError(`Recurrente: ${json?.message ?? `HTTP ${res.status}`}`, 502)
+  return json.checkout_url
 }

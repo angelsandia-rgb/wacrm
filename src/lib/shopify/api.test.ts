@@ -1,7 +1,11 @@
 import { createHmac } from 'crypto'
-import { describe, expect, it } from 'vitest'
-import { buildOrderInput, departamentoCode, mapShopifyProduct, normalizeGtPhone, verifyShopifyHmac } from './api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
+  mapShopifyProduct, normalizeGtPhone, verifyShopifyHmac,
+} from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
+import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
 
 const variant = (over: Partial<{ inventoryQuantity: number; inventoryPolicy: 'DENY' | 'CONTINUE'; tracked: boolean }> = {}) => ({
   id: 'gid://shopify/ProductVariant/1',
@@ -61,6 +65,58 @@ describe('helpers', () => {
     expect(verifyShopifyHmac(body, sig, 's3cret')).toBe(true)
     expect(verifyShopifyHmac(body + ' ', sig, 's3cret')).toBe(false)
     expect(verifyShopifyHmac(body, null, 's3cret')).toBe(false)
+  })
+})
+
+describe('card orders', () => {
+  const cfg = {
+    shop: 'x.myshopify.com', token: 't', ordersLive: true, webhookSecret: null,
+    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1',
+  }
+  const req = {
+    lines: [{ variantId: 'gid://v/1', quantity: 1, price: 229, title: 'X' }],
+    fullName: 'Ana López', phone: '55551234', address: 'Zona 1', departamento: 'Guatemala',
+    payment: 'card' as const, currency: 'GTQ',
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('stay drafts tagged pago-tarjeta even with real orders on (Dropi must not ship or collect cash)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9' }, userErrors: [] } },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+    const order = await createShopifyOrder(cfg, req)
+    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 229 })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.query).toContain('draftOrderCreate')
+    expect(body.variables.input.tags).toEqual(['chat-sandia', 'pago-tarjeta'])
+  })
+
+  it('asks Recurrente for the exact total in cents', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'ch_1', checkout_url: 'https://app.recurrente.com/checkout/ch_1' }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const url = await createRecurrenteCheckout('sk_test_1', { title: 'Pedido #D9', total: 458, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/9' })
+    expect(url).toBe('https://app.recurrente.com/checkout/ch_1')
+    const [endpoint, init] = fetchMock.mock.calls[0]
+    expect(endpoint).toBe('https://app.recurrente.com/api/checkouts')
+    expect(init.headers['X-SECRET-KEY']).toBe('sk_test_1')
+    expect(JSON.parse(init.body).items).toEqual([{ name: 'Pedido #D9', currency: 'GTQ', amount_in_cents: 45800, quantity: 1 }])
+  })
+})
+
+describe('order status', () => {
+  it('describes payment, fulfillment and Dropi tracking', () => {
+    expect(describeOrderStatuses([{
+      name: '#1042', createdAt: '2026-10-30T10:00:00Z', cancelledAt: null,
+      displayFinancialStatus: 'PENDING', displayFulfillmentStatus: 'FULFILLED', phone: null, shippingAddress: null,
+      fulfillments: [{ displayStatus: 'IN_TRANSIT', trackingInfo: [{ company: 'Cargo Expreso', number: 'CE123', url: null }] }],
+    }])).toBe('- #1042 (creado 2026-10-30): pago PENDING, preparación FULFILLED, entrega IN_TRANSIT, guía Cargo Expreso CE123')
+  })
+  it('gates the lookup on order-status questions only', () => {
+    for (const q of ['¿dónde va mi pedido?', 'me pasa la guía', 'ya lo enviaron?', 'pedido #1042', '¿cuándo llega?']) {
+      expect(ORDER_STATUS_QUESTION_RE.test(q)).toBe(true)
+    }
+    for (const q of ['hola, precio de la lámpara', 'quiero comprar dos']) expect(ORDER_STATUS_QUESTION_RE.test(q)).toBe(false)
   })
 })
 
