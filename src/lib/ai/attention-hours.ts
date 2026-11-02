@@ -30,6 +30,11 @@ export function availabilityConfirmationLine(afterHours: boolean, english = fals
     : 'El hotel le confirmar\u00e1 la disponibilidad en un m\u00e1ximo de 2 horas.'
 }
 
+/** Prompt note for hotel accounts, shared by the live bot and the Playground. */
+export function hotelAvailabilityCommitment(timeZone: string, now = new Date()): string {
+  return `HOTEL AVAILABILITY COMMITMENT: Give the full reception follow-up window once for a recent request: ${availabilityConfirmationLine(isAfterHours(now, timeZone))} Later estimates may simply say subject to availability. Do not repeat that the hotel confirms or repeat reception hours in consecutive replies. Combine the requested facts and estimate in one reply. Restate the window if the guest asks whether the booking is confirmed. Never promise availability or a confirmed booking.`
+}
+
 export function withAvailabilityConfirmationTiming(text: string, afterHours: boolean, english = false): string {
   const line = availabilityConfirmationLine(afterHours, english)
   if (text.includes(line)) return text

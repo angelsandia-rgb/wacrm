@@ -10,6 +10,11 @@ import { loadHotelCategoryBanners } from '@/lib/ai/auto-reply'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 import { loadBusinessMetrics, metricsGrounding } from '@/lib/ai/business-metrics'
+import { applySkillGates } from '@/lib/ai/skills'
+import { recentExchangeNote } from '@/lib/ai/context'
+import { hotelAvailabilityCommitment } from '@/lib/ai/attention-hours'
+import { HOTEL_DIRECT_SERVICE_POLICY } from '@/lib/ai/hotel-service-policy'
+import { HOTEL_FAMILY_LODGING_POLICY } from '@/lib/ai/hotel-assistance'
 
 // Keep the tested transcript bounded, mirroring the live context window.
 const MAX_TURNS = 20
@@ -61,6 +66,7 @@ export async function runPlaygroundTurn(db: SupabaseClient, accountId: string, r
   const systemPrompt = buildSystemPrompt({
     userPrompt: config.systemPrompt,
     mode: 'auto_reply',
+    skills: config.skills,
     knowledge,
     catalog,
     catalogDeliveryMode:
@@ -77,7 +83,20 @@ export async function runPlaygroundTurn(db: SupabaseClient, accountId: string, r
     upcomingWeekdays: describeUpcomingWeekdaysInZone(timeZone),
   }) + metricsGrounding(metrics)
 
-  return generateReply({ config, systemPrompt, messages })
+  // Same account-level hotel rules the live bot appends (auto-reply.ts).
+  const hotelNotes = isHotel
+    ? [
+        hotelAvailabilityCommitment(timeZone),
+        recentExchangeNote(messages),
+        HOTEL_DIRECT_SERVICE_POLICY,
+        HOTEL_FAMILY_LODGING_POLICY,
+      ]
+    : []
+
+  return applySkillGates(
+    await generateReply({ config, systemPrompt: [systemPrompt, ...hotelNotes].filter(Boolean).join('\n\n'), messages }),
+    config.skills,
+  )
 }
 
 /** Keep only well-formed, non-empty user/assistant turns. */
