@@ -5298,3 +5298,29 @@ cualquiera de los dos. Con Client ID/secret se pide un token de 24 h
 un 401. `shop_not_permitted` (app en otra organización o sin instalar) se
 explica en la UI. El webhook acepta la clave de Notificaciones o, si no hay, el
 Client secret. Migración 175 (aditiva) **pendiente de aplicar** al hacer merge.
+
+### 2026-11-02 — Claude Code (paridad con respond.io, ronda 2: 4 funciones)
+
+Desplegadas una por una, cada migración aplicada antes de su merge:
+
+- **#322 Botón de WhatsApp para el sitio web.** Configuración → WhatsApp genera
+  un `<script>` (`/api/public/widget/[accountId]`) con botón flotante a wa.me del
+  número principal y mensaje inicial. Solo expone el número público. Sin migración.
+- **#319 Notas internas con @menciones.** Pestaña "Nota interna" en el chat;
+  `@` abre selector de compañeros y cada mencionado recibe notificación
+  `mention` (push vía el fanout existente). Tabla propia `conversation_comments`
+  (migración 173), no `messages`, para que la IA, seguimientos y KPIs nunca la
+  cuenten como mensaje enviado.
+- **#320 Posponer conversaciones.** 1 h / 3 h / mañana 9:00 / una semana; filtro
+  "Pospuestas"; vuelve sola al vencer y un mensaje del cliente la despierta
+  (`conversations.snoozed_until` + trigger, migración 174). El build se abortó
+  por el merge de #323 35 s después; se reenvió el webhook.
+- **#321 Unir contactos duplicados.** Ficha → "Unir duplicado" (admin+):
+  `merge_contacts()` (migración 175, SECURITY DEFINER) mueve chats, negocios,
+  etiquetas, notas, tareas, cotizaciones, reservaciones y CSAT; se niega si
+  ambos tienen chat en el mismo número o ficha de paciente.
+
+**Nota:** los números de migración 173–175 quedaron duplicados con los de
+Shopify (#323); son independientes y ambos están aplicados. Próxima migración: 176.
+Omitido a propósito: bloquear contacto (las etiquetas Sin IA/Interno ya silencian
+la IA) y Calendly (requiere cuenta del dueño).
