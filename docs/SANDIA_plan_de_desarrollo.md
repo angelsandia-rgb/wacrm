@@ -5324,3 +5324,26 @@ Desplegadas una por una, cada migración aplicada antes de su merge:
 Shopify (#323); son independientes y ambos están aplicados. Próxima migración: 176.
 Omitido a propósito: bloquear contacto (las etiquetas Sin IA/Interno ya silencian
 la IA) y Calendly (requiere cuenta del dueño).
+
+### 2026-11-02 (sesión posterior) — Claude Code (Playground de hotel + Google Sheets fase 2)
+
+- **#326 Playground = bot en vivo.** El Playground ahora agrega las mismas
+  reglas de hotel que el bot de WhatsApp (compromiso de disponibilidad,
+  prioridad de servicio, hospedaje familiar, intercambio reciente) y aplica
+  las habilidades de IA. El texto del compromiso se movió a
+  `hotelAvailabilityCommitment()`; el prompt del bot en vivo no cambió.
+- **#327 Sheets fase 2** (migración 176): "Marcar como perdida" guarda el
+  motivo (`deals.lost_reason`, `lost_at`) y dispara `deal.lost` → pestaña
+  `<base> - Perdidas`; evento `daily.summary` con cron 06:15 UTC (00:15
+  Guatemala) → `<base> - Resumen diario`; exportación "Rendimiento por
+  vendedor". Corrige la columna "Vendedor" vacía en filas de negocios
+  (`deals.assigned_to` es `profiles.id`, se buscaba como `user_id`).
+  También: políticas de notas internas con `(SELECT auth.uid())` y dos
+  índices de FK que pedía el advisor.
+- **Revisado y ya resuelto antes:** aprobar/rechazar reservaciones (botones
+  en el chat), CSP con nonces, políticas RLS duplicadas (el advisor ya no
+  las reporta), columna `profiles.role` (ya eliminada).
+- **Diferido a propósito:** paginación en el servidor (la cuenta más grande
+  tiene 287 conversaciones; las listas ya pasan el tope de 1000 con
+  `fetchAllRows`) — retomar cuando una cuenta supere ~5 000. `graphify`
+  local roto (su entorno `uv` fue borrado); requiere reinstalarlo.
