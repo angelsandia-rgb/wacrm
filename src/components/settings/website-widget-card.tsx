@@ -2,9 +2,10 @@
 
 // Self-contained Spanish strings, like close-config.tsx.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Check, Copy } from 'lucide-react';
+import { AlertTriangle, Check, Copy } from 'lucide-react';
+import { readResponseJson } from '@/lib/http/response-json';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +19,22 @@ export function WebsiteWidgetCard() {
   const [text, setText] = useState('Hola, quiero más información');
   const [label, setLabel] = useState('Escríbenos');
   const [copied, setCopied] = useState(false);
+  // The widget needs the default number's public phone (Zernio
+  // connections don't fill it in by themselves).
+  const [hasPublicNumber, setHasPublicNumber] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/whatsapp/config')
+      .then((res) => readResponseJson<{ configs?: { is_default: boolean; public_phone_number: string | null }[] }>(res))
+      .then((body) => {
+        const main = body.configs?.find((c) => c.is_default) ?? body.configs?.[0];
+        if (alive) setHasPublicNumber(Boolean(main?.public_phone_number?.trim()));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   if (!accountId) return null;
 
   const attr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -43,6 +60,15 @@ export function WebsiteWidgetCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {hasPublicNumber === false ? (
+          <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            <span>
+              Tu número principal no tiene el &quot;número público&quot; configurado, así que el botón no aparecerá. Pulsa
+              &quot;Editar&quot; en la conexión de arriba y escríbelo con código de país (ej. 50212345678).
+            </span>
+          </div>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <Label htmlFor="widget-text">Mensaje inicial</Label>

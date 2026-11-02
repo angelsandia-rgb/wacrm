@@ -987,15 +987,20 @@ export function MessageThread({
 
   // Hides the thread until `until`; the inbox list picks the new value up
   // over realtime and a customer message wakes it early (migration 174).
+  // `null` wakes a snoozed thread right away.
   const handleSnooze = useCallback(
-    async (until: Date) => {
+    async (until: Date | null) => {
       if (!conversation) return;
       const { error } = await createClient()
         .from('conversations')
-        .update({ snoozed_until: until.toISOString() })
+        .update({ snoozed_until: until?.toISOString() ?? null })
         .eq('id', conversation.id);
       if (error) {
-        toast.error('No se pudo posponer la conversación');
+        toast.error('No se pudo actualizar la conversación');
+        return;
+      }
+      if (!until) {
+        toast.success('Conversación reactivada');
         return;
       }
       toast.success(
@@ -1494,6 +1499,14 @@ export function MessageThread({
                   {opt.label}
                 </DropdownMenuItem>
               ))}
+              {conversation.snoozed_until ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => void handleSnooze(null)} className="text-sm">
+                    Reactivar ahora
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -1761,7 +1774,7 @@ export function MessageThread({
               'rounded-md px-2.5 py-1 font-medium',
               composerMode === mode
                 ? mode === 'note'
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                  ? 'bg-amber-500/15 text-amber-500'
                   : 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             )}

@@ -8,7 +8,6 @@ import { readResponseJson } from '@/lib/http/response-json';
 import { mentionLabel, type MentionableMember } from '@/lib/inbox/mentions';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
 
 export interface ConversationComment {
   id: string;
@@ -75,13 +74,13 @@ export function CommentBubble({ comment, authorName }: { comment: ConversationCo
   const time = new Date(comment.created_at).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-        <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+      <div className="text-foreground max-w-[85%] rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+        <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-amber-500">
           <StickyNote className="h-3 w-3" />
           Nota interna · {authorName}
         </div>
         <p className="break-words whitespace-pre-wrap">{comment.body}</p>
-        <div className="mt-0.5 text-right text-[10px] text-amber-700/70 dark:text-amber-400/70">{time}</div>
+        <div className="mt-0.5 text-right text-[10px] text-amber-500/80">{time}</div>
       </div>
     </div>
   );
@@ -138,7 +137,7 @@ export function CommentComposer({
   };
 
   return (
-    <div className="relative border-t bg-amber-50/60 p-3 dark:bg-amber-500/5">
+    <div className="relative border-t bg-amber-500/5 p-3">
       {suggestions.length > 0 ? (
         <div className="bg-popover absolute bottom-full left-3 mb-1 w-64 overflow-hidden rounded-md border shadow-md">
           {suggestions.map((m) => (
@@ -171,7 +170,7 @@ export function CommentComposer({
           rows={2}
           maxLength={4000}
           placeholder="Nota interna para el equipo. El cliente no la ve. Escribe @ para mencionar."
-          className={cn('min-h-[44px] resize-none border-amber-300/60 bg-white dark:bg-transparent')}
+          className="min-h-[44px] resize-none border-amber-500/40"
         />
         <Button size="icon" onClick={() => void submit()} disabled={saving || !text.trim()} aria-label="Guardar nota">
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
