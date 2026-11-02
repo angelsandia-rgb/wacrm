@@ -353,6 +353,7 @@
       "filterOpen": "열림",
       "filterPending": "대기 중",
       "filterClosed": "닫힘",
+      "filterSnoozed": "다시 알림",
       "tags": "태그",
       "company": "회사",
       "allCompanies": "전체 회사",

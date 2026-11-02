@@ -37,6 +37,7 @@ import {
   Bot,
   RotateCcw,
   Loader2,
+  AlarmClock,
 } from 'lucide-react';
 import { differenceInHours } from 'date-fns';
 import { useTranslations } from 'next-intl';
@@ -206,6 +207,20 @@ function mergeIncomingMessages(
   }
   return merged;
 }
+
+function atHour(daysAhead: number, hour: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  d.setHours(hour, 0, 0, 0);
+  return d;
+}
+
+const SNOOZE_OPTIONS: { label: string; until: () => Date }[] = [
+  { label: '1 hora', until: () => new Date(Date.now() + 3_600_000) },
+  { label: '3 horas', until: () => new Date(Date.now() + 3 * 3_600_000) },
+  { label: 'Mañana 9:00', until: () => atHour(1, 9) },
+  { label: 'En una semana', until: () => atHour(7, 9) },
+];
 
 const STATUS_OPTIONS: {
   label: string;
@@ -970,6 +985,27 @@ export function MessageThread({
     [conversation, onNewMessage, onUpdateMessage]
   );
 
+  // Hides the thread until `until`; the inbox list picks the new value up
+  // over realtime and a customer message wakes it early (migration 174).
+  const handleSnooze = useCallback(
+    async (until: Date) => {
+      if (!conversation) return;
+      const { error } = await createClient()
+        .from('conversations')
+        .update({ snoozed_until: until.toISOString() })
+        .eq('id', conversation.id);
+      if (error) {
+        toast.error('No se pudo posponer la conversación');
+        return;
+      }
+      toast.success(
+        `Pospuesta hasta ${until.toLocaleString('es-GT', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`,
+      );
+      onBack?.();
+    },
+    [conversation, onBack]
+  );
+
   const handleStatusChange = useCallback(
     async (status: ConversationStatus) => {
       if (!conversation) return;
@@ -1442,6 +1478,24 @@ export function MessageThread({
           >
             <RotateCcw className="h-3.5 w-3.5" />
           </button>
+
+          {/* Snooze: hide the thread until a set time (migration 174). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="Posponer"
+              title="Posponer"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md"
+            >
+              <AlarmClock className="h-3.5 w-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-border bg-popover">
+              {SNOOZE_OPTIONS.map((opt) => (
+                <DropdownMenuItem key={opt.label} onClick={() => void handleSnooze(opt.until())} className="text-sm">
+                  {opt.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* Status dropdown */}
           <DropdownMenu>
