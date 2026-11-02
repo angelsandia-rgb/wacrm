@@ -5261,3 +5261,29 @@ entrada a una etapa, venga del tablero, la IA, automatizaciones, API o la
 sincronización de hotel. Solo lectura para miembros. El embudo de /kpis
 cuenta cada negocio hasta la etapa más avanzada a la que llegó; los movidos
 antes del 1-nov cuentan desde su etapa actual. Desplegado `a9163a3`.
+
+**Integración Shopify (rama `feat/shopify-integration`).** Migración 173
+(aplicada): `shopify_config` por cuenta (dominio `*.myshopify.com`, token de
+app personalizada y clave de webhook cifrados, solo admins),
+`products.shopify_variant_id`, `deals.shopify_order_id` y la acción
+`create_shopify_order` en `ai_action_log`. Configuración → Shopify: conectar,
+"Sincronizar con Shopify" (productos activos con su primera variante; borradores
+y agotados quedan inactivos) y el interruptor "Crear pedidos reales". La IA, con
+tienda conectada, junta producto, cantidad, nombre, teléfono, dirección,
+departamento y forma de pago, manda un resumen, y solo tras la confirmación del
+cliente emite el marcador: el código vuelve a validar cada producto contra el
+catálogo sincronizado y crea el pedido (pendiente de pago, pasarela "Pago contra
+entrega (COD)" o "Tarjeta… (link de pago por WhatsApp)", etiqueta `chat-sandia`)
+y actualiza el negocio. Con el interruptor apagado (por defecto) crea un
+**borrador** de pedido, que no llega a Dropi hasta completarlo en Shopify.
+Webhook `orders/create` en `/api/shopify/webhook` (HMAC): pedidos de la tienda
+web crean contacto + negocio y reciben la plantilla de confirmación.
+Ampliación (misma rama): migración 174 (aplicada) `shopify_config.recurrente_secret_key`
+cifrada. **Tarjeta:** el pedido siempre queda como borrador etiquetado
+`pago-tarjeta` (aunque "Crear pedidos reales" esté encendido) y la IA envía un
+checkout de Recurrente por el total exacto; sin llave, avisa que un asesor manda
+el link. El equipo completa el borrador como pagado cuando Recurrente confirma,
+así Dropi nunca envía sin pago ni cobra en efectivo. **Estado de pedido:** cuando
+el cliente pregunta por su pedido/guía, se leen en vivo de Shopify sus pedidos
+(los ligados a sus negocios, o un `#1234` cuyo teléfono coincide) con pago,
+preparación, entrega y guía (Dropify escribe la guía de Dropi en el fulfillment).

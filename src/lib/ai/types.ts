@@ -166,6 +166,17 @@ export interface GenerateResult {
     customerEmail: string
     customerAddress: string
   } | null
+  /** A customer-confirmed order to create in the connected Shopify store
+   *  (see `CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX`), or null. Item names are
+   *  the model's own text, re-resolved against real products before use. */
+  shopifyOrderProposal?: {
+    items: { name: string; qty: number }[]
+    fullName: string
+    phone: string
+    address: string
+    departamento: string
+    payment: 'cod' | 'card'
+  } | null
   /** The id of a saved quick reply the model picked to answer with
    *  verbatim (auto-reply mode only), or null — see
    *  `QUICK_REPLY_SENTINEL_PREFIX`. Unlike every other marker here, this
