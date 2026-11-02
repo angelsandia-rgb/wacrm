@@ -58,6 +58,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { ChannelBadge } from './channel-badge';
+import { CommentBubble, CommentComposer, useConversationComments } from './conversation-comments';
 import { ContactSidebar } from './contact-sidebar';
 import { MessageBubble } from './message-bubble';
 import { MessageActions } from './message-actions';
@@ -271,6 +272,7 @@ export function MessageThread({
   const [resetAiDialogOpen, setResetAiDialogOpen] = useState(false);
   const [resettingAi, setResettingAi] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [composerMode, setComposerMode] = useState<'reply' | 'note'>('reply');
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
@@ -385,6 +387,7 @@ export function MessageThread({
   const lastConversationIdRef = useRef<string | undefined>(undefined);
 
   const conversationId = conversation?.id;
+  const { comments, add: addComment } = useConversationComments(conversationId);
   const replyTo =
     replyDraft && replyDraft.conversationId === conversationId
       ? replyDraft
@@ -1247,7 +1250,28 @@ export function MessageThread({
   const subtitle =
     contact.phone ||
     (contact.instagram_username ? `@${contact.instagram_username}` : '');
-  const messageGroups = groupMessagesByDate(messages, account?.timezone);
+  // Internal comments interleaved by time, as pseudo-messages the
+  // renderer recognises by their `comment:` id. Only comments inside the
+  // loaded window, so paging older history keeps the order right.
+  const timeline = comments.length === 0
+    ? messages
+    : [
+        ...messages,
+        ...comments
+          .filter((c) => !messages.length || c.created_at >= messages[0].created_at)
+          .map((c): Message => ({
+            id: `comment:${c.id}`,
+            conversation_id: c.conversation_id,
+            sender_type: 'agent',
+            sender_id: c.author_id,
+            content_type: 'internal_note',
+            content_text: c.body,
+            status: 'sent',
+            created_at: c.created_at,
+          })),
+      ].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const commentsById = new Map(comments.map((c) => [`comment:${c.id}`, c]));
+  const messageGroups = groupMessagesByDate(timeline, account?.timezone);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
   );
@@ -1567,6 +1591,17 @@ export function MessageThread({
                     // conversation off) — never sent to the customer,
                     // rendered as a centered pill rather than a chat
                     // bubble so it reads as "internal", not a real turn.
+                    const comment = commentsById.get(msg.id);
+                    if (comment) {
+                      const author = profiles.find((p) => p.user_id === comment.author_id);
+                      return (
+                        <CommentBubble
+                          key={msg.id}
+                          comment={comment}
+                          authorName={author?.full_name || author?.email || '—'}
+                        />
+                      );
+                    }
                     if (msg.content_type === 'internal_note') {
                       return (
                         <div
@@ -1661,7 +1696,29 @@ export function MessageThread({
         }}
       />
 
-      {/* Composer */}
+      {/* Reply to the customer, or leave an internal note for the team. */}
+      <div className="flex gap-1 border-t px-3 pt-2 text-xs">
+        {(['reply', 'note'] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setComposerMode(mode)}
+            className={cn(
+              'rounded-md px-2.5 py-1 font-medium',
+              composerMode === mode
+                ? mode === 'note'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                  : 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {mode === 'reply' ? 'Responder' : 'Nota interna'}
+          </button>
+        ))}
+      </div>
+      {composerMode === 'note' ? (
+        <CommentComposer conversationId={conversation.id} members={profiles} onPosted={addComment} />
+      ) : (
       <MessageComposer
         conversationId={conversation.id}
         sessionExpired={sessionInfo.expired}
@@ -1673,6 +1730,7 @@ export function MessageThread({
         onClearReply={() => setReplyTo(null)}
         channel={conversation.channel}
       />
+      )}
 
       <TemplatePicker
         open={templateModalOpen}

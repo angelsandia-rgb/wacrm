@@ -15,6 +15,7 @@ import {
   CalendarX,
   FileSpreadsheet,
   ListTodo,
+  AtSign,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -32,6 +33,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   google_sheets_error: FileSpreadsheet,
   task_due: ListTodo,
   ai_handoff: Bot,
+  mention: AtSign,
 };
 
 export default function NotificationsPage() {
