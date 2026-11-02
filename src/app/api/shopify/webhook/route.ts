@@ -23,7 +23,7 @@ interface ShopifyOrderPayload {
  * Shopify `orders/create` (configured in the store's Settings →
  * Notifications → Webhooks). The account is resolved from
  * X-Shopify-Shop-Domain and the body is HMAC-checked with that
- * account's webhook secret. Web-store orders get a contact, a deal and
+ * account's webhook secret or, failing that, its app client secret. Web-store orders get a contact, a deal and
  * a WhatsApp confirmation; orders Chat Sandía created itself (tag
  * `chat-sandia`) are skipped — the chat already confirmed them.
  * Always 200 once authenticated, so Shopify doesn't retry a handled order.
@@ -35,10 +35,14 @@ export async function POST(request: Request) {
 
   const { data: cfg } = await db
     .from('shopify_config')
-    .select('account_id, user_id, webhook_secret, confirmation_template_name, confirmation_template_language')
+    .select('account_id, user_id, webhook_secret, client_secret, confirmation_template_name, confirmation_template_language')
     .eq('shop_domain', shop)
     .maybeSingle()
-  if (!cfg?.webhook_secret || !verifyShopifyHmac(raw, request.headers.get('x-shopify-hmac-sha256'), decrypt(cfg.webhook_secret))) {
+  // Admin → Notifications webhooks are signed with the store's key (webhook_secret);
+  // webhooks registered by a Dev Dashboard app with its client secret. Accept either.
+  const hmac = request.headers.get('x-shopify-hmac-sha256')
+  const keys = [cfg?.webhook_secret, cfg?.client_secret].filter((k): k is string => Boolean(k))
+  if (!cfg || !keys.some((k) => verifyShopifyHmac(raw, hmac, decrypt(k)))) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
   if (request.headers.get('x-shopify-topic') !== 'orders/create') return NextResponse.json({ ok: true })

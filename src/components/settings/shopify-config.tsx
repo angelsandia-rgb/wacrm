@@ -17,6 +17,8 @@ import { readResponseJson } from '@/lib/http/response-json';
 interface ConfigPayload {
   connected?: boolean;
   shop_domain?: string;
+  auth_mode?: 'token' | 'client_credentials';
+  client_id?: string | null;
   has_webhook_secret?: boolean;
   has_recurrente_key?: boolean;
   orders_live?: boolean;
@@ -33,6 +35,8 @@ export function ShopifyConfig() {
 
   const [shop, setShop] = useState('');
   const [token, setToken] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
   const [secret, setSecret] = useState('');
   const [recurrenteKey, setRecurrenteKey] = useState('');
   const [ordersLive, setOrdersLive] = useState(false);
@@ -47,6 +51,7 @@ export function ShopifyConfig() {
   const apply = useCallback((data: ConfigPayload) => {
     setCfg(data);
     setShop(data.shop_domain ?? '');
+    setClientId(data.client_id ?? '');
     setOrdersLive(Boolean(data.orders_live));
     setTemplateName(data.confirmation_template_name ?? '');
     setTemplateLang(data.confirmation_template_language ?? 'es');
@@ -69,6 +74,9 @@ export function ShopifyConfig() {
         body: JSON.stringify({
           shop_domain: shop,
           access_token: token || undefined,
+          // A typed shpat_ token wins; otherwise the Dev Dashboard app credentials.
+          client_id: (!token && clientId) || undefined,
+          client_secret: (!token && clientSecret) || undefined,
           webhook_secret: secret || undefined,
           recurrente_secret_key: recurrenteKey || undefined,
           orders_live: ordersLive,
@@ -85,6 +93,7 @@ export function ShopifyConfig() {
       }
       toast.success(data.shop_name ? `Conectado a ${data.shop_name}` : 'Guardado');
       setToken('');
+      setClientSecret('');
       setSecret('');
       setRecurrenteKey('');
       await load();
@@ -162,16 +171,31 @@ export function ShopifyConfig() {
             <Label htmlFor="sh-domain">Dominio de la tienda</Label>
             <Input id="sh-domain" value={shop} onChange={(e) => setShop(e.target.value)} placeholder="tu-tienda.myshopify.com" />
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="sh-client-id">Client ID (app del Dev Dashboard)</Label>
+              <Input id="sh-client-id" autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sh-client-secret">Client secret</Label>
+              <Input
+                id="sh-client-secret" type="password" autoComplete="off" value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder={cfg.auth_mode === 'client_credentials' ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : ''}
+              />
+            </div>
+          </div>
+          <p className="text-muted-foreground -mt-2 text-xs">
+            Shopify → Dev Dashboard → tu app → Configuración. La app debe estar en la misma organización que la tienda e instalada en ella.
+            Permisos: read_products, read_inventory, read_orders, write_orders, write_draft_orders. Se guarda cifrado.
+          </p>
           <div className="space-y-1.5">
-            <Label htmlFor="sh-token">Token de Admin API (app personalizada)</Label>
+            <Label htmlFor="sh-token">O bien: token de Admin API (app personalizada antigua)</Label>
             <Input
               id="sh-token" type="password" autoComplete="off" value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder={connected ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : 'shpat_…'}
+              placeholder={cfg.auth_mode === 'token' ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : 'shpat_…'}
             />
-            <p className="text-muted-foreground text-xs">
-              Permisos: read_products, read_inventory, read_orders, write_orders, write_draft_orders. Se guarda cifrado.
-            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="sh-secret">Clave de firma del webhook (opcional)</Label>
@@ -183,6 +207,7 @@ export function ShopifyConfig() {
             <p className="text-muted-foreground text-xs">
               Para confirmar por WhatsApp los pedidos de la tienda web: en Shopify → Configuración → Notificaciones →
               Webhooks, crea &quot;Creación de pedido&quot; (JSON) hacia <code>{webhookUrl}</code> y pega aquí la clave que muestra Shopify.
+              Si la dejas vacía se usa el Client secret de la app.
             </p>
           </div>
           <div className="space-y-1.5">
