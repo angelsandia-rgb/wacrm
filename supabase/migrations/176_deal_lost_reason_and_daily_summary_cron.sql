@@ -24,3 +24,15 @@ SELECT cron.schedule(
   replace(command, '/api/admin/weekly-health/cron', '/api/google-sheets/daily-summary/cron')
 )
 FROM cron.job WHERE jobname = 'weekly-health-email';
+
+-- 3. Advisor fixes: evaluate auth.uid() once per statement in the
+--    comment policies (migration 173) and cover two FKs.
+DROP POLICY IF EXISTS conversation_comments_insert ON public.conversation_comments;
+DROP POLICY IF EXISTS conversation_comments_delete ON public.conversation_comments;
+CREATE POLICY conversation_comments_insert ON public.conversation_comments
+  FOR INSERT WITH CHECK (is_account_member(account_id, 'agent') AND author_id = (SELECT auth.uid()));
+CREATE POLICY conversation_comments_delete ON public.conversation_comments
+  FOR DELETE USING (author_id = (SELECT auth.uid()) OR is_account_member(account_id, 'admin'));
+
+CREATE INDEX IF NOT EXISTS conversation_close_config_created_by_idx ON public.conversation_close_config (created_by);
+CREATE INDEX IF NOT EXISTS shopify_config_user_id_idx ON public.shopify_config (user_id);
