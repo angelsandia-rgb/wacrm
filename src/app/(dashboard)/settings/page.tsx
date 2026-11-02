@@ -12,6 +12,7 @@ import { ProfileForm } from '@/components/settings/profile-form';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
+import { WebsiteWidgetCard } from '@/components/settings/website-widget-card';
 import { InstagramConfig } from '@/components/settings/instagram-config';
 import { FacebookConfig } from '@/components/settings/facebook-config';
 import { TemplateManager } from '@/components/settings/template-manager';
@@ -88,7 +89,12 @@ function SettingsPageInner() {
     profile: <ProfileForm />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
-    whatsapp: <WhatsAppConfig />,
+    whatsapp: (
+      <>
+        <WhatsAppConfig />
+        <WebsiteWidgetCard />
+      </>
+    ),
     instagram: <InstagramConfig />,
     facebook: <FacebookConfig />,
     templates: <TemplateManager />,
