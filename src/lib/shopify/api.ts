@@ -1,9 +1,10 @@
 import { createHmac, timingSafeEqual } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 
-// Shopify Admin GraphQL, custom-app token (Settings → Shopify,
-// migration 173). The token needs read_products, read_inventory, read_orders,
+// Shopify Admin GraphQL (Settings → Shopify, migrations 173/175): a static
+// shpat_ token from a legacy custom app, or a Dev Dashboard app's Client ID +
+// secret traded for a 24 h token. The app needs read_products, read_inventory, read_orders,
 // write_orders and write_draft_orders.
 const API_VERSION = '2026-10'
 
@@ -33,17 +34,51 @@ export interface ShopifyConfig {
   templateName: string | null
   templateLanguage: string
   recurrenteSecretKey: string | null
+  /** Dev Dashboard apps only: fetches a fresh token (and caches it), used on a 401. */
+  refreshToken?: () => Promise<string>
 }
 
-/** Decrypted config for `accountId`, or null when no store is connected. */
+/** Client-credentials grant for Dev Dashboard apps. The app and the store
+ *  must be in the same Shopify organization and the app installed on it. */
+export async function fetchClientCredentialsToken(
+  shop: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ token: string; expiresAt: Date }> {
+  const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret }),
+    signal: AbortSignal.timeout(15_000),
+  })
+  const json = (await res.json().catch(() => null)) as
+    | { access_token?: string; expires_in?: number; error?: string; error_description?: string }
+    | null
+  if (json?.error === 'shop_not_permitted') {
+    throw new ShopifyError('Shopify no permite esta app en la tienda: la app y la tienda deben estar en la misma organización de Shopify y la app debe estar instalada en la tienda', 400)
+  }
+  if (!res.ok || !json?.access_token) {
+    throw new ShopifyError(
+      res.status === 400 || res.status === 401
+        ? 'Shopify rechazó el Client ID o el Client secret'
+        : json?.error_description || json?.error || `Shopify HTTP ${res.status}`,
+      400,
+    )
+  }
+  return { token: json.access_token, expiresAt: new Date(Date.now() + (json.expires_in ?? 86_399) * 1000) }
+}
+
+/** Decrypted config for `accountId`, or null when no store is connected.
+ *  For client-credentials apps the cached token is refreshed ~60 s before
+ *  it expires and written back encrypted. */
 export async function loadShopifyConfig(db: SupabaseClient, accountId: string): Promise<ShopifyConfig | null> {
   const { data } = await db
     .from('shopify_config')
-    .select('shop_domain, access_token, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key')
+    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key')
     .eq('account_id', accountId)
     .maybeSingle()
   if (!data) return null
-  return {
+  const cfg: ShopifyConfig = {
     shop: data.shop_domain as string,
     token: decrypt(data.access_token as string),
     ordersLive: Boolean(data.orders_live),
@@ -52,19 +87,41 @@ export async function loadShopifyConfig(db: SupabaseClient, accountId: string): 
     templateLanguage: (data.confirmation_template_language as string | null) || 'es',
     recurrenteSecretKey: data.recurrente_secret_key ? decrypt(data.recurrente_secret_key as string) : null,
   }
+  if (data.client_id && data.client_secret) {
+    const clientId = data.client_id as string
+    const clientSecret = decrypt(data.client_secret as string)
+    cfg.refreshToken = async () => {
+      const { token, expiresAt } = await fetchClientCredentialsToken(cfg.shop, clientId, clientSecret)
+      cfg.token = token
+      // Best effort: a caller without write access still uses the fresh token.
+      const { error } = await db.from('shopify_config')
+        .update({ access_token: encrypt(token), access_token_expires_at: expiresAt.toISOString() })
+        .eq('account_id', accountId)
+      if (error) console.warn('[shopify] could not cache token:', error.message)
+      return token
+    }
+    const expiresAt = data.access_token_expires_at ? Date.parse(data.access_token_expires_at as string) : 0
+    if (expiresAt - Date.now() < 60_000) await cfg.refreshToken()
+  }
+  return cfg
 }
 
 export async function shopifyGraphql<T>(
-  cfg: Pick<ShopifyConfig, 'shop' | 'token'>,
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   query: string,
   variables: Record<string, unknown> = {},
 ): Promise<T> {
-  const res = await fetch(`https://${cfg.shop}/admin/api/${API_VERSION}/graphql.json`, {
+  const post = () => fetch(`https://${cfg.shop}/admin/api/${API_VERSION}/graphql.json`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': cfg.token },
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(15_000),
   })
+  let res = await post()
+  if (res.status === 401 && cfg.refreshToken) {
+    cfg.token = await cfg.refreshToken()
+    res = await post()
+  }
   if (res.status === 401 || res.status === 403) throw new ShopifyError('Shopify rechazó el token (revisa permisos de la app)', 401)
   const json = (await res.json().catch(() => null)) as { data?: T; errors?: { message: string }[] } | null
   if (!res.ok || !json || json.errors?.length || !json.data) {

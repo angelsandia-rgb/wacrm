@@ -2,10 +2,14 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  mapShopifyProduct, normalizeGtPhone, verifyShopifyHmac,
+  fetchClientCredentialsToken, loadShopifyConfig, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+// Identity cipher so stored rows can be written as plain text below.
+vi.mock('@/lib/whatsapp/encryption', () => ({ encrypt: (s: string) => `enc:${s}`, decrypt: (s: string) => s.replace(/^enc:/, '') }))
 
 const variant = (over: Partial<{ inventoryQuantity: number; inventoryPolicy: 'DENY' | 'CONTINUE'; tracked: boolean }> = {}) => ({
   id: 'gid://shopify/ProductVariant/1',
@@ -131,5 +135,66 @@ describe('parseShopifyOrderPayload', () => {
   it('rejects a marker with a missing field', () => {
     expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|')).toBeNull()
     expect(parseShopifyOrderPayload('Cojín:1|Ana||Zona 1|Guatemala|cod')).toBeNull()
+  })
+})
+
+describe('client credentials (Dev Dashboard apps)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const tokenRes = (token: string) => new Response(JSON.stringify({ access_token: token, scope: 'read_products', expires_in: 86399 }))
+
+  it('posts the form-encoded grant without scope', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(tokenRes('tok_1'))
+    vi.stubGlobal('fetch', fetchMock)
+    const { token, expiresAt } = await fetchClientCredentialsToken('x.myshopify.com', 'cid', 'csecret')
+    expect(token).toBe('tok_1')
+    expect(expiresAt.getTime() - Date.now()).toBeGreaterThan(86_000_000)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://x.myshopify.com/admin/oauth/access_token')
+    expect(init.headers['Content-Type']).toBe('application/x-www-form-urlencoded')
+    expect(Object.fromEntries(init.body as URLSearchParams)).toEqual({ grant_type: 'client_credentials', client_id: 'cid', client_secret: 'csecret' })
+  })
+
+  it('explains shop_not_permitted', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'shop_not_permitted' }), { status: 400 })))
+    await expect(fetchClientCredentialsToken('x.myshopify.com', 'cid', 's')).rejects.toThrow(/misma organización/)
+  })
+
+  it('refreshes once on a 401 and retries the query', async () => {
+    const ok = new Response(JSON.stringify({ data: { shop: { name: 'Casa Ceiba' } } }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 })).mockResolvedValueOnce(ok)
+    vi.stubGlobal('fetch', fetchMock)
+    const cfg = { shop: 'x.myshopify.com', token: 'old', refreshToken: vi.fn().mockResolvedValue('new') }
+    await expect(shopifyGraphql(cfg, '{ shop { name } }')).resolves.toEqual({ shop: { name: 'Casa Ceiba' } })
+    expect(cfg.refreshToken).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[1][1].headers['X-Shopify-Access-Token']).toBe('new')
+  })
+
+  function fakeDb(row: Record<string, unknown>) {
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
+    const db = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row }) }) }),
+        update,
+      }),
+    } as unknown as SupabaseClient
+    return { db, update }
+  }
+  const row = (expiresInMs: number) => ({
+    shop_domain: 'x.myshopify.com', access_token: 'enc:cached', client_id: 'cid', client_secret: 'enc:csecret',
+    access_token_expires_at: new Date(Date.now() + expiresInMs).toISOString(), orders_live: false,
+  })
+
+  it('uses the cached token while it is fresh', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { db, update } = fakeDb(row(3_600_000))
+    expect((await loadShopifyConfig(db, 'acc'))?.token).toBe('cached')
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('refreshes and caches (encrypted) a token about to expire', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(tokenRes('fresh')))
+    const { db, update } = fakeDb(row(30_000))
+    expect((await loadShopifyConfig(db, 'acc'))?.token).toBe('fresh')
+    expect(update.mock.calls[0][0]).toMatchObject({ access_token: 'enc:fresh' })
   })
 })

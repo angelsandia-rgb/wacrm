@@ -30,7 +30,13 @@ export async function createShopifyOrderFromChat(args: {
   const { db, accountId, contactId, conversationId, configOwnerUserId, proposal, handoff, sendText } = args
   const label = proposal.items.map((i) => `${i.name} x${i.qty}`).join(', ')
 
-  const cfg = await loadShopifyConfig(db, accountId)
+  let cfg
+  try {
+    cfg = await loadShopifyConfig(db, accountId)
+  } catch (err) {
+    // Client-credentials token refresh failed — a human must take the order.
+    return handoff(`Pedido Shopify no creado (${label}): ${err instanceof Error ? err.message : 'sin acceso a Shopify'}`)
+  }
   if (!cfg) return
 
   const { data: recent } = await db

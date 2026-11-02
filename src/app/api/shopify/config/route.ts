@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
-import { encrypt } from '@/lib/whatsapp/encryption'
-import { SHOP_DOMAIN_RE, ShopifyError, shopifyGraphql } from '@/lib/shopify/api'
+import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
+import { fetchClientCredentialsToken, SHOP_DOMAIN_RE, ShopifyError, shopifyGraphql } from '@/lib/shopify/api'
 
 /** GET — connection status. Never returns the token or webhook secret. */
 export async function GET() {
@@ -9,13 +9,15 @@ export async function GET() {
     const { supabase, accountId } = await getCurrentAccount()
     const { data } = await supabase
       .from('shopify_config')
-      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key')
+      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key, client_id')
       .eq('account_id', accountId)
       .maybeSingle()
     if (!data) return NextResponse.json({ connected: false })
     return NextResponse.json({
       connected: true,
       shop_domain: data.shop_domain,
+      auth_mode: data.client_id ? 'client_credentials' : 'token',
+      client_id: data.client_id,
       has_webhook_secret: Boolean(data.webhook_secret),
       has_recurrente_key: Boolean(data.recurrente_secret_key),
       orders_live: data.orders_live,
@@ -29,11 +31,14 @@ export async function GET() {
 }
 
 /**
- * PUT — connect or update. Body: { shop_domain, access_token?, webhook_secret?,
+ * PUT — connect or update. Body: { shop_domain, access_token? | (client_id +
+ * client_secret?), webhook_secret?,
  * orders_live?, confirmation_template_name?, confirmation_template_language?,
  * recurrente_secret_key? }. Secrets omitted = keep the stored ones.
  * access_token is required on first connect; omitted = keep the stored one.
- * A new token is verified against the store before it is saved.
+ * A Dev Dashboard app sends client_id + client_secret instead of a token:
+ * they are traded for a 24 h token (cached, refreshed in loadShopifyConfig).
+ * New credentials are verified against the store before they are saved.
  */
 export async function PUT(request: Request) {
   try {
@@ -48,15 +53,25 @@ export async function PUT(request: Request) {
     const token = typeof body.access_token === 'string' ? body.access_token.trim() : ''
     const secret = typeof body.webhook_secret === 'string' ? body.webhook_secret.trim() : ''
     const recurrenteKey = typeof body.recurrente_secret_key === 'string' ? body.recurrente_secret_key.trim() : ''
+    const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : ''
+    let clientSecret = typeof body.client_secret === 'string' ? body.client_secret.trim() : ''
 
     const { data: existing } = await supabase
-      .from('shopify_config').select('id').eq('account_id', accountId).maybeSingle()
-    if (!existing && !token) return NextResponse.json({ error: 'Falta el token de acceso' }, { status: 400 })
+      .from('shopify_config').select('id, client_id, client_secret, shop_domain').eq('account_id', accountId).maybeSingle()
+    // Same app, secret omitted = keep the stored one (re-verified only if the shop changed).
+    const reuseSecret = Boolean(!clientSecret && clientId && existing?.client_secret && existing.client_id === clientId)
+    if (reuseSecret && existing?.shop_domain !== shop) clientSecret = decrypt(existing!.client_secret as string)
+    if (clientId && !clientSecret && !reuseSecret) return NextResponse.json({ error: 'Falta el Client secret' }, { status: 400 })
+    if (!existing && !token && !clientId) {
+      return NextResponse.json({ error: 'Falta el token de acceso o el Client ID y Client secret' }, { status: 400 })
+    }
 
     let shopName: string | null = null
-    if (token) {
+    let grant: { token: string; expiresAt: Date } | null = null
+    if (token || clientSecret) {
       try {
-        const data = await shopifyGraphql<{ shop: { name: string } }>({ shop, token }, '{ shop { name } }')
+        if (!token) grant = await fetchClientCredentialsToken(shop, clientId, clientSecret)
+        const data = await shopifyGraphql<{ shop: { name: string } }>({ shop, token: token || grant!.token }, '{ shop { name } }')
         shopName = data.shop.name
       } catch (err) {
         const message = err instanceof ShopifyError ? err.message : 'No se pudo conectar con Shopify'
@@ -76,7 +91,17 @@ export async function PUT(request: Request) {
           ? body.confirmation_template_language.trim()
           : 'es',
     }
-    if (token) row.access_token = encrypt(token)
+    if (token) {
+      // A static token replaces any Dev Dashboard app credentials.
+      Object.assign(row, { access_token: encrypt(token), client_id: null, client_secret: null, access_token_expires_at: null })
+    } else if (grant) {
+      Object.assign(row, {
+        access_token: encrypt(grant.token),
+        access_token_expires_at: grant.expiresAt.toISOString(),
+        client_id: clientId,
+        client_secret: encrypt(clientSecret),
+      })
+    }
     if (secret) row.webhook_secret = encrypt(secret)
     if (recurrenteKey) row.recurrente_secret_key = encrypt(recurrenteKey)
 
