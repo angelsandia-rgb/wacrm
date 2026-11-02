@@ -1151,6 +1151,7 @@
       "filterOpen": "Abiertas",
       "filterPending": "Pendientes",
       "filterClosed": "Cerradas",
+      "filterSnoozed": "Pospuestas",
       "tags": "Etiquetas",
       "company": "Empresa",
       "allCompanies": "Todas las empresas",

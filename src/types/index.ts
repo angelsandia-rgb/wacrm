@@ -198,6 +198,8 @@ export interface Conversation {
    *    handed off, shown to whoever takes the thread over.
    */
   ai_autoreply_disabled?: boolean;
+  /** Hidden from the inbox until then; a customer message clears it (migration 174). */
+  snoozed_until?: string | null;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
   /** Messaging channel this conversation is on (migration 039, widened to include 'facebook' in migration 041). Defaults to 'whatsapp' for every pre-existing row. */

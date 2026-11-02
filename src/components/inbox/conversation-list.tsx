@@ -46,7 +46,7 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
 
 
 
-type InboxFilter = ConversationStatus | "all" | "unread";
+type InboxFilter = ConversationStatus | "all" | "unread" | "snoozed";
 
 interface WhatsappNumberOption {
   id: string;
@@ -74,7 +74,14 @@ export function ConversationList({
     { label: t("filterOpen"), value: "open" },
     { label: t("filterPending"), value: "pending" },
     { label: t("filterClosed"), value: "closed" },
+    { label: t("filterSnoozed"), value: "snoozed" },
   ], [t]);
+  // Ticks each minute so a snooze that runs out brings the thread back.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -242,11 +249,12 @@ export function ConversationList({
   }, [tags]);
 
   const filtered = useMemo(() => {
-    let result = conversations;
+    const snoozed = (c: Conversation) => !!c.snoozed_until && Date.parse(c.snoozed_until) > now;
+    let result = filter === "snoozed" ? conversations.filter(snoozed) : conversations.filter((c) => !snoozed(c));
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
+    } else if (filter !== "all" && filter !== "snoozed") {
       result = result.filter((c) => c.status === filter);
     }
 
@@ -284,6 +292,7 @@ export function ConversationList({
   }, [
     conversations,
     filter,
+    now,
     search,
     selectedTagIds,
     selectedCompany,

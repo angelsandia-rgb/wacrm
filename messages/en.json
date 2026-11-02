@@ -353,6 +353,7 @@
       "filterOpen": "Open",
       "filterPending": "Pending",
       "filterClosed": "Closed",
+      "filterSnoozed": "Snoozed",
       "tags": "Tags",
       "company": "Company",
       "allCompanies": "All companies",
