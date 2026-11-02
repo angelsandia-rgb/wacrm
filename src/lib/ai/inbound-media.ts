@@ -29,6 +29,49 @@ function mediaIdFromProxyUrl(url: string): string | null {
   return m ? decodeURIComponent(m[1]) : null
 }
 
+/** Instagram / Messenger attachments are stored as Meta CDN URLs
+ *  (lookaside.fbsbx.com, *.fbcdn.net, *.cdninstagram.com) that need no
+ *  token. Only these hosts are fetched — never an arbitrary URL (SSRF). */
+export function isMetaCdnUrl(url: string): boolean {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'https:') return false
+  const h = u.hostname.toLowerCase()
+  return (
+    h === 'lookaside.fbsbx.com' ||
+    h.endsWith('.fbcdn.net') ||
+    h.endsWith('.cdninstagram.com')
+  )
+}
+
+/** Hard cap on what we buffer from the CDN; callers apply their own,
+ *  smaller per-type limits on top. */
+const MAX_CDN_BYTES = 25 * 1024 * 1024
+
+async function downloadMetaCdn(url: string): Promise<DownloadedMedia | null> {
+  // lookaside redirects to scontent.*.fbcdn.net — follow by hand so every
+  // hop is checked against the allowlist before it is requested.
+  let res: Response | null = null
+  for (let hop = 0; hop < 4; hop++) {
+    res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
+    if (!next) break
+    url = new URL(next, url).toString()
+    if (!isMetaCdnUrl(url)) return null
+    res = null
+  }
+  if (!res || !res.ok) return null
+  const declared = Number(res.headers.get('content-length') || 0)
+  if (declared > MAX_CDN_BYTES) return null
+  const bytes = Buffer.from(await res.arrayBuffer())
+  if (bytes.byteLength > MAX_CDN_BYTES) return null
+  return { bytes, contentType: res.headers.get('content-type') }
+}
+
 /**
  * Loads the conversation's `whatsapp_config` once (lazily, cached in the
  * closure) and downloads each requested media through the same Meta /
@@ -65,6 +108,8 @@ export function makeInboundMediaDownloader(
   }
 
   return async (mediaUrl) => {
+    if (isMetaCdnUrl(mediaUrl)) return downloadMetaCdn(mediaUrl)
+
     const mediaId = mediaUrl.startsWith('/api/whatsapp/media/')
       ? mediaIdFromProxyUrl(mediaUrl)
       : null

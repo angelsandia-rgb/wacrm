@@ -466,7 +466,9 @@ export async function handleInboundDmMessage(db: SupabaseClient, msg: InboundDmM
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
 
-  if (!flowConsumed && !msg.interactiveReplyId && inboundText.trim()) {
+  // Caption-less photos too: the AI sees them (inbound-media.ts fetches
+  // Meta's CDN URL), same as the WhatsApp webhook gate.
+  if (!flowConsumed && !msg.interactiveReplyId && (inboundText.trim() || msg.contentType === 'image')) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
