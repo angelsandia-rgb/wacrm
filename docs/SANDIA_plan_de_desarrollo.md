@@ -5347,3 +5347,19 @@ la IA) y Calendly (requiere cuenta del dueño).
   tiene 287 conversaciones; las listas ya pasan el tope de 1000 con
   `fetchAllRows`) — retomar cuando una cuenta supere ~5 000. `graphify`
   local roto (su entorno `uv` fue borrado); requiere reinstalarlo.
+
+### 2026-11-02 (tarde) — Claude Code (fotos IG/FB para la IA + modo oscuro)
+
+- **#330 Fotos de Instagram/Facebook para la IA.** Una foto (con o sin
+  texto) en IG/FB ahora dispara la IA, que la descarga del CDN de Meta
+  (`lookaside.fbsbx.com`, `*.fbcdn.net`, `*.cdninstagram.com`; cada
+  redirección se valida contra la lista antes de pedirla).
+- **#330 Modo oscuro.** La variante `dark:` de Tailwind apuntaba a una clase
+  `.dark` que nadie ponía; ahora usa `html[data-mode="dark"]`, así que los
+  estilos oscuros ya escritos en ~29 componentes se aplican. Revisado a ojo
+  en producción (bandeja, configuración, KPIs).
+- **Revisado, ya existía:** notas de voz para la IA (#199, detrás del flag
+  `ai_voice_notes`, apagado en todas las cuentas — se enciende en `/admin`),
+  CSAT y enfriamiento de leads (re-landed en #197; se activan por cuenta),
+  tarifas de temporada alta y varias habitaciones (#210/#211; fechas reales
+  cargadas para VSR hasta 2028).
