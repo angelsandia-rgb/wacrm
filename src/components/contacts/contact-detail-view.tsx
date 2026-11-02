@@ -9,6 +9,7 @@ import { addContactTag, deleteContactTag } from '@/lib/contacts/tag-api';
 import { useAuth } from '@/hooks/use-auth';
 import { useCan } from '@/hooks/use-can';
 import { ConvertToPatientButton } from '@/components/clinic/convert-to-patient-button';
+import { MergeContactButton } from './merge-contact-button';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type {
@@ -646,6 +647,14 @@ export function ContactDetailView({
                     {t('sendTemplateBtn')}
                   </Button>
                   <ConvertToPatientButton contactId={contact.id} />
+                  <MergeContactButton
+                    contactId={contact.id}
+                    onMerged={() => {
+                      onUpdated();
+                      // New session key → every section reloads with the merged data.
+                      setOpenCount((n) => n + 1);
+                    }}
+                  />
                 </div>
               </SheetHeader>
 
