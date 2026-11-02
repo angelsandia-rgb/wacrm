@@ -13,6 +13,8 @@ import { SettingsPanelHead } from './settings-panel-head';
 import { readResponseJson } from '@/lib/http/response-json';
 
 // Hardcoded Spanish, same choice as google-sheets-config.tsx.
+// Secret inputs use autoComplete="new-password": Chrome ignores "off" on
+// password fields and filled the user's login (email → Client ID).
 
 interface ConfigPayload {
   connected?: boolean;
@@ -179,7 +181,7 @@ export function ShopifyConfig() {
             <div className="space-y-1.5">
               <Label htmlFor="sh-client-secret">Client secret</Label>
               <Input
-                id="sh-client-secret" type="password" autoComplete="off" value={clientSecret}
+                id="sh-client-secret" type="password" autoComplete="new-password" value={clientSecret}
                 onChange={(e) => setClientSecret(e.target.value)}
                 placeholder={cfg.auth_mode === 'client_credentials' ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : ''}
               />
@@ -192,7 +194,7 @@ export function ShopifyConfig() {
           <div className="space-y-1.5">
             <Label htmlFor="sh-token">O bien: token de Admin API (app personalizada antigua)</Label>
             <Input
-              id="sh-token" type="password" autoComplete="off" value={token}
+              id="sh-token" type="password" autoComplete="new-password" value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder={cfg.auth_mode === 'token' ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : 'shpat_…'}
             />
@@ -200,7 +202,7 @@ export function ShopifyConfig() {
           <div className="space-y-1.5">
             <Label htmlFor="sh-secret">Clave de firma del webhook (opcional)</Label>
             <Input
-              id="sh-secret" type="password" autoComplete="off" value={secret}
+              id="sh-secret" type="password" autoComplete="new-password" value={secret}
               onChange={(e) => setSecret(e.target.value)}
               placeholder={cfg.has_webhook_secret ? 'Guardada — escribe una nueva solo para reemplazarla' : ''}
             />
@@ -213,7 +215,7 @@ export function ShopifyConfig() {
           <div className="space-y-1.5">
             <Label htmlFor="sh-recurrente">Llave secreta de Recurrente (pagos con tarjeta)</Label>
             <Input
-              id="sh-recurrente" type="password" autoComplete="off" value={recurrenteKey}
+              id="sh-recurrente" type="password" autoComplete="new-password" value={recurrenteKey}
               onChange={(e) => setRecurrenteKey(e.target.value)}
               placeholder={cfg.has_recurrente_key ? 'Guardada — escribe una nueva solo para reemplazarla' : 'sk_live_…'}
             />
