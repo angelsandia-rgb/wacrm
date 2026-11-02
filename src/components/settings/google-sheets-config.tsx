@@ -34,6 +34,7 @@ import { readResponseJson } from '@/lib/http/response-json';
 const EVENT_LABELS: Record<string, string> = {
   'deal.won': 'Venta cerrada (deal ganado)',
   'deal.stage_changed': 'Cambio de etapa del pipeline',
+  'deal.lost': 'Negocio perdido (con motivo)',
   'quote.created': 'Cotización creada',
   'contact.created': 'Contacto / lead nuevo',
   'contact.lead_temperature_changed': 'Cambio de temperatura del lead',
@@ -42,6 +43,7 @@ const EVENT_LABELS: Record<string, string> = {
   'contact.brief_ready': 'Requerimientos del prospecto (al registrar el negocio)',
   'reservation.updated': 'Solicitud de reserva/servicio (hotel — una pestaña por categoría)',
   'csat.received': 'Encuesta de satisfacción respondida',
+  'daily.summary': 'Resumen diario (mensajes, conversaciones, leads, cotizaciones y ventas de ayer)',
 };
 
 const EXPORT_ENTITIES: { key: string; label: string }[] = [
@@ -49,6 +51,7 @@ const EXPORT_ENTITIES: { key: string; label: string }[] = [
   { key: 'quotes', label: 'Cotizaciones' },
   { key: 'quote_items', label: 'Cotización ítems (ingresos por producto)' },
   { key: 'funnel', label: 'Embudo por contacto' },
+  { key: 'sellers', label: 'Rendimiento por vendedor' },
   { key: 'contacts', label: 'Contactos' },
   { key: 'products', label: 'Productos' },
 ];

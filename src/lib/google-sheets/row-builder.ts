@@ -70,7 +70,9 @@ async function agentName(
     .from('profiles')
     .select('full_name, email')
     .eq('account_id', accountId)
-    .eq('user_id', userId)
+    // deals.assigned_to is a profiles.id; everything else is the auth user_id.
+    .or(`user_id.eq.${userId},id.eq.${userId}`)
+    .limit(1)
     .maybeSingle()
   return (data?.full_name as string) || (data?.email as string) || ''
 }
@@ -185,6 +187,68 @@ async function buildDealRow(
       typeof data.source === 'string' ? data.source : '',
       deal.id as string,
       ...extraValues,
+    ],
+  }
+}
+
+/** `<base> - Perdidas`: one row per deal marked lost, with the reason. */
+async function buildLostDealRow(
+  db: Db,
+  accountId: string,
+  data: Record<string, unknown>,
+  base: string,
+  nowIso: string,
+): Promise<SheetRow | null> {
+  const dealId = typeof data.deal_id === 'string' ? data.deal_id : null
+  if (!dealId) return null
+  const { data: deal } = await db
+    .from('deals')
+    .select('id, title, value, currency, stage_id, contact_id, assigned_to, lost_reason, created_at')
+    .eq('account_id', accountId)
+    .eq('id', dealId)
+    .maybeSingle()
+  if (!deal) return null
+  let stageName = ''
+  if (deal.stage_id) {
+    const { data: stage } = await db.from('pipeline_stages').select('name').eq('id', deal.stage_id as string).maybeSingle()
+    stageName = (stage?.name as string) ?? ''
+  }
+  const contact = await contactRef(db, accountId, deal.contact_id as string | null)
+  const agent = await agentName(db, accountId, deal.assigned_to as string | null)
+  const createdAt = typeof deal.created_at === 'string' ? Date.parse(deal.created_at) : NaN
+  return {
+    tab: `${base} - Perdidas`,
+    header: ['Fecha', 'Negociación', 'Monto', 'Moneda', 'Etapa al perderse', 'Motivo', 'Cliente', 'Teléfono', 'Vendedor', 'Días abierta', 'Deal ID'],
+    values: [
+      nowIso,
+      (deal.title as string) ?? '',
+      typeof deal.value === 'number' ? deal.value : Number(deal.value ?? 0),
+      (deal.currency as string) ?? '',
+      stageName,
+      (deal.lost_reason as string) ?? '',
+      contact.name,
+      contact.phone,
+      agent,
+      Number.isNaN(createdAt) ? '' : Math.max(0, Math.round((Date.parse(nowIso) - createdAt) / 86_400_000)),
+      deal.id as string,
+    ],
+  }
+}
+
+/** `<base> - Resumen diario`: the totals computed by the daily-summary cron. */
+function buildDailySummaryRow(data: Record<string, unknown>, base: string): SheetRow | null {
+  if (typeof data.date !== 'string') return null
+  const n = (k: string) => (typeof data[k] === 'number' ? (data[k] as number) : 0)
+  return {
+    tab: `${base} - Resumen diario`,
+    header: [
+      'Fecha', 'Mensajes recibidos', 'Mensajes enviados', 'Conversaciones nuevas', 'Conversaciones cerradas',
+      'Leads nuevos', 'Cotizaciones', 'Monto cotizado', 'Ventas', 'Monto vendido', 'Negocios perdidos',
+    ],
+    values: [
+      data.date,
+      n('messages_in'), n('messages_out'), n('conversations_new'), n('conversations_closed'),
+      n('leads_new'), n('quotes'), n('quotes_total'), n('deals_won'), n('deals_won_total'), n('deals_lost'),
     ],
   }
 }
@@ -547,6 +611,10 @@ export async function buildRowForEvent(
       return buildReservationRow(db, accountId, d, base, nowIso)
     case 'csat.received':
       return buildCsatRow(db, accountId, d, base, nowIso)
+    case 'deal.lost':
+      return buildLostDealRow(db, accountId, d, base, nowIso)
+    case 'daily.summary':
+      return buildDailySummaryRow(d, base)
     default:
       return null
   }

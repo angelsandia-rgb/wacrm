@@ -16,9 +16,10 @@ import { supabaseAdmin } from '@/lib/webhooks/admin-client'
  * webhook events the Kanban drag already does via
  * /api/deals/[id]/stage — those events are what feed automations and a
  * connected Google Sheet. `lost` / `open` have no webhook event, so
- * they're a plain status update.
+ * they're a plain status update. `lost` stores an optional reason and
+ * fires `deal.lost` (migration 176).
  *
- * Body: { status: 'won' | 'lost' | 'open' }
+ * Body: { status: 'won' | 'lost' | 'open', reason?: string }
  */
 export async function PATCH(
   request: Request,
@@ -92,10 +93,16 @@ export async function PATCH(
       return NextResponse.json({ success: true, deal: updated })
     }
 
-    // 'lost' or 'open' — clear won_at, no webhook event exists for these.
+    // 'lost' records why; 'open' clears both outcomes.
+    const reason = status === 'lost' && typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : ''
     const { data: updated, error } = await supabase
       .from('deals')
-      .update({ status, won_at: null })
+      .update({
+        status,
+        won_at: null,
+        lost_reason: reason || null,
+        lost_at: status === 'lost' ? new Date().toISOString() : null,
+      })
       .eq('id', id)
       .eq('account_id', accountId)
       .select('id, pipeline_id, stage_id, status')
@@ -103,6 +110,13 @@ export async function PATCH(
     if (error) throw error
     if (!updated) {
       return NextResponse.json({ error: 'Deal not found' }, { status: 404 })
+    }
+    if (status === 'lost' && deal.status !== 'lost') {
+      void dispatchWebhookEvent(webhookDb, accountId, 'deal.lost', {
+        deal_id: updated.id,
+        reason: reason || null,
+        source: 'human',
+      })
     }
     return NextResponse.json({ success: true, deal: updated })
   } catch (error) {

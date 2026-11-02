@@ -454,6 +454,9 @@ export interface Deal {
   notes?: string;
   expected_close_date?: string;
   status?: DealStatus;
+  /** Why it was lost, set by "Marcar como perdida" (migration 176). */
+  lost_reason?: string | null;
+  lost_at?: string | null;
   created_at: string;
   updated_at?: string;
   contact?: Contact;
