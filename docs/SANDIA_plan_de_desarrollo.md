@@ -5287,3 +5287,14 @@ así Dropi nunca envía sin pago ni cobra en efectivo. **Estado de pedido:** cua
 el cliente pregunta por su pedido/guía, se leen en vivo de Shopify sus pedidos
 (los ligados a sus negocios, o un `#1234` cuyo teléfono coincide) con pago,
 preparación, entrega y guía (Dropify escribe la guía de Dropi en el fulfillment).
+
+### 2026-11-01 (sesión posterior) — Claude Code (Shopify: apps del Dev Dashboard)
+
+Shopify ya no deja crear apps personalizadas con token `shpat_`; las apps del
+Dev Dashboard dan Client ID + Client secret. Configuración → Shopify acepta
+cualquiera de los dos. Con Client ID/secret se pide un token de 24 h
+(`client_credentials`), se guarda cifrado con su vencimiento
+(`access_token_expires_at`), se renueva ~60 s antes y se reintenta una vez ante
+un 401. `shop_not_permitted` (app en otra organización o sin instalar) se
+explica en la UI. El webhook acepta la clave de Notificaciones o, si no hay, el
+Client secret. Migración 175 (aditiva) **pendiente de aplicar** al hacer merge.
