@@ -59,6 +59,7 @@ export function DealForm({
   const { accountId, defaultCurrency } = useAuth();
 
   const [title, setTitle] = useState("");
+  const [lostReason, setLostReason] = useState("");
   const [value, setValue] = useState("");
   const [currency, setCurrency] = useState(defaultCurrency);
   const [contactId, setContactId] = useState("");
@@ -84,6 +85,7 @@ export function DealForm({
   useEffect(() => {
     if (!open) return;
     setConfirmDelete(false);
+    setLostReason("");
     if (deal) {
       setTitle(deal.title);
       setValue(String(deal.value ?? ""));
@@ -233,7 +235,7 @@ export function DealForm({
     const res = await fetch(`/api/deals/${deal.id}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(status === "lost" ? { status, reason: lostReason } : { status }),
     }).catch(() => null);
     setStatusAction(null);
     if (!res || !res.ok) {
@@ -398,6 +400,19 @@ export function DealForm({
                 <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {t("status")}
                 </p>
+                {deal.status === "lost" ? (
+                  deal.lost_reason ? (
+                    <p className="text-sm text-muted-foreground">Motivo de pérdida: {deal.lost_reason}</p>
+                  ) : null
+                ) : (
+                  <Input
+                    value={lostReason}
+                    onChange={(e) => setLostReason(e.target.value)}
+                    maxLength={500}
+                    placeholder="Motivo si se pierde (precio, competencia, sin respuesta…)"
+                    className="h-8 text-sm"
+                  />
+                )}
                 <div className="flex gap-2">
                   <Button
                     type="button"

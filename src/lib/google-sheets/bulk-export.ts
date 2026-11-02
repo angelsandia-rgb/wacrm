@@ -12,7 +12,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 // 1000) and a failed read throws instead of writing an empty sheet.
 // ============================================================
 
-const EXPORTABLE_ENTITIES = ['contacts', 'deals', 'quotes', 'quote_items', 'funnel', 'products'] as const
+const EXPORTABLE_ENTITIES = ['contacts', 'deals', 'quotes', 'quote_items', 'funnel', 'sellers', 'products'] as const
 export type ExportEntity = (typeof EXPORTABLE_ENTITIES)[number]
 
 export const MAX_EXPORT_ROWS = 5000
@@ -51,6 +51,8 @@ export async function exportEntity(
       return exportQuoteItems(db, accountId)
     case 'funnel':
       return exportFunnel(db, accountId)
+    case 'sellers':
+      return exportSellers(db, accountId)
     case 'products':
       return exportProducts(db, accountId)
   }
@@ -80,13 +82,15 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 async function memberNames(db: SupabaseClient, accountId: string): Promise<Map<string, string>> {
   const { data, error } = await db
     .from('profiles')
-    .select('user_id, full_name, email')
+    .select('id, user_id, full_name, email')
     .eq('account_id', accountId)
   if (error) throw error
+  // Keyed by BOTH ids: deals.assigned_to points at profiles.id, while
+  // quotes/conversations use the auth user_id.
   return new Map(
-    ((data ?? []) as { user_id: string; full_name: string | null; email: string | null }[]).map((p) => [
-      p.user_id,
-      p.full_name || p.email || '',
+    ((data ?? []) as { id: string; user_id: string; full_name: string | null; email: string | null }[]).flatMap((p) => [
+      [p.user_id, p.full_name || p.email || ''],
+      [p.id, p.full_name || p.email || ''],
     ]),
   )
 }
@@ -133,6 +137,45 @@ async function exportDeals(db: SupabaseClient, accountId: string): Promise<Expor
   return pack(
     'Export Negociaciones',
     ['Negociación', 'Monto', 'Moneda', 'Etapa', 'Estado', 'Ganada el', 'Cliente', 'Teléfono', 'Vendedor', 'Creado'],
+    rows,
+  )
+}
+
+/** One row per teammate: assigned chats, quotes, won / lost deals, close rate. */
+async function exportSellers(db: SupabaseClient, accountId: string): Promise<ExportResult> {
+  const [{ data: members, error }, convs, quotes, deals] = await Promise.all([
+    db.from('profiles').select('id, user_id, full_name, email, account_role').eq('account_id', accountId),
+    readAll(db, accountId, 'conversations', 'id, assigned_agent_id, status'),
+    readAll(db, accountId, 'quotes', 'id, user_id, total'),
+    readAll(db, accountId, 'deals', 'id, assigned_to, status, value'),
+  ])
+  if (error) throw error
+  const rows = ((members ?? []) as Row[])
+    .filter((m) => m.account_role !== 'viewer')
+    .map((m) => {
+      const uid = str(m.user_id)
+      const pid = str(m.id)
+      const mine = convs.filter((c) => c.assigned_agent_id === uid)
+      const myQuotes = quotes.filter((q) => q.user_id === uid)
+      const myDeals = deals.filter((d) => d.assigned_to === pid)
+      const won = myDeals.filter((d) => d.status === 'won')
+      const lost = myDeals.filter((d) => d.status === 'lost').length
+      return [
+        str(m.full_name) || str(m.email),
+        str(m.account_role),
+        mine.length,
+        mine.filter((c) => c.status === 'open').length,
+        myQuotes.length,
+        myQuotes.reduce((a, q) => a + num(q.total), 0),
+        won.length,
+        won.reduce((a, d) => a + num(d.value), 0),
+        lost,
+        won.length + lost > 0 ? Math.round((won.length / (won.length + lost)) * 100) : '',
+      ]
+    })
+  return pack(
+    'Export Vendedores',
+    ['Vendedor', 'Rol', 'Chats asignados', 'Chats abiertos', 'Cotizaciones', 'Monto cotizado', 'Ventas', 'Monto vendido', 'Perdidos', 'Tasa de cierre %'],
     rows,
   )
 }

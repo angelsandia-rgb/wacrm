@@ -26,6 +26,8 @@ function makeDb(fixtures: {
       const chain = {
         select: () => chain,
         eq: () => chain,
+        or: () => chain,
+        limit: () => chain,
         order: () => Promise.resolve({ data: listByTable[table] ?? [], error: null }),
         maybeSingle: () => {
           const map: Record<string, unknown> = {

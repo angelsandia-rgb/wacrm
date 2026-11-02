@@ -9,6 +9,7 @@ import { isWebhookEvent } from '@/lib/webhooks/events'
 const SHEETABLE_EVENTS = [
   'deal.won',
   'deal.stage_changed',
+  'deal.lost',
   'quote.created',
   'contact.created',
   'contact.lead_temperature_changed',
@@ -17,6 +18,7 @@ const SHEETABLE_EVENTS = [
   'contact.brief_ready',
   'reservation.updated',
   'csat.received',
+  'daily.summary',
 ] as const
 
 /** GET — connection + target-sheet status for the caller's account. */
