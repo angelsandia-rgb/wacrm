@@ -23,6 +23,7 @@ interface ConfigPayload {
   client_id?: string | null;
   has_webhook_secret?: boolean;
   has_recurrente_key?: boolean;
+  has_recurrente_webhook_secret?: boolean;
   orders_live?: boolean;
   confirmation_template_name?: string | null;
   confirmation_template_language?: string | null;
@@ -41,6 +42,7 @@ export function ShopifyConfig() {
   const [clientSecret, setClientSecret] = useState('');
   const [secret, setSecret] = useState('');
   const [recurrenteKey, setRecurrenteKey] = useState('');
+  const [recurrenteWebhookSecret, setRecurrenteWebhookSecret] = useState('');
   const [ordersLive, setOrdersLive] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateLang, setTemplateLang] = useState('es');
@@ -81,6 +83,7 @@ export function ShopifyConfig() {
           client_secret: (!token && clientSecret) || undefined,
           webhook_secret: secret || undefined,
           recurrente_secret_key: recurrenteKey || undefined,
+          recurrente_webhook_secret: recurrenteWebhookSecret || undefined,
           orders_live: ordersLive,
           confirmation_template_name: templateName,
           confirmation_template_language: templateLang,
@@ -98,6 +101,7 @@ export function ShopifyConfig() {
       setClientSecret('');
       setSecret('');
       setRecurrenteKey('');
+      setRecurrenteWebhookSecret('');
       await load();
     } finally {
       setSaving(false);
@@ -142,7 +146,9 @@ export function ShopifyConfig() {
   }
 
   const connected = Boolean(cfg.connected);
-  const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/shopify/webhook` : '/api/shopify/webhook';
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const webhookUrl = `${origin}/api/shopify/webhook`;
+  const recurrenteWebhookUrl = `${origin}/api/shopify/recurrente-webhook?account=${accountId ?? ''}`;
 
   return (
     <section className="animate-in fade-in-50 duration-200 space-y-6">
@@ -221,7 +227,20 @@ export function ShopifyConfig() {
             />
             <p className="text-muted-foreground text-xs">
               Recurrente → Desarrolladores. Con la llave, la IA envía el link de pago por el total exacto; sin ella, avisa que un asesor lo enviará.
-              Los pedidos con tarjeta quedan como borrador etiquetado &quot;pago-tarjeta&quot; hasta que confirmes el pago.
+              Los pedidos con tarjeta quedan como borrador etiquetado &quot;pago-tarjeta&quot; hasta que se confirma el pago.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="sh-recurrente-wh">Clave de firma del webhook de Recurrente (opcional)</Label>
+            <Input
+              id="sh-recurrente-wh" type="password" autoComplete="new-password" value={recurrenteWebhookSecret}
+              onChange={(e) => setRecurrenteWebhookSecret(e.target.value)}
+              placeholder={cfg.has_recurrente_webhook_secret ? 'Guardada — escribe una nueva solo para reemplazarla' : 'whsec_…'}
+            />
+            <p className="text-muted-foreground text-xs">
+              Para que los pagos con tarjeta se confirmen solos: en Recurrente → Desarrolladores → Webhooks, crea un endpoint hacia{' '}
+              <code className="break-all">{recurrenteWebhookUrl}</code> con el evento de pago exitoso y pega aquí su clave de firma.
+              Con &quot;Crear pedidos reales&quot; encendido, al pagarse el link el borrador se completa como pagado, llega a Dropi y el cliente recibe la confirmación.
             </p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">

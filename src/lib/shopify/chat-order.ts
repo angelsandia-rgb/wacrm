@@ -126,7 +126,11 @@ export async function createShopifyOrderFromChat(args: {
     console.error('[shopify] order confirmation send failed:', err)
   }
 
-  if (order.draft) {
+  // With real orders on and the Recurrente webhook set, a paid card draft is
+  // completed automatically (/api/shopify/recurrente-webhook) — no handoff,
+  // the AI keeps the chat.
+  const autoCompletes = proposal.payment === 'card' && paymentLink && cfg.ordersLive && cfg.recurrenteWebhookSecret
+  if (order.draft && !autoCompletes) {
     // A human has to finish it in Shopify: a card order once Recurrente shows
     // it paid (mark it paid there, so Dropi never collects cash), or any order
     // while "Crear pedidos reales" is off.

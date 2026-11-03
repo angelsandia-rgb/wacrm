@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  fetchClientCredentialsToken, loadShopifyConfig, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -75,7 +75,7 @@ describe('helpers', () => {
 describe('card orders', () => {
   const cfg = {
     shop: 'x.myshopify.com', token: 't', ordersLive: true, webhookSecret: null,
-    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1',
+    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1', recurrenteWebhookSecret: null,
   }
   const req = {
     lines: [{ variantId: 'gid://v/1', quantity: 1, price: 229, title: 'X' }],
@@ -196,5 +196,56 @@ describe('client credentials (Dev Dashboard apps)', () => {
     const { db, update } = fakeDb(row(30_000))
     expect((await loadShopifyConfig(db, 'acc'))?.token).toBe('fresh')
     expect(update.mock.calls[0][0]).toMatchObject({ access_token: 'enc:fresh' })
+  })
+})
+
+describe('Recurrente paid → Shopify order', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const secret = 'whsec_' + Buffer.from('test-key').toString('base64')
+  const sign = (id: string, ts: string, body: string) =>
+    'v1,' + createHmac('sha256', Buffer.from('test-key')).update(`${id}.${ts}.${body}`).digest('base64')
+
+  it('verifies Svix signatures and rejects tampering or stale timestamps', () => {
+    const body = '{"event_type":"intent.succeeded"}'
+    const now = 1_800_000_000
+    const h = { id: 'msg_1', timestamp: String(now), signature: `v1,bogus ${sign('msg_1', String(now), body)}` }
+    expect(verifySvixSignature(body, h, secret, now)).toBe(true)
+    expect(verifySvixSignature(body + ' ', h, secret, now)).toBe(false)
+    expect(verifySvixSignature(body, h, secret, now + 600)).toBe(false)
+    expect(verifySvixSignature(body, { ...h, id: null }, secret, now)).toBe(false)
+  })
+
+  it('reads the checkout back with the secret key', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status: 'paid', total_in_cents: 45800, currency: 'GTQ', metadata: { shopify_order_id: 'gid://shopify/DraftOrder/9' },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+    const c = await getRecurrenteCheckout('sk_test_1', 'ch_1')
+    expect(c.metadata?.shopify_order_id).toBe('gid://shopify/DraftOrder/9')
+    expect(fetchMock.mock.calls[0][0]).toBe('https://app.recurrente.com/api/checkouts/ch_1')
+    expect(fetchMock.mock.calls[0][1].headers['X-SECRET-KEY']).toBe('sk_test_1')
+  })
+
+  const cfg = { shop: 'x.myshopify.com', token: 't' }
+  const draft = (status: string, amount: string) =>
+    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount } } } } }))
+
+  it('completes an open draft as paid when the total matches', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(draft('OPEN', '458.00'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: { draftOrderComplete: { draftOrder: { order: { id: 'gid://shopify/Order/5', name: '#1005' } }, userErrors: [] } },
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
+    const mutation = JSON.parse(fetchMock.mock.calls[1][1].body).query as string
+    expect(mutation).toContain('draftOrderComplete')
+    expect(mutation).not.toContain('paymentPending')
+  })
+
+  it('skips completed drafts and amount mismatches', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(draft('COMPLETED', '458.00')).mockResolvedValueOnce(draft('OPEN', '500.00')))
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
   })
 })

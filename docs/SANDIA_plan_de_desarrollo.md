@@ -5363,3 +5363,14 @@ la IA) y Calendly (requiere cuenta del dueño).
   CSAT y enfriamiento de leads (re-landed en #197; se activan por cuenta),
   tarifas de temporada alta y varias habitaciones (#210/#211; fechas reales
   cargadas para VSR hasta 2028).
+
+### 2026-11-02 — Claude Code (Shopify: pagos con tarjeta se confirman solos)
+
+Webhook de Recurrente `POST /api/shopify/recurrente-webhook?account=<id>` (firma
+Svix, clave `whsec_` cifrada en `shopify_config.recurrente_webhook_secret`,
+migración 176). Con "Crear pedidos reales" encendido, cuando se paga el link de
+un pedido con tarjeta del chat, se lee el checkout en Recurrente (estado `paid`
+y el borrador en `metadata`), se completa el borrador de Shopify como **pagado**
+si el total coincide (llega a Dropi sin cobro contra entrega), el negocio pasa
+al pedido real y el cliente recibe "✅ Recibimos tu pago". En ese caso el chat
+ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
