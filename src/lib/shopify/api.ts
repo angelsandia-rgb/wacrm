@@ -34,6 +34,8 @@ export interface ShopifyConfig {
   templateName: string | null
   templateLanguage: string
   recurrenteSecretKey: string | null
+  /** Svix signing secret (whsec_…) of the Recurrente webhook that completes paid card drafts. */
+  recurrenteWebhookSecret: string | null
   /** Dev Dashboard apps only: fetches a fresh token (and caches it), used on a 401. */
   refreshToken?: () => Promise<string>
 }
@@ -74,7 +76,7 @@ export async function fetchClientCredentialsToken(
 export async function loadShopifyConfig(db: SupabaseClient, accountId: string): Promise<ShopifyConfig | null> {
   const { data } = await db
     .from('shopify_config')
-    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key')
+    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key, recurrente_webhook_secret')
     .eq('account_id', accountId)
     .maybeSingle()
   if (!data) return null
@@ -86,6 +88,7 @@ export async function loadShopifyConfig(db: SupabaseClient, accountId: string): 
     templateName: (data.confirmation_template_name as string | null) || null,
     templateLanguage: (data.confirmation_template_language as string | null) || 'es',
     recurrenteSecretKey: data.recurrente_secret_key ? decrypt(data.recurrente_secret_key as string) : null,
+    recurrenteWebhookSecret: data.recurrente_webhook_secret ? decrypt(data.recurrente_webhook_secret as string) : null,
   }
   if (data.client_id && data.client_secret) {
     const clientId = data.client_id as string
@@ -482,4 +485,71 @@ export async function createRecurrenteCheckout(secretKey: string, args: { title:
   const json = (await res.json().catch(() => null)) as { checkout_url?: string; message?: string } | null
   if (!res.ok || !json?.checkout_url) throw new ShopifyError(`Recurrente: ${json?.message ?? `HTTP ${res.status}`}`, 502)
   return json.checkout_url
+}
+
+// ------------------------------------------------- Recurrente paid → order
+
+/** Svix signature check (Recurrente webhooks): base64 HMAC-SHA256 of
+ *  `${id}.${timestamp}.${body}` keyed with the base64 part of `whsec_…`;
+ *  the header may carry several space-separated `v1,<sig>` values.
+ *  Timestamps more than 5 minutes off are rejected (replay). */
+export function verifySvixSignature(
+  rawBody: string,
+  headers: { id: string | null; timestamp: string | null; signature: string | null },
+  secret: string,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): boolean {
+  const { id, timestamp, signature } = headers
+  if (!id || !timestamp || !signature) return false
+  if (Math.abs(nowSeconds - Number(timestamp)) > 300) return false
+  const key = Buffer.from(secret.replace(/^whsec_/, ''), 'base64')
+  const expected = Buffer.from(createHmac('sha256', key).update(`${id}.${timestamp}.${rawBody}`).digest('base64'))
+  return signature.split(' ').some((part) => {
+    const sig = Buffer.from(part.replace(/^v1,/, ''))
+    return sig.length === expected.length && timingSafeEqual(sig, expected)
+  })
+}
+
+export interface RecurrenteCheckout {
+  status: 'unpaid' | 'paid' | 'payment_in_progress' | 'expired'
+  total_in_cents: number
+  currency: string
+  metadata: Record<string, unknown> | null
+}
+
+/** Read a checkout back from Recurrente — the webhook body is never trusted for the payment state. */
+export async function getRecurrenteCheckout(secretKey: string, checkoutId: string): Promise<RecurrenteCheckout> {
+  const res = await fetch(`https://app.recurrente.com/api/checkouts/${encodeURIComponent(checkoutId)}`, {
+    headers: { 'X-SECRET-KEY': secretKey },
+    signal: AbortSignal.timeout(15_000),
+  })
+  const json = (await res.json().catch(() => null)) as (RecurrenteCheckout & { message?: string }) | null
+  if (!res.ok || !json?.status) throw new ShopifyError(`Recurrente: ${json?.message ?? `HTTP ${res.status}`}`, 502)
+  return json
+}
+
+/** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Returns
+ *  null when the draft is already completed (webhook retries, the legacy and
+ *  unified events both arriving) or its total doesn't match `expectedTotal`. */
+export async function completePaidDraftOrder(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  draftId: string,
+  expectedTotal: number,
+): Promise<{ id: string; name: string } | null> {
+  const { draftOrder } = await shopifyGraphql<{
+    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } } } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } } }`, { id: draftId })
+  if (!draftOrder || draftOrder.status === 'COMPLETED') return null
+  if (Math.abs(Number(draftOrder.totalPriceSet.shopMoney.amount) - expectedTotal) > 0.009) {
+    console.warn(`[recurrente] ${draftId} total ${draftOrder.totalPriceSet.shopMoney.amount} != paid ${expectedTotal}, not completed`)
+    return null
+  }
+  // No paymentPending → Shopify records the order as paid.
+  const data = await shopifyGraphql<{
+    draftOrderComplete: { draftOrder: { order: { id: string; name: string } | null } | null; userErrors: { message: string }[] }
+  }>(cfg, `mutation($id: ID!) { draftOrderComplete(id: $id, sourceName: "${ORDER_TAG}") {
+      draftOrder { order { id name } } userErrors { message } } }`, { id: draftId })
+  const order = data.draftOrderComplete.draftOrder?.order
+  if (!order) throw new ShopifyError(data.draftOrderComplete.userErrors.map((e) => e.message).join('; ') || 'draftOrderComplete failed')
+  return order
 }

@@ -9,7 +9,7 @@ export async function GET() {
     const { supabase, accountId } = await getCurrentAccount()
     const { data } = await supabase
       .from('shopify_config')
-      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key, client_id')
+      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key, recurrente_webhook_secret, client_id')
       .eq('account_id', accountId)
       .maybeSingle()
     if (!data) return NextResponse.json({ connected: false })
@@ -20,6 +20,7 @@ export async function GET() {
       client_id: data.client_id,
       has_webhook_secret: Boolean(data.webhook_secret),
       has_recurrente_key: Boolean(data.recurrente_secret_key),
+      has_recurrente_webhook_secret: Boolean(data.recurrente_webhook_secret),
       orders_live: data.orders_live,
       confirmation_template_name: data.confirmation_template_name,
       confirmation_template_language: data.confirmation_template_language,
@@ -34,7 +35,7 @@ export async function GET() {
  * PUT — connect or update. Body: { shop_domain, access_token? | (client_id +
  * client_secret?), webhook_secret?,
  * orders_live?, confirmation_template_name?, confirmation_template_language?,
- * recurrente_secret_key? }. Secrets omitted = keep the stored ones.
+ * recurrente_secret_key?, recurrente_webhook_secret? }. Secrets omitted = keep the stored ones.
  * access_token is required on first connect; omitted = keep the stored one.
  * A Dev Dashboard app sends client_id + client_secret instead of a token:
  * they are traded for a 24 h token (cached, refreshed in loadShopifyConfig).
@@ -53,6 +54,10 @@ export async function PUT(request: Request) {
     const token = typeof body.access_token === 'string' ? body.access_token.trim() : ''
     const secret = typeof body.webhook_secret === 'string' ? body.webhook_secret.trim() : ''
     const recurrenteKey = typeof body.recurrente_secret_key === 'string' ? body.recurrente_secret_key.trim() : ''
+    const recurrenteWebhookSecret = typeof body.recurrente_webhook_secret === 'string' ? body.recurrente_webhook_secret.trim() : ''
+    if (recurrenteWebhookSecret && !recurrenteWebhookSecret.startsWith('whsec_')) {
+      return NextResponse.json({ error: 'La clave del webhook de Recurrente empieza con whsec_' }, { status: 400 })
+    }
     const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : ''
     let clientSecret = typeof body.client_secret === 'string' ? body.client_secret.trim() : ''
 
@@ -104,6 +109,7 @@ export async function PUT(request: Request) {
     }
     if (secret) row.webhook_secret = encrypt(secret)
     if (recurrenteKey) row.recurrente_secret_key = encrypt(recurrenteKey)
+    if (recurrenteWebhookSecret) row.recurrente_webhook_secret = encrypt(recurrenteWebhookSecret)
 
     const { error } = existing
       ? await supabase.from('shopify_config').update(row).eq('account_id', accountId)
