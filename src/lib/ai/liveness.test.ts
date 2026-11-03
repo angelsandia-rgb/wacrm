@@ -14,6 +14,8 @@ interface FakeState {
   msgCounts: Record<string, number>
   /** conversations a teammate answered within TEAMMATE_QUIET_MS */
   staffConvs?: string[]
+  /** account_id -> feature_flags, for accounts with a non-default AI attention schedule */
+  accountFlags?: Record<string, string[]>
 }
 
 function fakeDb(s: FakeState): SupabaseClient {
@@ -28,6 +30,21 @@ function fakeDb(s: FakeState): SupabaseClient {
           eq: () => c,
           then: (f: (v: unknown) => unknown) =>
             Promise.resolve({ data: s.aiConfigAccounts.map((a) => ({ account_id: a })), error: null }).then(f),
+        }
+        return c
+      }
+      if (table === 'accounts') {
+        const c = {
+          select: () => c,
+          in: (_col: string, ids: string[]) =>
+            Promise.resolve({
+              data: ids.map((id) => ({
+                id,
+                feature_flags: s.accountFlags?.[id] ?? [],
+                timezone: 'America/Guatemala',
+              })),
+              error: null,
+            }),
         }
         return c
       }
@@ -171,6 +188,28 @@ describe('checkAiLiveness', () => {
         ],
         msgCounts: { c1: 5, c2: 5 },
         staffConvs: ['c1'],
+      }),
+    )
+    expect(r.deadAccounts).toEqual([])
+    expect(h.dispatchSystemAlert).not.toHaveBeenCalled()
+  })
+
+  it('does NOT alert when the account is outside its configured AI attention hours (overnight-only bot)', async () => {
+    const outsideHour = (new Date().getUTCHours() + 6) % 24 // America/Guatemala = UTC-6
+    const insideWindow = outsideHour >= 20 || outsideHour < 8
+    // ai_attention_hours_20_8 = bot answers 20:00–08:00 only. Skip this
+    // assertion in the rare case "now" already falls inside that window.
+    if (insideWindow) return
+    const r = await checkAiLiveness(
+      fakeDb({
+        aiConfigAccounts: ['a1'],
+        usageAccounts: [],
+        eligibleConvs: [
+          { id: 'c1', account_id: 'a1' },
+          { id: 'c2', account_id: 'a1' },
+        ],
+        msgCounts: { c1: 5, c2: 5 },
+        accountFlags: { a1: ['ai_attention_hours_20_8'] },
       }),
     )
     expect(r.deadAccounts).toEqual([])

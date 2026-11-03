@@ -17,6 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import { TEAMMATE_QUIET_MS } from './human-reply'
+import { autoReplyScheduleForAccount, withinAiAttentionHours } from './auto-reply-schedule'
 
 /** Look-back window. Long enough that a healthy bot (30s debounce +
  *  seconds of generation) would definitely have logged usage for any
@@ -43,7 +44,28 @@ export async function checkAiLiveness(db: SupabaseClient): Promise<AiLivenessRes
     .select('account_id')
     .eq('is_active', true)
     .eq('auto_reply_enabled', true)
-  const accountIds = [...new Set((cfgRows ?? []).map((r) => r.account_id as string))]
+  const configuredAccountIds = [...new Set((cfgRows ?? []).map((r) => r.account_id as string))]
+  if (configuredAccountIds.length === 0) return { checkedAccounts: 0, deadAccounts: [] }
+
+  // Skip accounts currently outside their configured AI attention-hours
+  // window (e.g. the `ai_attention_hours_20_8` feature flag some hotels
+  // use to run the bot overnight only, staff by day) — the bot is quiet
+  // there by design, not dead. Without this, such an account trips this
+  // check every single daytime hour it has live traffic (confirmed live
+  // 2026-11-03).
+  const { data: accountRows } = await db
+    .from('accounts')
+    .select('id, feature_flags, timezone')
+    .in('id', configuredAccountIds)
+  const accountIds = (accountRows ?? [])
+    .filter((a) => {
+      try {
+        return withinAiAttentionHours(autoReplyScheduleForAccount(a))
+      } catch {
+        return true // malformed flags: don't let that hide a real outage
+      }
+    })
+    .map((a) => a.id as string)
   if (accountIds.length === 0) return { checkedAccounts: 0, deadAccounts: [] }
 
   // AI provider calls per account in the window (any successful reply
