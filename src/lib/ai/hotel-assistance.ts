@@ -4,7 +4,7 @@ import { isExplicitHumanRequest, isGiftVoucherAsk, isSpecialRateTalk } from './h
 
 const normalize = (text: string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 const OPERATIONAL = /\b(cancel\w*|reembols\w*|devol\w*|pago\w*|pagar|deposit\w*|anticipo|comprobante|factura|cotiz\w*|voucher|cupon|certificado|tour operador|toperador|tarifa especial|precio especial|clientes? frecuentes?|corporativ\w*|mi reserva|nuestra reserva|confirm\w*|reprogram\w*|reagend\w*|no entiendo|no entendi|no comprendo|i don.t understand|refund|cancel|payment|invoice|quote)\b/
-const INFORMATION = /\b(precios?|tarifas?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que hora|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
+const INFORMATION = /\b(precios?|tarifas?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que horas?|horas? de (?:entrada|salida|ingreso)|entregan la habitacion|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
 const TOTAL_QUESTION = /\b(?:como|cuanto|cual|que)\b[^.!?\n]{0,60}\btotal(?:es)?\b/
 const NEW_INQUIRY = /\b(hospedaje|alojamiento|habitacion\w*|suite|paquete|masaje|spa|stay|room)\b/
 
