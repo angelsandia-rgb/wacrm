@@ -5374,3 +5374,19 @@ y el borrador en `metadata`), se completa el borrador de Shopify como **pagado**
 si el total coincide (llega a Dropi sin cobro contra entrega), el negocio pasa
 al pedido real y el cliente recibe "✅ Recibimos tu pago". En ese caso el chat
 ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
+
+### 2026-11-06 — Claude Code (hotel: "¿a qué horas…?" sin respuesta de noche)
+
+- **#334 La IA responde la hora de check-in a huéspedes con reserva.** En
+  Villa San Ricardo, un huésped confirmado preguntó a la 01:24 "¿a qué horas
+  entregan la habitación?" y la IA lo pasó a recepción sin contestar. Con una
+  reserva activa solo responde consultas que reconoce como informativas, y el
+  regex `INFORMATION` (`src/lib/ai/hotel-assistance.ts`) solo aceptaba
+  `a que hora` en singular. Ahora acepta `a que horas?`,
+  `hora(s) de entrada/salida/ingreso` y `entregan la habitacion`; test con la
+  frase real.
+- **Revisión del 05/11 en VSR (sin cambio de código):** la cuenta tiene
+  `ai_attention_hours_20_8`, así que de día atiende recepción (84 mensajes del
+  personal contra 2 de la IA). Pendiente del dueño: el mensaje de ausencia de
+  la app de WhatsApp Business se dispara en horario laboral y llega junto con
+  el saludo; se programa en la app, no en el CRM.
