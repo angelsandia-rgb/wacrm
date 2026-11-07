@@ -5390,3 +5390,28 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   personal contra 2 de la IA). Pendiente del dueño: el mensaje de ausencia de
   la app de WhatsApp Business se dispara en horario laboral y llega junto con
   el saludo; se programa en la app, no en el CRM.
+
+### 2026-11-07 — Claude Code (hotel: totales, cotizaciones, avisos a recepción + vertical dropshipping)
+
+- **#336 La IA no envía totales de estadía que el sistema no calculó.** Cuando
+  la estimación determinista no puede cotizar (p. ej. dos habitaciones
+  distintas en una sola solicitud), el modelo inventaba un "total". Ahora
+  `withoutUnverifiedStayTotals` (`src/lib/ai/hotel-close.ts`) quita esas
+  frases antes de enviar y agrega "El total exacto se lo confirma recepción".
+- **#337 Triage de eventos:** si el personal ya tomó la cotización
+  (cotización/presupuesto/propuesta) después de que el huésped describió el
+  evento, la IA ya no vuelve a preguntar los datos.
+- **#338 Menos avisos "Requiere atención".** Recepción recibió 391 avisos en 7
+  días (uno por cada mensaje del huésped, incluso en medio del chat). Ahora no
+  se avisa si alguien del equipo respondió en los últimos 10 min, ni si ya se
+  avisó a esa persona de ese chat en los últimos 15 min
+  (`src/lib/push/hotel-attention.ts`).
+- **#339 Vertical "Tienda / Dropshipping"** (Shopify + Dropi): pipeline
+  "Pedidos" (Consulta → Pedido creado → Pago confirmado → Enviado →
+  Entregado), campos de entrega, documento "Envíos, pagos y cambios", prompt
+  de ventas y calendario oculto. `attachOrderToDeal` ahora coloca los pedidos
+  de Shopify en el pipeline "Pedidos", etapa "Pedido creado" (antes caían en
+  el pipeline más antiguo). Migración `177_vertical_dropshipping.sql`
+  **aplicada a producción**.
+- **Datos VSR:** el número del propio hotel quedó con la etiqueta *Interno*
+  para que no reciba notas ni avisos de "Pendiente de recepción".
