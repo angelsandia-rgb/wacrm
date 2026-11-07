@@ -10,11 +10,13 @@ import {
   VERTICAL_SLUGS,
 } from './index'
 import { getFlowTemplate } from '@/lib/flows/templates'
+import { WEBHOOK_EVENTS } from '@/lib/webhooks/events'
+import { ORDERS_PIPELINE_NAME, ORDER_PLACED_STAGE_NAME } from '@/lib/shopify/api'
 import { validateFlowForActivation } from '@/lib/flows/validate'
 
 describe('vertical registry', () => {
   it('exposes exactly the slugs in the CHECK constraint', () => {
-    expect([...VERTICAL_SLUGS].sort()).toEqual(['clinica', 'generic', 'hotel'])
+    expect([...VERTICAL_SLUGS].sort()).toEqual(['clinica', 'dropshipping', 'generic', 'hotel'])
   })
 
   it('isVerticalSlug narrows correctly', () => {
@@ -66,6 +68,19 @@ describe('vertical registry', () => {
     // the reminder cron (not the automations engine) drives clinic nudges
     expect(c.automationTemplateSlugs).toEqual([])
     expect(c.accountSettings.catalog_delivery_mode).toBe('digital')
+  })
+
+  it('dropshipping kit is well-formed', () => {
+    const d = getVertical('dropshipping')!
+    expect(isVerticalSlug('dropshipping')).toBe(true)
+    // Shopify finds this board and stage by name (src/lib/shopify/api.ts)
+    expect(d.pipeline?.name).toBe(ORDERS_PIPELINE_NAME)
+    expect(d.pipeline!.stages.map((s) => s.name)).toContain(ORDER_PLACED_STAGE_NAME)
+    expect(d.pipeline!.stages.filter((s) => s.is_won)).toHaveLength(1)
+    expect(d.pipeline!.stages.at(-1)?.is_won).toBe(true)
+    for (const e of d.googleSheetsEvents) expect(WEBHOOK_EVENTS).toContain(e)
+    expect(hiddenNavKeysFor('dropshipping')).toEqual(['calendar'])
+    expect(d.aiSystemPromptScaffold).toBeTruthy()
   })
 
   it('hotel kit is well-formed', () => {

@@ -355,30 +355,51 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
 
 // ------------------------------------------------------------------- deals
 
+/** The dropshipping kit's orders board (src/lib/verticals) and its order stage. */
+export const ORDERS_PIPELINE_NAME = 'Pedidos'
+export const ORDER_PLACED_STAGE_NAME = 'Pedido creado'
+
+const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
+
+/** Pure: the "Pedidos" pipeline when the account has one, else its oldest
+ *  (rows ordered oldest-first); within it the "Pedido creado" stage, else
+ *  the first (rows ordered by position). */
+export function pickOrderPipeline<T extends { name?: unknown }>(pipelines: T[]): T | null {
+  return pipelines.find((p) => sameName(p.name, ORDERS_PIPELINE_NAME)) ?? pipelines[0] ?? null
+}
+export function pickOrderStage<T extends { name?: unknown }>(stages: T[]): T | null {
+  return stages.find((s) => sameName(s.name, ORDER_PLACED_STAGE_NAME)) ?? stages[0] ?? null
+}
+
 /** Point the contact's open deal at this order (or open one in the
- *  account's oldest pipeline, first stage). Same resolution createQuote uses. */
+ *  "Pedidos" pipeline — else the oldest — at "Pedido creado" — else the
+ *  first stage). An open deal still sitting in the orders board's first
+ *  stage ("Consulta") moves to "Pedido creado". */
 export async function attachOrderToDeal(args: {
   db: SupabaseClient; accountId: string; userId: string; contactId: string
   order: { id: string; name: string; total: number }; currency: string
 }): Promise<string | null> {
   const { db, accountId, userId, contactId, order, currency } = args
-  const fields = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
+  const fields: Record<string, unknown> = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
+  const { data: pipelines } = await db
+    .from('pipelines').select('id, name').eq('account_id', accountId)
+    .order('created_at', { ascending: true })
+  const pipeline = pickOrderPipeline(pipelines ?? [])
+  const { data: stages } = pipeline
+    ? await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
+    : { data: [] as { id: string; name: string }[] }
+  const stage = pickOrderStage(stages ?? [])
+
   const { data: open } = await db
-    .from('deals').select('id')
+    .from('deals').select('id, stage_id')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'open')
     .order('updated_at', { ascending: false }).limit(1).maybeSingle()
   if (open) {
+    if (stage && stages?.[0] && open.stage_id === stages[0].id && stage.id !== stages[0].id) fields.stage_id = stage.id
     await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
     return open.id as string
   }
-  const { data: pipeline } = await db
-    .from('pipelines').select('id').eq('account_id', accountId)
-    .order('created_at', { ascending: true }).limit(1).maybeSingle()
-  if (!pipeline) return null
-  const { data: stage } = await db
-    .from('pipeline_stages').select('id').eq('pipeline_id', pipeline.id)
-    .order('position', { ascending: true }).limit(1).maybeSingle()
-  if (!stage) return null
+  if (!pipeline || !stage) return null
   const { data: deal, error } = await db.from('deals').insert({
     ...fields, account_id: accountId, user_id: userId, pipeline_id: pipeline.id, stage_id: stage.id,
     contact_id: contactId, currency, status: 'open',
