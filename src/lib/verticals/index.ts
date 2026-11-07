@@ -22,9 +22,9 @@
  * the `industry_vertical` CHECK constraint in a new migration.
  */
 
-export type VerticalSlug = 'generic' | 'hotel' | 'clinica'
+export type VerticalSlug = 'generic' | 'hotel' | 'clinica' | 'dropshipping'
 
-export const VERTICAL_SLUGS: readonly VerticalSlug[] = ['generic', 'hotel', 'clinica'] as const
+export const VERTICAL_SLUGS: readonly VerticalSlug[] = ['generic', 'hotel', 'clinica', 'dropshipping'] as const
 
 export interface VerticalPipelineStage {
   name: string
@@ -304,10 +304,88 @@ const HOTEL: VerticalDefinition = {
   aiSystemPromptScaffold: HOTEL_AI_PROMPT,
 }
 
+const DROPSHIPPING_ENVIOS_DOC = `ENVÍOS
+- Cobertura: [[toda Guatemala / departamentos]].
+- Tiempo de entrega: [[ciudad capital 24–48 h]] · [[departamentos 2–4 días hábiles]].
+- Costo de envío: [[gratis / Q__ por pedido]].
+- Empresa de envíos: [[Dropi / transportista]]. La guía se comparte cuando el pedido sale.
+
+FORMAS DE PAGO
+- Pago contra entrega (efectivo al recibir): [[sí / no]] · [[cobertura]].
+- Tarjeta: link de pago seguro por WhatsApp (el pedido se envía cuando el pago se confirma).
+- [[Transferencia / depósito]]: [[sí / no]].
+
+CAMBIOS Y GARANTÍA
+- Cambios: [[X días después de recibir, producto sin usar y en su empaque]].
+- Producto dañado o equivocado: [[cómo reportarlo — foto por este chat dentro de 24 h]].
+- Garantía: [[...]].
+
+PARA LA IA
+- Precios, existencias y fotos salen SOLO del catálogo sincronizado con la tienda.
+- Nunca prometas una fecha exacta de entrega ni un descuento que no esté aquí.`
+
+const DROPSHIPPING_AI_PROMPT = `Eres el asistente de ventas de una tienda en línea. Atiendes clientes por WhatsApp, Instagram y Facebook.
+
+Qué haces:
+- Respondes dudas de productos (precio, características, fotos, existencias) usando SOLO el catálogo de la tienda; si un dato no está, dices que lo confirmas con el equipo.
+- Recomiendas el producto que mejor se ajusta a lo que el cliente busca, con una razón breve.
+- Para tomar un pedido juntas, con naturalidad y sin repetir lo que ya te dijo: producto y cantidad, nombre completo, teléfono, dirección de entrega con referencias, departamento y municipio, y forma de pago (contra entrega o tarjeta).
+- Antes de crear el pedido mandas un resumen (productos, cantidades, total, dirección y forma de pago) y esperas que el cliente lo confirme.
+- Si el cliente pregunta por su pedido o su guía, consultas el estado real del pedido.
+- Envíos, pagos, cambios y garantía: respondes con la base de conocimiento.
+
+Qué NO haces:
+- No inventas precios, descuentos, existencias, fechas de entrega ni promociones.
+- No creas el pedido sin la confirmación explícita del cliente.
+- No pides datos de tarjeta por el chat: el pago con tarjeta va siempre por el link seguro.
+
+Si hay un reclamo (producto dañado, equivocado o que no llegó), pides una foto o el número de pedido y lo pasas a un asesor con calidez.
+
+Tono: cercano, breve, claro.`
+
+/**
+ * Tienda en línea / dropshipping (Shopify + Dropi). The selling itself is
+ * the Shopify integration (`src/lib/shopify/`, Configuración → Shopify):
+ * catalog sync, AI-taken orders, COD or Recurrente card link, order/guía
+ * status. It is gated by `shopify_config`, not by this flag — the kit only
+ * seeds the CRM around it:
+ *  - a "Pedidos" pipeline: `attachOrderToDeal` (src/lib/shopify/api.ts)
+ *    looks it up by name and opens order deals at "Pedido creado" — keep
+ *    those two names in sync with `ORDERS_PIPELINE_NAME` /
+ *    `ORDER_PLACED_STAGE_NAME`,
+ *  - delivery custom fields, an envíos/pagos/cambios KB scaffold and a
+ *    sales prompt (only when the prompt is empty),
+ *  - funnel + lost-reason + daily-summary Sheets events.
+ */
+const DROPSHIPPING: VerticalDefinition = {
+  slug: 'dropshipping',
+  label: 'Tienda / Dropshipping',
+  customFields: ['Dirección de entrega', 'Departamento', 'Municipio', 'Forma de pago', 'Número de pedido'],
+  productCategories: [],
+  pipeline: {
+    name: 'Pedidos',
+    stages: [
+      { name: 'Consulta', color: '#3b82f6' },
+      { name: 'Pedido creado', color: '#eab308' },
+      { name: 'Pago confirmado', color: '#f97316' },
+      { name: 'Enviado', color: '#8b5cf6' },
+      { name: 'Entregado', color: '#22c55e', is_won: true },
+    ],
+  },
+  flowTemplateSlugs: [],
+  automationTemplateSlugs: [],
+  knowledgeDocs: [{ title: 'Envíos, pagos y cambios', content: DROPSHIPPING_ENVIOS_DOC }],
+  googleSheetsEvents: ['deal.stage_changed', 'deal.won', 'deal.lost', 'daily.summary'],
+  accountSettings: { catalog_delivery_mode: 'photos' },
+  aiSystemPromptScaffold: DROPSHIPPING_AI_PROMPT,
+  hiddenNavKeys: ['calendar'],
+}
+
 const VERTICALS: Record<VerticalSlug, VerticalDefinition> = {
   generic: GENERIC,
   hotel: HOTEL,
   clinica: CLINICA,
+  dropshipping: DROPSHIPPING,
 }
 
 export function getVertical(slug: string): VerticalDefinition | null {

@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -247,5 +247,17 @@ describe('Recurrente paid → Shopify order', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(draft('COMPLETED', '458.00')).mockResolvedValueOnce(draft('OPEN', '500.00')))
     expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
     expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
+  })
+})
+
+describe('order deal placement', () => {
+  it('uses the dropshipping kit "Pedidos" board at "Pedido creado" even when an older pipeline exists', () => {
+    expect(pickOrderPipeline([{ id: 'p1', name: 'Ventas' }, { id: 'p2', name: 'Pedidos' }])?.id).toBe('p2')
+    expect(pickOrderStage([{ id: 's1', name: 'Consulta' }, { id: 's2', name: 'Pedido creado' }])?.id).toBe('s2')
+  })
+  it('falls back to the oldest pipeline and its first stage', () => {
+    expect(pickOrderPipeline([{ id: 'p1', name: 'Ventas' }, { id: 'p2', name: 'Otro' }])?.id).toBe('p1')
+    expect(pickOrderStage([{ id: 's1', name: 'Nuevo' }, { id: 's2', name: 'Ganado' }])?.id).toBe('s1')
+    expect(pickOrderPipeline([])).toBeNull()
   })
 })
