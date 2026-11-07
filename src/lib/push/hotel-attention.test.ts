@@ -34,7 +34,7 @@ describe('hotel attention alerts', () => {
     }
     const db = { from(table: string) {
       const result = { data: rows[table], error: null }
-      const chain = { select: () => chain, eq: () => chain, in: () => chain, maybeSingle: async () => result,
+      const chain = { select: () => chain, eq: () => chain, in: () => chain, gt: () => chain, maybeSingle: async () => result,
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
         upsert: async (value: Record<string, unknown>[]) => { writes.push(value); return { error: null } } }
       return chain
@@ -58,6 +58,27 @@ describe('hotel attention alerts', () => {
     expect(writes).toHaveLength(4)
     await notifyHotelStaffInbound(db, 'hotel', { ...event, text: 'Gracias' })
     expect(writes).toHaveLength(4)
+    vi.useRealTimers()
+  })
+  it('sends one alert per conversation burst, not one per guest message', async () => {
+    const writes: Record<string, unknown>[][] = []
+    const rows: Record<string, unknown> = {
+      accounts: { industry_vertical: 'hotel', feature_flags: ['ai_attention_hours_20_8'], timezone: 'America/Guatemala' },
+      conversations: { ai_autoreply_disabled: false, contacts: { name: 'Pineda' } },
+      ai_configs: { handoff_agent_id: 'ana', auto_reply_enabled: true },
+      profiles: [{ user_id: 'ana' }],
+      notifications: [{ user_id: 'ana' }], // alerted for this chat minutes ago
+    }
+    const db = { from(table: string) {
+      const result = { data: rows[table], error: null }
+      const chain = { select: () => chain, eq: () => chain, in: () => chain, gt: () => chain, maybeSingle: async () => result,
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+        upsert: async (value: Record<string, unknown>[]) => { writes.push(value); return { error: null } } }
+      return chain
+    } } as unknown as SupabaseClient
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-20T16:00:00Z'))
+    await notifyHotelStaffInbound(db, 'hotel', { conversation_id: 'chat', contact_id: 'pineda', whatsapp_message_id: 'm9', text: 'Y otra cosa' })
+    expect(writes).toHaveLength(0)
     vi.useRealTimers()
   })
 })
