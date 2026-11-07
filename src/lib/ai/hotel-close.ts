@@ -240,6 +240,20 @@ export function replyWithoutNotedClaim(text: string): string {
 }
 
 
+const TOTAL_CLAIM_RE = /\b(?:total|sumando|estimado)\b/i
+
+/**
+ * The reply minus every sentence that states a stay total, or `null` when
+ * it states none. For a stay the system could not price (VSR 2026-11-02:
+ * two different rooms, the model added Q1,500 + Q175 itself and quoted
+ * Q2,375 instead of Q2,475). Per-night published rates stay.
+ */
+export function withoutUnverifiedStayTotals(text: string): string | null {
+  const sentences = text.split(/(?<=[!?])\s+|\n+|(?<=\.)(?=\s|$)\s*/)
+  if (!sentences.some((s) => TOTAL_CLAIM_RE.test(s) && mentionedAmounts(s).length > 0)) return null
+  return sentences.filter((s) => !TOTAL_CLAIM_RE.test(s)).join(' ').trim()
+}
+
 /** Remove unapproved stay-price sentences; retain separately published add-on references. */
 export function withoutUnapprovedStayPrices(text: string): string {
   return text.split(/(?<=[!?])\s+|\n+|(?<=\.)(?=\s|$)\s*/)

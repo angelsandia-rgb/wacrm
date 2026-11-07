@@ -9,6 +9,7 @@ import {
   stripTrailingAttachmentOffer,
   hasConflictingAmount,
   withoutConflictingStayPrices,
+  withoutUnverifiedStayTotals,
   isPastDate,
   mentionedAmounts,
   stripTrailingPermissionQuestion,
@@ -188,4 +189,16 @@ it('detects a room total even when the same sentence mentions a child', () => {
   const text = 'Para la Junior Suite Familiar con 4 adultos y 1 niño de 5 años, la tarifa es Q1,800. El niño no paga. ?A nombre de quién?'
   expect(hasConflictingAmount(text, 1500, 750)).toBe(true)
   expect(withoutConflictingStayPrices(text, 1500, 750)).toBe('El niño no paga. ?A nombre de quién?')
+})
+
+describe('withoutUnverifiedStayTotals', () => {
+  it('drops the model-made total for a stay the system could not price (Abby, VSR 2026-11-02)', () => {
+    const reply = 'Gracias por la confirmación. Para 07/11/2026 al 09/11/2026, la Junior Suite Familiar para 2 adultos y 2 niñas de 11 y 2 años sería Q1,675 en total: Q1,500 la noche del sábado y Q175 la del domingo; la niña de 2 años no paga, aunque sí cuenta para la capacidad. Sumando la Suite Clásica (Individual o Pareja) para 1 persona, el estimado de las 2 habitaciones sería Q2,375. Estimado sujeto a disponibilidad.'
+    const kept = withoutUnverifiedStayTotals(reply)
+    expect(kept).toBe('Gracias por la confirmación.')
+    expect(mentionedAmounts(kept ?? '')).toEqual([])
+  })
+  it('keeps published per-night rates and leaves replies without a total untouched', () => {
+    expect(withoutUnverifiedStayTotals('La Suite Clásica cuesta Q400 la noche del sábado y Q300 la del domingo. ¿Para cuántas personas?')).toBeNull()
+  })
 })

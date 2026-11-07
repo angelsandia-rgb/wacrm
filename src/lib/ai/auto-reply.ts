@@ -92,7 +92,7 @@ import {
   replyNamesProduct,
   stripTrailingPhotoOffer,
 } from './hotel-media-intent'
-import { mentionedAmounts, withoutConflictingStayPrices, claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
+import { mentionedAmounts, withoutConflictingStayPrices, claimsRequestNoted, closeLine, replyWithoutCloseClaim, replyWithoutNotedClaim,hasConflictingAmount, withoutUnverifiedStayTotals, isPastDate, isStillAsking, nameFromAnswer, stripTrailingAttachmentOffer, stripTrailingPermissionQuestion } from './hotel-close'
 import { estimateDeposit, resolveStayProductId } from '@/lib/reservations/price'
 import { formatDateEs } from '@/lib/products/rates'
 import { teammateRepliedRecently,
@@ -2019,6 +2019,15 @@ For airport transport, record the guest's request in nota on the relevant existi
           const verifiedText = isEnglishText(outboundText) ? estimate.textEn : estimate.text
           outboundText = [kept, verifiedText].filter(Boolean).join('\n\n')
           verifiedEstimateInReply = { reservationRequestId: estimate.reservationRequestId, total: estimate.total }
+        }
+        // No system total to check against: never let the model's own sum reach the guest.
+        if (estimate.status !== 'priced' && estimate.status !== 'approval_pending') {
+          const kept = withoutUnverifiedStayTotals(outboundText)
+          if (kept !== null) {
+            const english = isEnglishText(outboundText)
+            const line = english ? 'Reception will confirm the exact total with the published rates.' : 'El total exacto se lo confirma recepción con las tarifas publicadas.'
+            outboundText = withAvailabilityConfirmationTiming([kept, line].filter(Boolean).join(' '), isAfterHours(new Date(), businessTimeZone), english)
+          }
         }
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
