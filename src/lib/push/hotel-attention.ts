@@ -42,6 +42,11 @@ export async function loadAttentionContext(db: SupabaseClient, accountId: string
   } catch { return {} }
 }
 
+/** A teammate who replied this recently is in the chat; don't ping them. */
+const LIVE_CHAT_MS = 10 * 60_000
+/** Messages of one burst share the alert already sent for the conversation. */
+const BURST_MS = 15 * 60_000
+
 /** Outside AI hours, every customer inbound needs the hotel's response.
  * Stable IDs deduplicate webhook retries without silencing later requests. */
 export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: string, data: unknown): Promise<void> {
@@ -58,10 +63,18 @@ export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: str
     const { data: cfg } = await db.from('ai_configs').select('handoff_agent_id, auto_reply_enabled').eq('account_id', accountId).maybeSingle()
     if (cfg?.auto_reply_enabled !== false && !conv.ai_autoreply_disabled && withinAiAttentionHours(autoReplyScheduleForAccount(account))
       && !await teammateRepliedRecently(db, accountId, event.conversation_id, conv.ai_context_reset_at ?? null)) return
+    // A teammate chatting live already sees each message (VSR 2026-11: one
+    // push per guest message, ~56 a day to reception).
+    if (await teammateRepliedRecently(db, accountId, event.conversation_id, conv.ai_context_reset_at ?? null, new Date(), LIVE_CHAT_MS)) return
     if (await contactMutesAi(db, event.contact_id)) return
     const { data: profiles } = await db.from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin', 'agent'])
     const selected = profiles?.filter(p => p.user_id === cfg?.handoff_agent_id)
-    const targets = selected?.length ? selected : profiles ?? []
+    // One alert per conversation burst: skip whoever was alerted for it moments ago.
+    const { data: recent } = await db.from('notifications').select('user_id')
+      .eq('account_id', accountId).eq('conversation_id', event.conversation_id).eq('type', 'ai_handoff')
+      .gt('created_at', new Date(Date.now() - BURST_MS).toISOString())
+    const alerted = new Set(((recent ?? []) as { user_id: string }[]).map(r => r.user_id))
+    const targets = (selected?.length ? selected : profiles ?? []).filter(p => !alerted.has(p.user_id))
     if (!targets.length) return
     const contact = conv.contacts as unknown as { name?: string; phone?: string } | null
     const { current } = await import('@/lib/ai/known-context').then(m => m.loadActiveReservationsSummary(db, accountId, event.conversation_id as string, account.default_currency || 'GTQ'))
