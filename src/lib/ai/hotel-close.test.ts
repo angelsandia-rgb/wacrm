@@ -192,7 +192,7 @@ it('detects a room total even when the same sentence mentions a child', () => {
 })
 
 describe('withoutUnverifiedStayTotals', () => {
-  it('drops the model-made total for a stay the system could not price (Abby, VSR 2026-11-02)', () => {
+  it('drops the model-made total for a stay the system could not price (VSR 2026-11-02)', () => {
     const reply = 'Gracias por la confirmación. Para 07/11/2026 al 09/11/2026, la Junior Suite Familiar para 2 adultos y 2 niñas de 11 y 2 años sería Q1,675 en total: Q1,500 la noche del sábado y Q175 la del domingo; la niña de 2 años no paga, aunque sí cuenta para la capacidad. Sumando la Suite Clásica (Individual o Pareja) para 1 persona, el estimado de las 2 habitaciones sería Q2,375. Estimado sujeto a disponibilidad.'
     const kept = withoutUnverifiedStayTotals(reply)
     expect(kept).toBe('Gracias por la confirmación.')
