@@ -7,6 +7,14 @@ describe('event quotation triage', () => {
   it('does not restart intake for an event whose quote staff already manage', () => {
     expect(hotelEventTriage([{ role: 'assistant', senderType: 'agent', content: 'Por favor para modificar su cotizacion' }, user('Gracias el día del evento le puedo realizar el pago'), { role: 'assistant', senderType: 'agent', content: 'Si asi es' }, user('Muy amable')])).toBe('existing')
   })
+  it('treats a quote staff take up after the guest described the event as existing (VSR 2026-11-06)', () => {
+    expect(hotelEventTriage([
+      user('Hospedaje también para el 17'),
+      user('Y favor incluir en la cotización el alquiler de salon, montaje y equipo audiovisual'),
+      { role: 'assistant', senderType: 'agent', content: 'Le comento que hasta el día de mañana se estará enviado su cotización durante el día.' },
+      user('Muchas gracias quedo atento'),
+    ])).toBe('existing')
+  })
   it('allows an explicit new event quote after an earlier staff quote', () => {
     expect(hotelEventTriage([{ role: 'assistant', senderType: 'agent', content: 'Le envío su cotización' }, user('Quiero una cotización nueva para otro evento')])).toBe('new')
   })

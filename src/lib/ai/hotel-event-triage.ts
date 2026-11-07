@@ -14,7 +14,9 @@ export function hotelEventTriage(messages: ChatMessage[]): EventTriage {
   for (const message of messages) {
     const text = normalize(message.content)
     if (message.role === 'assistant') {
-      if (message.senderType === 'agent' && /\b(?:cotiz\w*|presupuesto|propuesta)\b/.test(text)) staffQuote = true
+      // Staff taking up the quote mid-intake also makes it theirs (VSR 2026-11-06:
+      // "se estará enviando su cotización" → guest thanks → bot re-asked triage).
+      if (message.senderType === 'agent' && /\b(?:cotiz\w*|presupuesto|propuesta)\b/.test(text)) { staffQuote = true; if (state === 'ask') state = 'existing' }
       if (message.senderType !== 'agent' && message.content === EVENT_TRIAGE_QUESTION) { state = 'ask'; asked = true }
       continue
     }
