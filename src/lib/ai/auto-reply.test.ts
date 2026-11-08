@@ -606,7 +606,7 @@ vi.mock('./admin-client', () => ({
   }),
 }))
 
-import { dispatchInboundToAiReply, parseChildAges } from './auto-reply'
+import { CATALOG_ONLY_REPLY_TEXT, dispatchInboundToAiReply, parseChildAges } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
 import { CLOSE_AVAILABILITY_AND_TOTAL_LINE, CLOSE_AVAILABILITY_LINE } from './hotel-stay-estimate'
 
@@ -2255,6 +2255,22 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+  })
+
+  it('"Sí" to the catalog offer with a marker-only reply sends the catalog, not the fallback (Casa Ceiba 2026-11-07)', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'Claro 😊 ¿Quiere que le comparta el catálogo completo por aquí?' },
+      { role: 'user', content: 'Si' },
+    ])
+    h.generateReply.mockResolvedValue({
+      text: '', handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: CATALOG_ONLY_REPLY_TEXT }))
+    expect(h.engineSendText).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
+    )
   })
 
   it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
