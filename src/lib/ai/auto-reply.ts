@@ -176,7 +176,8 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
  *  model to react to with `SEND_CATALOG_SENTINEL`. Used only to detect
  *  when the model failed to use a marker it was taught, never to decide
  *  whether to teach it in the first place. */
-const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]logo\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
+const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]lo[gf]o\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
+export const CATALOG_ONLY_REPLY_TEXT = '¡Claro! 😊 Aquí le comparto nuestro catálogo.'
 
 /** The bot's previous reply OFFERED the catalog as a question ("¿Le
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
@@ -1604,8 +1605,11 @@ For airport transport, record the guest's request in nota on the relevant existi
     // test 2026-09-24: "si" to "¿le comparto una foto?", twice). The photo
     // is the answer — send it with a short line, not the "dificultad
     // temporal" fallback and a handoff.
-    if (!outboundText.trim() && !handoff && isHotel && resolvedSendPhotoProductName) {
-      outboundText = photoOnlyReplyText(resolvedSendPhotoProductName)
+    // Same for the catalog, any vertical (Casa Ceiba 2026-11-07: "Sí" to the
+    // catalog offer got the fallback and the catalog was never sent).
+    if (!outboundText.trim() && !handoff) {
+      if (resolvedSendPhotoProductName) outboundText = photoOnlyReplyText(resolvedSendPhotoProductName)
+      else if (sendCatalog) outboundText = CATALOG_ONLY_REPLY_TEXT
     }
 
     if (!outboundText && !handoff && !explicitHumanAsk) {

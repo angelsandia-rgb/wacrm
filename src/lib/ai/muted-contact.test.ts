@@ -18,3 +18,15 @@ describe('VSR review 2026-10-09', () => {
     expect(customerRequestedCatalog([{ role: 'user', content: '¿Me envía su catálogo?' }])).toBe(true)
   })
 })
+
+describe('catalog requests (Casa Ceiba 2026-11-07)', () => {
+  it('a typo like "catalofo" still asks for the catalog', () => {
+    expect(customerRequestedCatalog([{ role: 'user', content: 'Si porta, el catalofo' }])).toBe(true)
+  })
+  it('"Sí" to the bot offering the catalog counts as a request', () => {
+    expect(customerRequestedCatalog([
+      { role: 'assistant', content: 'Claro 😊 ¿Quiere que le comparta el catálogo completo por aquí?' },
+      { role: 'user', content: 'Si' },
+    ])).toBe(true)
+  })
+})
