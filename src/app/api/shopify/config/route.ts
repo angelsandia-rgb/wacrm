@@ -47,7 +47,7 @@ export async function PUT(request: Request) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null
     if (!body) return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
 
-    const shop = String(body.shop_domain ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+    let shop = String(body.shop_domain ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
     if (!SHOP_DOMAIN_RE.test(shop)) {
       return NextResponse.json({ error: 'El dominio debe ser tu-tienda.myshopify.com' }, { status: 400 })
     }
@@ -76,12 +76,17 @@ export async function PUT(request: Request) {
     if (token || clientSecret) {
       try {
         if (!token) grant = await fetchClientCredentialsToken(shop, clientId, clientSecret)
-        const data = await shopifyGraphql<{ shop: { name: string } }>({ shop, token: token || grant!.token }, '{ shop { name } }')
+        const data = await shopifyGraphql<{ shop: { name: string; myshopifyDomain: string } }>({ shop, token: token || grant!.token }, '{ shop { name myshopifyDomain } }')
         shopName = data.shop.name
+        // Webhooks carry the permanent myshopify domain, not a renamed alias the user typed.
+        shop = data.shop.myshopifyDomain || shop
       } catch (err) {
         const message = err instanceof ShopifyError ? err.message : 'No se pudo conectar con Shopify'
         return NextResponse.json({ error: message }, { status: 400 })
       }
+    } else if (existing) {
+      // No new credentials: the stored ones belong to the stored (canonical) shop.
+      shop = existing.shop_domain as string
     }
 
     const row: Record<string, unknown> = {
