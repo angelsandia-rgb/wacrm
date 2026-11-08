@@ -5415,3 +5415,24 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   **aplicada a producción**.
 - **Datos VSR:** el número del propio hotel quedó con la etiqueta *Interno*
   para que no reciba notas ni avisos de "Pendiente de recepción".
+
+### 2026-11-07 (noche) — Claude Code (alta de Casa Ceiba + Shopify con dominio permanente)
+
+- **Alta de la cuenta Casa Ceiba** (tienda Shopify + Dropi): invitación de
+  plataforma aceptada y vertical **"Tienda / Dropshipping"** aplicada
+  (pipeline "Pedidos", campos de entrega, documento "Envíos, pagos y
+  cambios"). El prompt de ventas quedó pendiente porque la cuenta aún no
+  tiene IA configurada; se carga al volver a aplicar la vertical.
+- **Shopify + Recurrente conectados:** app del Dev Dashboard instalada,
+  webhook "Creación de pedido" → `/api/shopify/webhook` y endpoint de
+  Recurrente (`intent.succeeded`) → `/api/shopify/recurrente-webhook`.
+  Ambos verificados con eventos de prueba (200).
+- **#341 Dominio myshopify permanente.** Shopify envía los webhooks con el
+  dominio permanente en `x-shopify-shop-domain`; si la tienda se conectó con
+  un alias renombrado, el webhook no la encontraba y respondía 401.
+  `PUT /api/shopify/config` ahora guarda `shop.myshopifyDomain` al verificar
+  credenciales y conserva el dominio guardado cuando no llegan credenciales
+  nuevas. Test en `src/app/api/shopify/config/route.test.ts`.
+- **Pendiente del dueño (Casa Ceiba):** conectar WhatsApp, configurar la IA,
+  llenar "Envíos, pagos y cambios" y decidir si "Crear pedidos reales" sigue
+  encendido.
