@@ -5436,3 +5436,9 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - **Pendiente del dueño (Casa Ceiba):** conectar WhatsApp, configurar la IA,
   llenar "Envíos, pagos y cambios" y decidir si "Crear pedidos reales" sigue
   encendido.
+- **#343 Pedido pagado con Recurrente avanza a "Pago confirmado".** Cuando
+  `/api/shopify/recurrente-webhook` completa como pagado el borrador de un
+  pedido con tarjeta del chat, el negocio del CRM pasa de "Pedido creado" a
+  "Pago confirmado". `pickPaidStage` (`src/lib/shopify/api.ts`) solo mueve si
+  el pipeline tiene esa etapa y está adelante de la actual: nunca regresa un
+  negocio ya "Enviado" o "Entregado".
