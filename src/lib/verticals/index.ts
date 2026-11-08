@@ -376,7 +376,7 @@ const DROPSHIPPING: VerticalDefinition = {
   automationTemplateSlugs: [],
   knowledgeDocs: [{ title: 'Envíos, pagos y cambios', content: DROPSHIPPING_ENVIOS_DOC }],
   googleSheetsEvents: ['deal.stage_changed', 'deal.won', 'deal.lost', 'daily.summary'],
-  accountSettings: { catalog_delivery_mode: 'photos' },
+  accountSettings: { catalog_delivery_mode: 'digital' },
   aiSystemPromptScaffold: DROPSHIPPING_AI_PROMPT,
   hiddenNavKeys: ['calendar'],
 }
