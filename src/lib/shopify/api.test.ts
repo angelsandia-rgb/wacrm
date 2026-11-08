@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, pickPaidStage, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -259,5 +259,24 @@ describe('order deal placement', () => {
     expect(pickOrderPipeline([{ id: 'p1', name: 'Ventas' }, { id: 'p2', name: 'Otro' }])?.id).toBe('p1')
     expect(pickOrderStage([{ id: 's1', name: 'Nuevo' }, { id: 's2', name: 'Ganado' }])?.id).toBe('s1')
     expect(pickOrderPipeline([])).toBeNull()
+  })
+})
+
+describe('paid card order stage', () => {
+  const stages = [
+    { id: 's1', name: 'Consulta', position: 0 },
+    { id: 's2', name: 'Pedido creado', position: 1 },
+    { id: 's3', name: 'Pago confirmado', position: 2 },
+    { id: 's4', name: 'Enviado', position: 3 },
+  ]
+  it('moves a placed order to "Pago confirmado"', () => {
+    expect(pickPaidStage(stages, 's2')?.id).toBe('s3')
+  })
+  it('never moves a deal backwards or onto its own stage', () => {
+    expect(pickPaidStage(stages, 's4')).toBeNull()
+    expect(pickPaidStage(stages, 's3')).toBeNull()
+  })
+  it('leaves pipelines without that stage alone', () => {
+    expect(pickPaidStage(stages.filter((s) => s.id !== 's3'), 's2')).toBeNull()
   })
 })

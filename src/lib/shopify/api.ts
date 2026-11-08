@@ -358,6 +358,7 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
 /** The dropshipping kit's orders board (src/lib/verticals) and its order stage. */
 export const ORDERS_PIPELINE_NAME = 'Pedidos'
 export const ORDER_PLACED_STAGE_NAME = 'Pedido creado'
+export const PAYMENT_CONFIRMED_STAGE_NAME = 'Pago confirmado'
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
 
@@ -369,6 +370,16 @@ export function pickOrderPipeline<T extends { name?: unknown }>(pipelines: T[]):
 }
 export function pickOrderStage<T extends { name?: unknown }>(stages: T[]): T | null {
   return stages.find((s) => sameName(s.name, ORDER_PLACED_STAGE_NAME)) ?? stages[0] ?? null
+}
+/** "Pago confirmado" when the pipeline has it and it is ahead of the deal's
+ *  current stage — never moves a deal backwards (e.g. already "Enviado"). */
+export function pickPaidStage<T extends { id: string; name?: unknown; position?: unknown }>(
+  stages: T[], currentStageId: string | null,
+): T | null {
+  const paid = stages.find((s) => sameName(s.name, PAYMENT_CONFIRMED_STAGE_NAME))
+  if (!paid || paid.id === currentStageId) return null
+  const current = stages.find((s) => s.id === currentStageId)
+  return current && Number(current.position) >= Number(paid.position) ? null : paid
 }
 
 /** Point the contact's open deal at this order (or open one in the

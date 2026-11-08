@@ -4,7 +4,7 @@ import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { formatCurrency } from '@/lib/currency'
 import {
-  completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, verifySvixSignature,
+  completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, pickPaidStage, verifySvixSignature,
 } from '@/lib/shopify/api'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -63,7 +63,13 @@ export async function POST(request: Request) {
     const { data: deal } = await db
       .from('deals').update({ shopify_order_id: order.id })
       .eq('account_id', accountId).eq('shopify_order_id', draftId)
-      .select('contact_id').maybeSingle()
+      .select('id, contact_id, pipeline_id, stage_id').maybeSingle()
+    if (deal?.pipeline_id) {
+      const { data: stages } = await db
+        .from('pipeline_stages').select('id, name, position').eq('pipeline_id', deal.pipeline_id)
+      const paid = pickPaidStage(stages ?? [], deal.stage_id ?? null)
+      if (paid) await db.from('deals').update({ stage_id: paid.id }).eq('id', deal.id).eq('account_id', accountId)
+    }
     const { data: contact } = deal?.contact_id
       ? await db.from('contacts').select('phone, name').eq('id', deal.contact_id).eq('account_id', accountId).maybeSingle()
       : { data: null }
