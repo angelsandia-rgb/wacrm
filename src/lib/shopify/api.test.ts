@@ -62,6 +62,10 @@ describe('helpers', () => {
     expect(normalizeGtPhone('+502 5555-1234')).toBe('+50255551234')
     expect(departamentoCode('peten')).toBe('PET')
     expect(departamentoCode('Narnia')).toBeUndefined()
+    // Casa Ceiba 2026-11-07: the model wrote the municipio as departamento
+    expect(departamentoCode('Villa Canales')).toBe('GUA')
+    expect(departamentoCode('Mixco')).toBe('GUA')
+    expect(departamentoCode('Quetzaltenango')).toBe('QUE')
   })
   it('verifies the webhook HMAC', () => {
     const body = '{"id":1}'
