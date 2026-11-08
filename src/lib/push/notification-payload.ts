@@ -54,7 +54,7 @@ export function notificationDisplayText(row: NotificationRow, contactName?: stri
         { customerText: body.match(/^Contexto del cliente: (.+)$/m)?.[1], staffText: body.match(/^Última indicación del hotel: (.+)$/m)?.[1] })
     }
     return {
-      title: compact(contactName ? `Requiere atención: ${contactName}` : row.title.startsWith('Requiere atención') ? row.title : 'Requiere atención del hotel', 80),
+      title: compact(contactName ? `Requiere atención: ${contactName}` : row.title.startsWith('Requiere atención') ? row.title : 'Requiere atención', 80),
       body: detail.split('\n\nContexto completo:')[0]
         .replace(/^Cliente necesita atención por: /, 'Motivo: ')
         .replace(/^Acción requerida: (.+)$/m, (_match, action: string) => `Acción requerida: ${formalAttentionAction(action)}`),

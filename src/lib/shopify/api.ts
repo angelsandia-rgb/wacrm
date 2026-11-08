@@ -270,8 +270,17 @@ const GT_DEPARTAMENTOS: Record<string, string> = {
   suchitepequez: 'SUC', totonicapan: 'TOT', zacapa: 'ZAC',
 }
 
+// The model often writes the municipio where the departamento goes ("Villa
+// Canales", Casa Ceiba 2026-11-07) — these all belong to Guatemala (GUA).
+const GUATEMALA_MUNICIPIOS = new Set([
+  'ciudad de guatemala', 'guatemala ciudad', 'capital', 'santa catarina pinula', 'san jose pinula', 'san jose del golfo',
+  'palencia', 'chinautla', 'san pedro ayampuc', 'mixco', 'san pedro sacatepequez', 'san juan sacatepequez',
+  'san raymundo', 'chuarrancho', 'fraijanes', 'amatitlan', 'villa nueva', 'villa canales', 'san miguel petapa', 'petapa',
+])
+
 export function departamentoCode(name: string): string | undefined {
-  return GT_DEPARTAMENTOS[name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()]
+  const key = name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
+  return GT_DEPARTAMENTOS[key] ?? (GUATEMALA_MUNICIPIOS.has(key) ? 'GUA' : undefined)
 }
 
 /** Pure: the `orderCreate` input for a confirmed chat order. */

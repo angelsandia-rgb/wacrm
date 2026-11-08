@@ -43,3 +43,21 @@ describe('assignment notification context', () => {
     expect(await enrichAssignment(db, row)).toBe(row)
   })
 })
+
+describe('assignment notification outside the hotel vertical (Casa Ceiba 2026-11-07)', () => {
+  it('shows the AI handoff reason, never hotel wording or hours', async () => {
+    const db = { from(table: string) {
+      const data = table === 'conversations'
+        ? { id: 'chat', ai_handoff_summary: '🤖 La IA confirmó un pedido pero no se pudo crear en Shopify. Créalo manualmente.', contacts: { name: 'Cliente' }, accounts: { industry_vertical: 'dropshipping' } }
+        : [{ sender_type: 'customer', content_type: 'text', content_text: 'Si', created_at: '2026-11-08T05:17:00Z' }]
+      const result = { data, error: null }
+      const chain = { select: () => chain, eq: () => chain, neq: () => chain, lte: () => chain, order: () => chain, limit: () => chain,
+        maybeSingle: async () => result, then: (resolve: (value: unknown) => unknown) => Promise.resolve(result).then(resolve) }
+      return chain
+    } } as unknown as SupabaseClient
+    const row = await enrichAssignment(db, { id: 'n2', account_id: 'shop', type: 'conversation_assigned', title: 'New conversation assigned', body: 'Someone assigned you a conversation with Cliente', conversation_id: 'chat', created_at: '2026-11-08T05:18:00Z' })
+    expect(row.body).toContain('no se pudo crear en Shopify')
+    expect(row.body).not.toMatch(/hotel/i)
+    expect(notificationPushPayload(row).body).toContain('Abra el chat')
+  })
+})
