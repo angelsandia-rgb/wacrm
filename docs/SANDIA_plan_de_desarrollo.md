@@ -5453,3 +5453,17 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   "Pendiente de recepción" de inicio de noche cuando el cliente ya cerró el
   chat (rechazo + "muy amable por la información"); una pregunta antes del
   gracias sigue pendiente.
+- **Casa Ceiba en marcha:** productos de Shopify sincronizados (19 activos),
+  moneda de la cuenta corregida a GTQ (estaba en USD; los links de Recurrente
+  habrían salido en dólares), WhatsApp conectado por Zernio y verificado,
+  40 números personales de la sesión de WhatsApp etiquetados "Sin IA",
+  asistente "Cesi" configurado (prompt, cobertura capital y área
+  metropolitana, envío gratis, contra entrega o tarjeta, cambios 7 días) y
+  "Crear pedidos reales" apagado mientras se prueba.
+- **#347 Respuesta solo con marcador de catálogo.** En la primera prueba con
+  Cesi, el cliente dijo "Sí" al ofrecimiento del catálogo y el modelo
+  respondió solo con el marcador `send_catalog`, sin texto; Sandía lo trató
+  como respuesta vacía, mandó el mensaje de "dificultad temporal" y nunca
+  envió el catálogo. Ahora (`src/lib/ai/auto-reply.ts`) se envía el catálogo
+  con una línea breve; la excepción de foto solo-marcador aplica a todas las
+  verticales y "catalofo" cuenta como pedido de catálogo.
