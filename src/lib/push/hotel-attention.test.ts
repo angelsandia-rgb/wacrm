@@ -81,4 +81,27 @@ describe('hotel attention alerts', () => {
     expect(writes).toHaveLength(0)
     vi.useRealTimers()
   })
+
+  it('a guest on the way who cannot get in is alerted even inside a burst (VSR 2026-11-07)', async () => {
+    const writes: Record<string, unknown>[][] = []
+    const rows: Record<string, unknown> = {
+      accounts: { industry_vertical: 'hotel', feature_flags: ['ai_attention_hours_20_8'], timezone: 'America/Guatemala' },
+      conversations: { ai_autoreply_disabled: false, contacts: { name: 'Huésped' } },
+      ai_configs: { handoff_agent_id: 'ana', auto_reply_enabled: true },
+      profiles: [{ user_id: 'ana' }],
+      notifications: [{ user_id: 'ana' }],
+    }
+    const db = { from(table: string) {
+      const result = { data: rows[table], error: null }
+      const chain = { select: () => chain, eq: () => chain, in: () => chain, gt: () => chain, neq: () => chain, order: () => chain, limit: () => chain, maybeSingle: async () => result,
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+        upsert: async (value: Record<string, unknown>[]) => { writes.push(value); return { error: null } } }
+      return chain
+    } } as unknown as SupabaseClient
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-07T23:27:00Z'))
+    await notifyHotelStaffInbound(db, 'hotel', { conversation_id: 'chat', contact_id: 'guest', whatsapp_message_id: 'm1', text: 'Esta cerrada la entrada que usualmente tomamos' })
+    expect(writes).toHaveLength(1)
+    expect(String(writes[0][0].title)).toContain('Urgente')
+    vi.useRealTimers()
+  })
 })
