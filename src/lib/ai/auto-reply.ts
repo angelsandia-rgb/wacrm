@@ -179,6 +179,11 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
 const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]lo[gf]o\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
 export const CATALOG_ONLY_REPLY_TEXT = '¡Claro! 😊 Aquí le comparto nuestro catálogo.'
 
+/** "Lo estoy registrando" / "registrando su pedido" / "su pedido quedó registrado". */
+export function claimsOrderRegistration(text: string): boolean {
+  return /\b(?:lo|le)\s+estoy\s+registrando\b|\bregistrando\s+(?:su|el)\s+pedido\b|\bpedido\s+(?:queda|qued[oó])\s+registrado\b/i.test(text)
+}
+
 /** The bot's previous reply OFFERED the catalog as a question ("¿Le
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
  *  answers next is a reply to that offer. A message that merely mentions
@@ -2444,6 +2449,15 @@ For airport transport, record the guest's request in nota on the relevant existi
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_shopify_order failed:', err)
       }
+    } else if (shopifyOrders && claimsOrderRegistration(outboundText)) {
+      // Told the customer the order is being registered but sent no order
+      // marker (Casa Ceiba 2026-11-07): nothing was created and nobody knew.
+      console.warn(`[ai auto-reply] conversation ${conversationId}: order claimed without the create_shopify_order marker`)
+      await handOffToHuman({
+        db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+        alreadyAssigned: Boolean(conv.assigned_agent_id), transient: true,
+        summary: '🤖 La IA le dijo al cliente que estaba registrando su pedido, pero no lo creó en Shopify. Revise el resumen confirmado en el chat y cree el pedido (o envíe el link de pago) manualmente.',
+      })
     }
 
     // Defense in depth, same reasoning as the checks above: the marker

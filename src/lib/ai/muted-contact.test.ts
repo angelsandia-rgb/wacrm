@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { isAiMuteTag } from './muted-contact'
 import { isSpecialRateTalk } from './hotel-media-intent'
-import { customerRequestedCatalog } from './auto-reply'
+import { claimsOrderRegistration, customerRequestedCatalog } from './auto-reply'
 
 describe('VSR review 2026-10-09', () => {
   it('mute tags, accent/case-insensitive', () => {
@@ -43,5 +43,17 @@ describe('catalog ask survives a failed turn (Casa Ceiba 2026-11-07)', () => {
       { role: 'assistant', content: 'Aquí está: https://chatsandia.com/c/casa-ceiba' },
       { role: 'user', content: '¿Cuánto cuesta la almohada?' },
     ])).toBe(false)
+  })
+})
+
+describe('order claimed without the order marker (Casa Ceiba 2026-11-07)', () => {
+  it('detects a "registering your order" claim', () => {
+    expect(claimsOrderRegistration('Perfecto, lo estoy registrando 😊')).toBe(true)
+    expect(claimsOrderRegistration('Estoy registrando su pedido.')).toBe(true)
+    expect(claimsOrderRegistration('Su pedido quedó registrado.')).toBe(true)
+  })
+  it('ignores the summary and normal replies', () => {
+    expect(claimsOrderRegistration('¿Me confirma para registrarlo?')).toBe(false)
+    expect(claimsOrderRegistration('El masajeador cuesta GTQ 199.')).toBe(false)
   })
 })
