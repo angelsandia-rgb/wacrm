@@ -195,7 +195,19 @@ const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?/i
  */
 export function customerRequestedCatalog(messages: ChatMessage[]): boolean {
   if (trailingCustomerTurns(messages).some((t) => CUSTOMER_ASKS_FOR_CATALOG_RE.test(t))) return true
-  return BOT_OFFERED_CATALOG_RE.test(previousAssistantMessage(messages))
+  if (BOT_OFFERED_CATALOG_RE.test(previousAssistantMessage(messages))) return true
+  // A pending ask survives a failed turn in between (Casa Ceiba 2026-11-07:
+  // ask → offer → "Sí" → fallback → "¿Ahora sí?" suppressed the catalog the
+  // model was sending). Short window; a catalog already sent ends it.
+  const recent = messages.slice(-6)
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const m = recent[i]
+    if (m.role === 'assistant' && hasCatalogUrl(m.content)) return false
+    if (m.role !== 'user') continue
+    if (CUSTOMER_ASKS_FOR_CATALOG_RE.test(m.content)) return true
+    if (i > 0 && recent[i - 1].role === 'assistant' && BOT_OFFERED_CATALOG_RE.test(recent[i - 1].content)) return true
+  }
+  return false
 }
 
 /** Same idea for the restaurant's food/drink menu. Trailing lookahead

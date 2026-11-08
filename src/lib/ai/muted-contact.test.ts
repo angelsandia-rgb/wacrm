@@ -30,3 +30,18 @@ describe('catalog requests (Casa Ceiba 2026-11-07)', () => {
     ])).toBe(true)
   })
 })
+
+describe('catalog ask survives a failed turn (Casa Ceiba 2026-11-07)', () => {
+  const offer = { role: 'assistant' as const, content: 'Claro 😊 ¿Quiere que le comparta el catálogo completo por aquí?' }
+  const fallback = { role: 'assistant' as const, content: 'Estoy teniendo una dificultad temporal para procesar su mensaje.' }
+  it('"¿Ahora sí?" after the fallback still counts as the pending catalog ask', () => {
+    expect(customerRequestedCatalog([offer, { role: 'user', content: 'Si' }, fallback, { role: 'user', content: 'Ahora si?' }])).toBe(true)
+  })
+  it('a catalog already sent ends the pending ask', () => {
+    expect(customerRequestedCatalog([
+      { role: 'user', content: '¿Me manda el catálogo?' },
+      { role: 'assistant', content: 'Aquí está: https://chatsandia.com/c/casa-ceiba' },
+      { role: 'user', content: '¿Cuánto cuesta la almohada?' },
+    ])).toBe(false)
+  })
+})

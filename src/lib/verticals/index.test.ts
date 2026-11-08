@@ -81,6 +81,8 @@ describe('vertical registry', () => {
     for (const e of d.googleSheetsEvents) expect(WEBHOOK_EVENTS).toContain(e)
     expect(hiddenNavKeysFor('dropshipping')).toEqual(['calendar'])
     expect(d.aiSystemPromptScaffold).toBeTruthy()
+    // Products come from Shopify: the catalog is the product page, not uploaded photos.
+    expect(d.accountSettings.catalog_delivery_mode).toBe('digital')
   })
 
   it('hotel kit is well-formed', () => {
