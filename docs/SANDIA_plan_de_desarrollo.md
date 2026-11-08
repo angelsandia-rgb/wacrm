@@ -5442,3 +5442,14 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   "Pago confirmado". `pickPaidStage` (`src/lib/shopify/api.ts`) solo mueve si
   el pipeline tiene esa etapa y está adelante de la actual: nunca regresa un
   negocio ya "Enviado" o "Entregado".
+- **#345 Hotel: aviso urgente para huésped en camino y sin nota tras una
+  despedida.** Revisión de VSR del día: un huésped con reserva confirmada
+  avisó por la tarde que la entrada estaba cerrada; el aviso salió con el
+  motivo genérico, nadie lo abrió y el huésped buscó otro hotel.
+  `isUrgentArrival` (`src/lib/push/attention-details.ts`) detecta al huésped
+  en camino que no encuentra cómo entrar: el aviso se titula "🚨 Urgente,
+  huésped en camino" y no se agrupa con el aviso de los últimos 15 min.
+  Además, `isCustomerClosing` (`src/lib/ai/reception-alert.ts`) evita la nota
+  "Pendiente de recepción" de inicio de noche cuando el cliente ya cerró el
+  chat (rechazo + "muy amable por la información"); una pregunta antes del
+  gracias sigue pendiente.
