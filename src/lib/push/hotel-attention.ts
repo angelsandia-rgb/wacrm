@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { autoReplyScheduleForAccount, withinAiAttentionHours } from '@/lib/ai/auto-reply-schedule'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
 import { teammateRepliedRecently, isBusinessAutoReply } from '@/lib/ai/human-reply'
-import { attentionBody, type AttentionContext } from './attention-details'
+import { attentionBody, isUrgentArrival, type AttentionContext } from './attention-details'
 import { isCourtesyClosing } from '@/lib/ai/reception-alert'
 export { attentionBody } from './attention-details'
 
@@ -69,8 +69,10 @@ export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: str
     if (await contactMutesAi(db, event.contact_id)) return
     const { data: profiles } = await db.from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin', 'agent'])
     const selected = profiles?.filter(p => p.user_id === cfg?.handoff_agent_id)
-    // One alert per conversation burst: skip whoever was alerted for it moments ago.
-    const { data: recent } = await db.from('notifications').select('user_id')
+    const urgent = typeof event.text === 'string' && isUrgentArrival(event.text)
+    // One alert per conversation burst: skip whoever was alerted for it moments
+    // ago — except a guest on the way who cannot get in.
+    const { data: recent } = urgent ? { data: [] } : await db.from('notifications').select('user_id')
       .eq('account_id', accountId).eq('conversation_id', event.conversation_id).eq('type', 'ai_handoff')
       .gt('created_at', new Date(Date.now() - BURST_MS).toISOString())
     const alerted = new Set(((recent ?? []) as { user_id: string }[]).map(r => r.user_id))
@@ -85,7 +87,7 @@ export async function notifyHotelStaffInbound(db: SupabaseClient, accountId: str
     const { error } = await db.from('notifications').upsert(targets.map(p => {
       const id = attentionNotificationId(accountId, event.whatsapp_message_id as string, p.user_id)
       return { id, account_id: accountId, user_id: p.user_id, type: 'ai_handoff', conversation_id: event.conversation_id,
-        title: `Requiere atención: ${contact?.name || contact?.phone || 'Cliente'}`, body }
+        title: `${urgent ? '🚨 Urgente, huésped en camino' : 'Requiere atención'}: ${contact?.name || contact?.phone || 'Cliente'}`, body }
     }), { onConflict: 'id', ignoreDuplicates: true })
     if (error) throw error
   } catch (error) {

@@ -7,8 +7,18 @@ const normalize = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, 
 const compact = (s: string) => s.replace(/\s+/g, ' ').trim()
 const acknowledgement = (s: string) => /^(gracias|muchas gracias|si|ok|muy bien|perfecto|entendido)[.!\s]*$/.test(normalize(s).trim())
 
+/** A guest on the way who cannot find the way in (VSR 2026-11-07: the entrance
+ *  was closed, nobody answered for 2.5 h and the booked guests went elsewhere). */
+export function isUrgentArrival(text: string): boolean {
+  const t = normalize(text)
+  return /\b(?:entrada|porton|camino|ingreso|como (?:llego|llegamos|llegar)|indicaciones|direccion|ubicacion)\b/.test(t)
+    && /\b(?:cerrad\w*|por donde|perdid\w*|no (?:encontramos|encuentro|hallamos|damos)|ya llegamos|estamos (?:llegando|afuera|aqui|en la entrada)|vamos (?:en camino|llegando)|venimos en camino)\b/.test(t)
+}
+
 function classify(text: string): { reason: string; action: string } | null {
   const t = normalize(text)
+  if (isUrgentArrival(text))
+    return { reason: 'URGENTE: un huésped en camino necesita indicaciones para llegar al hotel.', action: 'Llamar de inmediato al huésped para indicarle cómo ingresar al hotel.' }
   if (/\b(?:no|aun no|todavia no)\b.{0,20}\b(?:me reserve|me reserven|reservar|confirmar la reserva)\b/.test(t))
     return { reason: 'su indicación de no reservar todavía.', action: 'Respetar su decisión y aclarar sus dudas antes de confirmar una reserva.' }
   if (/\b(?:olvid|quedo|perdi|guardar|guarden|recoger)\w*\b/.test(t) && /\b(?:almohada|objeto|lentes|ropa|cargador|pertenencia|habitacion)\w*\b/.test(t))
@@ -73,8 +83,8 @@ export function explainAttention(summary: string, last: string | null | undefine
 
 /** Only application instructions are rewritten; customer quotes stay literal. */
 export function formalAttentionAction(action: string): string {
-  const verbs: Record<string, string> = { Respetar: 'Respete', Verificar: 'Verifique', Revisar: 'Revise', Evaluar: 'Evalúe', Indicar: 'Indique', Coordinar: 'Coordine', Confirmar: 'Confirme', Abrir: 'Abra', Leer: 'Lea' }
-  return action.replace(/^(Respetar|Verificar|Revisar|Evaluar|Indicar|Coordinar|Confirmar|Abrir|Leer)\b/, verb => verbs[verb])
+  const verbs: Record<string, string> = { Llamar: 'Llame', Respetar: 'Respete', Verificar: 'Verifique', Revisar: 'Revise', Evaluar: 'Evalúe', Indicar: 'Indique', Coordinar: 'Coordine', Confirmar: 'Confirme', Abrir: 'Abra', Leer: 'Lea' }
+  return action.replace(/^(Llamar|Respetar|Verificar|Revisar|Evaluar|Indicar|Coordinar|Confirmar|Abrir|Leer)\b/, verb => verbs[verb])
     .replace(/([;] | y | e )(aclarar|coordinar|responder|confirmar|comunicar|facilitar|resolver|orientar|continuar|indicar)\b/g, (_match, prefix: string, verb: string) => prefix + ({ aclarar: 'aclare', coordinar: 'coordine', responder: 'responda', confirmar: 'confirme', comunicar: 'comunique', facilitar: 'facilite', resolver: 'resuelva', orientar: 'oriente', continuar: 'continúe', indicar: 'indique' }[verb]))
     .replace('; no darlo por realizado', '; no lo dé por realizado')
 }

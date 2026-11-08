@@ -1,4 +1,4 @@
-import { latestCustomerTimestamp, hasNewReceptionRequest, isCourtesyClosing } from './reception-alert'
+import { latestCustomerTimestamp, hasNewReceptionRequest, isCustomerClosing } from './reception-alert'
 import { canResumeHotelDaytimeInquiry } from './hotel-opening-backlog'
 import { attentionBody, attentionNotificationId, loadAttentionContext } from '@/lib/push/hotel-attention'
 import { withoutUnapprovedStayPrices } from './hotel-close'
@@ -791,7 +791,7 @@ export async function dispatchInboundToAiReply(
     if (messages.length === 0 || messages[messages.length - 1].role !== 'user') return
     // A courtesy after staff assistance is not an unanswered hotel inquiry.
     // Run before event triage so historical event mentions cannot reopen it.
-    if (neverSelfPause && trailingCustomerTurns(messages).every(isCourtesyClosing)) return
+    if (neverSelfPause && isCustomerClosing(trailingCustomerTurns(messages))) return
 
     // We already said goodbye and the customer only says goodbye again —
     // nothing left to add (VSR 2026-10-07: "¡Con mucho gusto!…" then

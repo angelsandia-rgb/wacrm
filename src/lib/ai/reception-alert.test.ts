@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasNewReceptionRequest, latestCustomerTimestamp, isCourtesyClosing, isSimpleAcknowledgement } from './reception-alert'
+import { hasNewReceptionRequest, latestCustomerTimestamp, isCourtesyClosing, isCustomerClosing, isSimpleAcknowledgement } from './reception-alert'
 
 describe('courtesy closings', () => {
   it.each(['Muy amable', 'Se lo agradezco', 'Muy bien Licenciada', 'Muchísimas gracias, buenas noches', 'Muchas gracias 🙏🏼🙏🏼', 'Gracias, le agradezco', 'Perfecto. Gracias yo les escribo en unos días'])('does not reopen or alert for %s', text => {
@@ -21,5 +21,20 @@ describe('new reception requests', () => {
   it('uses the last customer turn, not an assistant timestamp or an older message', () => {
     expect(latestCustomerTimestamp([{ role: 'user', content: 'Pago', createdAt: '2026-10-20T02:01:00Z' }, { role: 'assistant', content: 'Hola', createdAt: '2026-10-20T02:02:00Z' }])).toBe('2026-10-20T02:01:00Z')
     expect(latestCustomerTimestamp([{ role: 'user', content: 'Hola' }])).toBeNull()
+  })
+})
+
+describe('customer closing (VSR 2026-11-07)', () => {
+  it('a decline followed by thanks closes the thread', () => {
+    expect(isCourtesyClosing('Muy amable por la información')).toBe(true)
+    expect(isCustomerClosing([
+      'Vamos a ir pero en otra ocasión, para hoy estamos buscando un lugar solo para pasar la noche porque llegaríamos tarde',
+      'Muy amable por la información',
+    ])).toBe(true)
+  })
+  it('a question before the thanks is still pending', () => {
+    expect(isCustomerClosing(['¿Tienen habitación para hoy?', 'Gracias'])).toBe(false)
+    expect(isCustomerClosing(['Quisiera reservar para el sábado', 'Gracias'])).toBe(false)
+    expect(isCustomerClosing(['Gracias', '¿Y el desayuno?'])).toBe(false)
   })
 })

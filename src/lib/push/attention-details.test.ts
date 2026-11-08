@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attentionBody, explainAttention } from './attention-details'
+import { attentionBody, explainAttention, isUrgentArrival } from './attention-details'
 import { notificationDisplayText, notificationPushPayload } from './notification-payload'
 
 describe('explanatory hotel handoff notifications', () => {
@@ -63,5 +63,18 @@ describe('explanatory hotel handoff notifications', () => {
     expect(push.body).toContain('comprobante de pago')
     expect(push.body).toContain('Revise el comprobante')
     expect(push.body!.length).toBeLessThanOrEqual(300)
+  })
+})
+
+describe('urgent arrival (VSR 2026-11-07)', () => {
+  it('flags a booked guest on the way who cannot get in', () => {
+    expect(isUrgentArrival('Por dónde es la entrada ahora')).toBe(true)
+    expect(isUrgentArrival('Esta cerrada la entrada que usualmente tomamos')).toBe(true)
+    expect(isUrgentArrival('Ya llegamos pero no encontramos la entrada')).toBe(true)
+    expect(attentionBody('Pendiente.', null, 'Esta cerrada la entrada que usualmente tomamos')).toContain('URGENTE')
+  })
+  it('does not flag check-in time or routine questions', () => {
+    expect(isUrgentArrival('¿A qué hora es la entrada?')).toBe(false)
+    expect(isUrgentArrival('¿Tienen habitación para el sábado?')).toBe(false)
   })
 })
