@@ -32,7 +32,7 @@ import { loadClinicAppointmentContext } from '@/lib/clinic/appointment-context'
 import { transitionAppointment } from '@/lib/clinic/appointments'
 import { loadQuickReplyContext } from './quick-reply-context'
 import { generateReply, isRetryableAiError, type GenerateArgs } from './generate'
-import { buildSystemPrompt, aiAutoReplyRetryDelayMs, RECORD_RESERVATION_SENTINEL_PREFIX, type AutoReplyCalendarContext } from './defaults'
+import { buildSystemPrompt, aiAutoReplyRetryDelayMs, RECORD_RESERVATION_SENTINEL_PREFIX, CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX, type AutoReplyCalendarContext } from './defaults'
 import { AiError, type AiConfig, type ChatMessage } from './types'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
@@ -286,6 +286,11 @@ const CLINIC_APPOINTMENT_ACTION_FALLBACK_TEXT =
  *  claimed "queda anotada…" without the record_reservation marker. */
 const MISSING_RECORD_MARKER_NOTE =
   `SYSTEM CHECK (this turn only): your previous draft told the guest their request was noted or updated but did not include a ${RECORD_RESERVATION_SENTINEL_PREFIX}…]] marker, so NOTHING was saved and the team never sees it. Write your reply again and include that marker for the category with EVERY value you know — servicio, personas, entrada/salida or fecha… — including values the guest gave earlier in the conversation. Never ask again for something the guest already told you.`
+
+/** Appended for the one retry when a store reply said "lo estoy registrando"
+ *  without the order marker (Casa Ceiba 2026-11-07, gpt-5.4-mini, 3 times). */
+const MISSING_ORDER_MARKER_NOTE =
+  `SYSTEM CHECK (this turn only): the customer confirmed the order summary and your draft says you are registering it, but it did not include the ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}…]] marker, so NO order was created and no payment link will be sent. Write the reply again (one short line) and append that marker with every value from the confirmed summary: exact product name(s) from the catalog with quantity, full name, phone, address, departamento (use the municipio if that is all you have) and cod or tarjeta. Never ask again for anything already given.`
 
 const AI_PROVIDER_FALLBACK_TEXT =
   'Estoy teniendo una dificultad temporal para procesar su mensaje. Ya avisé al equipo para que le dé seguimiento por este chat.'
@@ -1240,6 +1245,19 @@ export async function dispatchInboundToAiReply(
           err,
         })
         return
+      }
+    }
+
+    // Store: "lo estoy registrando" with no order marker — retry once with an
+    // explicit note; if it still has none, the handoff after the send covers it.
+    if (shopifyOrders && !generation.shopifyOrderProposal && claimsOrderRegistration(generation.text)) {
+      console.warn(`[ai auto-reply] conversation ${conversationId}: order claimed without the create_shopify_order marker — retrying once`)
+      try {
+        const retry = await generateReplyWithOneRetry({ config, systemPrompt: `${systemPrompt}\n\n${MISSING_ORDER_MARKER_NOTE}`, messages })
+        if (retry.shopifyOrderProposal && (retry.text.trim() || retry.handoff)) generation = retry
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] missing-order-marker retry failed:', describeError(err))
       }
     }
 

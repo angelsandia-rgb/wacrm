@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   dispatchSystemAlert: vi.fn().mockResolvedValue({ opened: false, notified: false, alertId: null }),
   resolveSystemAlert: vi.fn().mockResolvedValue(undefined),
   sendCatalogToConversation: vi.fn(),
+  createShopifyOrderFromChat: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
   createEvent: vi.fn(),
@@ -162,6 +163,7 @@ vi.mock('./generate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./generate')>()
   return { ...actual, generateReply: h.generateReply }
 })
+vi.mock('@/lib/shopify/chat-order', () => ({ createShopifyOrderFromChat: h.createShopifyOrderFromChat }))
 vi.mock('@/lib/observability/alerts', () => ({
   dispatchSystemAlert: h.dispatchSystemAlert,
   resolveSystemAlert: h.resolveSystemAlert,
@@ -2271,6 +2273,21 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.engineSendText).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
     )
+  })
+
+  it('store: "lo estoy registrando" without the order marker retries once and creates the order (Casa Ceiba 2026-11-07)', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'Le dejo el resumen: 1 Organizador de Zapatos — GTQ 169, pago tarjeta. ¿Me confirma para registrarlo?' },
+      { role: 'user', content: 'Si' },
+    ])
+    h.state.products = [{ id: 'p1', name: 'Organizador de Zapatos' }]
+    const proposal = { items: [{ name: 'Organizador de Zapatos', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Lote 1', departamento: 'Villa Canales', payment: 'card' as const }
+    h.generateReply
+      .mockResolvedValueOnce({ text: 'Perfecto, lo estoy registrando 😊', handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: false })
+      .mockResolvedValueOnce({ text: 'Perfecto, lo estoy registrando 😊', handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: false, shopifyOrderProposal: proposal })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledTimes(2)
+    expect(h.createShopifyOrderFromChat).toHaveBeenCalledWith(expect.objectContaining({ proposal }))
   })
 
   it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
