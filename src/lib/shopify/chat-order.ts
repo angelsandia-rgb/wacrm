@@ -90,14 +90,17 @@ export async function createShopifyOrderFromChat(args: {
 
   // Logged first: the order exists now, so the duplicate guard above must see it
   // even if the deal or the confirmation message below fails.
-  await db.from('ai_action_log').insert({
+  // target_id is a uuid column: a Shopify gid there made every insert fail
+  // silently, so the duplicate guard never saw an order (Casa Ceiba 2026-11-08).
+  const { error: logError } = await db.from('ai_action_log').insert({
     account_id: accountId,
     actor_user_id: configOwnerUserId,
     action: 'create_shopify_order',
-    target_id: order.id,
+    target_id: conversationId,
     input: { conversation_id: conversationId, ...proposal, source: 'auto_reply_autonomous' },
     result: { order_id: order.id, name: order.name, draft: order.draft, total: order.total },
   })
+  if (logError) console.error('[shopify] create_shopify_order log failed:', logError.message)
 
   await attachOrderToDeal({ db, accountId, userId: configOwnerUserId, contactId, order, currency })
 
