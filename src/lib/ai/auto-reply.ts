@@ -188,7 +188,7 @@ export function claimsOrderRegistration(text: string): boolean {
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
  *  answers next is a reply to that offer. A message that merely mentions
  *  the catalog (e.g. the sent link itself) doesn't count. */
-const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?/i
+const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?|\b(?:le|te)\s+(?:puedo|podemos)\s+(?:mostrar|enviar|compartir|mandar)\s+(?:el|nuestro)\s+cat[aá]logo\b/i
 
 /**
  * The full catalog only goes out when the customer asked for it — in
@@ -593,7 +593,10 @@ export async function dispatchInboundToAiReply(
     // restrict the topic, while ordinary information can resume after the
     // staff quiet window without requiring a button press.
     // Other verticals: an assigned human owns the thread.
-    if (conv.assigned_agent_id && !neverSelfPause) return
+    // …except the assignment the bot itself made on a transient fault: it
+    // must still reach the recovery below (Casa Ceiba 2026-11-08: one empty
+    // reply silenced the store's bot for the rest of the day).
+    if (conv.assigned_agent_id && !neverSelfPause && !(conv.ai_autoreply_disabled && conv.ai_handoff_transient === true)) return
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
       // (migration 115) and a grace period has passed with no human
@@ -616,6 +619,8 @@ export async function dispatchInboundToAiReply(
           db,
           conversationId,
           handoffAt: (conv.ai_handoff_at as string | null) ?? null,
+          // Outside the hotel the bot assigned the chat on that fault; give it back.
+          unassign: !neverSelfPause,
         })
         if (!recovered) return
         // Keep this in-memory eligibility snapshot aligned with the guarded
@@ -2635,8 +2640,9 @@ async function tryRecoverTransientHandoff(args: {
   db: SupabaseClient
   conversationId: string
   handoffAt: string | null
+  unassign?: boolean
 }): Promise<boolean> {
-  const { db, conversationId, handoffAt } = args
+  const { db, conversationId, handoffAt, unassign } = args
   const since = handoffAt ? Date.parse(handoffAt) : NaN
   if (!Number.isFinite(since)) return false
   if (Date.now() - since < transientHandoffRecoveryMs()) return false
@@ -2663,6 +2669,7 @@ async function tryRecoverTransientHandoff(args: {
       ai_autoreply_disabled: false,
       ai_handoff_transient: null,
       ai_reply_count: 0,
+      ...(unassign ? { assigned_agent_id: null } : {}),
     })
     .eq('id', conversationId)
     .eq('ai_handoff_transient', true)
