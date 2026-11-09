@@ -57,3 +57,12 @@ describe('order claimed without the order marker (Casa Ceiba 2026-11-07)', () =>
     expect(claimsOrderRegistration('El masajeador cuesta GTQ 199.')).toBe(false)
   })
 })
+
+describe('catalog offer without question marks (Casa Ceiba 2026-11-08)', () => {
+  it('"Si desea, le puedo mostrar el catálogo" + "Si" asks for the catalog', () => {
+    expect(customerRequestedCatalog([
+      { role: 'assistant', content: 'Por ahora no tengo una lista de ofertas navideñas. Si desea, le puedo mostrar el catálogo de productos disponibles 😊' },
+      { role: 'user', content: 'Si' },
+    ])).toBe(true)
+  })
+})

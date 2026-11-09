@@ -1136,6 +1136,31 @@ describe('dispatchInboundToAiReply — transient-handoff auto-recovery', () => {
     expect(h.engineSendText).toHaveBeenCalled()
   })
 
+  it('recovers a chat the bot itself assigned on the fault, and unassigns it (Casa Ceiba 2026-11-08)', async () => {
+    h.state.conv = {
+      assigned_agent_id: 'advisor-1',
+      ai_autoreply_disabled: true,
+      ai_reply_count: 2,
+      ai_handoff_transient: true,
+      ai_handoff_at: OLD,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: false, ai_handoff_transient: null, assigned_agent_id: null })
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('a human assignment without a transient fault still keeps the bot out', async () => {
+    h.state.conv = {
+      assigned_agent_id: 'advisor-1',
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_transient: null,
+      ai_handoff_at: null,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+  })
+
   it('does NOT recover before the grace period', async () => {
     h.state.conv = {
       assigned_agent_id: null,
