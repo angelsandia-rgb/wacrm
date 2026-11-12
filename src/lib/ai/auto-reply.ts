@@ -2327,7 +2327,7 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     if (sendCatalog) {
       try {
-        await sendCatalogToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
+        await sendCatalogToConversation(db, accountId, conversationId, 'bot')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         // Never rethrow: the customer already got their text reply above,
@@ -2371,7 +2371,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // a hallucination or an injection attempt must not fire a send.
     if (sendRestaurantMenu && hasRestaurantMenu) {
       try {
-        await sendRestaurantMenuToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
+        await sendRestaurantMenuToConversation(db, accountId, conversationId, 'bot')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         // Same reasoning as send_catalog above: never rethrow (it would
@@ -2449,7 +2449,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           db, accountId, contactId, configOwnerUserId, conversationId, proposal: quoteProposal,
           handoffAgentId: config.handoffAgentId,
           alreadyAssigned: Boolean(conv.assigned_agent_id),
-          senderType: neverSelfPause ? 'bot' : 'agent',
+          senderType: 'bot',
         })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
