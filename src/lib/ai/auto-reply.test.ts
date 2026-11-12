@@ -222,6 +222,7 @@ vi.mock('@/lib/pipelines/move-deal', () => ({
 }))
 vi.mock('@/lib/products/send-catalog', () => ({
   sendCatalogToConversation: h.sendCatalogToConversation,
+  shopifyStoreUrl: async () => null,
   SendCatalogError: class SendCatalogError extends Error {
     status: number
     constructor(message: string, status = 400) {
