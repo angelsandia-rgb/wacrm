@@ -2282,7 +2282,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
       sendCatalog: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
   })
 
   it('"Sí" to the catalog offer with a marker-only reply sends the catalog, not the fallback (Casa Ceiba 2026-11-07)', async () => {
@@ -2294,7 +2294,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
       text: '', handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
     expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: CATALOG_ONLY_REPLY_TEXT }))
     expect(h.engineSendText).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('dificultad temporal') }),
@@ -2379,7 +2379,7 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.sendCatalogToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_marker_missed_send_catalog:acct-1' }),
     )
@@ -4663,7 +4663,7 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
       sendRestaurantMenu: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
   })
 
   it('does not send the menu when no menu URL is configured, even if the model asks', async () => {
@@ -4699,7 +4699,7 @@ describe('dispatchInboundToAiReply — autonomous send_restaurant_menu', () => {
 
     await dispatchInboundToAiReply(ARGS)
 
-    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'agent')
+    expect(h.sendRestaurantMenuToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'conv-1', 'bot')
     expect(h.dispatchSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ dedupKey: 'ai_marker_missed_send_restaurant_menu:acct-1' }),
     )
@@ -4843,7 +4843,7 @@ describe('dispatchInboundToAiReply — autonomous create_quote_chat', () => {
       'conv-1',
       true, // proposal.format === 'text' forces a text quote
       true, // askFollowUp — this path bypasses the AI's own text generation entirely
-      'agent', // non-hotel: unchanged sender
+      'bot', // AI-sent: always the bot
     )
     // A successful quote must never also trip the silent-failure handoff.
     expect(h.state.updatePayload).toBeNull()
