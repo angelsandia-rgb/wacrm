@@ -4,7 +4,7 @@ import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { formatCurrency } from '@/lib/currency'
 import {
-  completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, pickPaidStage, verifySvixSignature,
+  completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, markOrderPaid, normalizeGtPhone, pickPaidStage, verifySvixSignature,
 } from '@/lib/shopify/api'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -15,11 +15,13 @@ const PAID_EVENTS = new Set(['intent.succeeded', 'payment_intent.succeeded', 'ba
 
 /**
  * Recurrente webhook (Settings → Shopify shows the URL, with `?account=`).
- * A paid card checkout from the chat completes its Shopify draft as a PAID
- * order — it then reaches Dropify/Dropi with nothing to collect — moves the
- * deal to the real order and tells the customer. Svix-signed; the payment
+ * A paid card checkout completes its Shopify order: a chat draft becomes a
+ * PAID order (with "Crear pedidos reales" on), a web-store order placed with
+ * the card-link method is marked paid. Either way it reaches Dropify/Dropi
+ * with nothing to collect, the deal moves to "Pago confirmado" and the
+ * customer is told. Svix-signed; the payment
  * state and the draft id are read back from Recurrente, never from the body.
- * Only with "Crear pedidos reales" on: in test mode drafts stay drafts.
+ * In test mode ("Crear pedidos reales" off) chat drafts stay drafts.
  * Always 200 once authenticated, so Recurrente doesn't retry handled events.
  */
 export async function POST(request: Request) {
@@ -51,21 +53,25 @@ export async function POST(request: Request) {
   }
   const checkoutId = event.checkout?.id
   if (!PAID_EVENTS.has(event.event_type ?? '') || !checkoutId) return NextResponse.json({ ok: true, skipped: 'event' })
-  if (!cfg.ordersLive) return NextResponse.json({ ok: true, skipped: 'test mode' })
 
   try {
     const checkout = await getRecurrenteCheckout(cfg.recurrenteSecretKey!, checkoutId)
-    const draftId = checkout.metadata?.shopify_order_id
-    if (checkout.status !== 'paid' || typeof draftId !== 'string' || !draftId.startsWith('gid://shopify/DraftOrder/')) {
-      return NextResponse.json({ ok: true, skipped: 'not a paid chat order' })
+    const linkedId = checkout.metadata?.shopify_order_id
+    const isDraft = typeof linkedId === 'string' && linkedId.startsWith('gid://shopify/DraftOrder/')
+    const isOrder = typeof linkedId === 'string' && linkedId.startsWith('gid://shopify/Order/')
+    if (checkout.status !== 'paid' || typeof linkedId !== 'string' || (!isDraft && !isOrder)) {
+      return NextResponse.json({ ok: true, skipped: 'not a paid store order' })
     }
+    // A chat draft only becomes a real order with "Crear pedidos reales" on;
+    // a web-store order is real already, so its payment is always recorded.
+    if (isDraft && !cfg.ordersLive) return NextResponse.json({ ok: true, skipped: 'test mode' })
     const total = checkout.total_in_cents / 100
-    const order = await completePaidDraftOrder(cfg, draftId, total)
-    if (!order) return NextResponse.json({ ok: true, skipped: 'already completed or amount mismatch' })
+    const order = isDraft ? await completePaidDraftOrder(cfg, linkedId, total) : await markOrderPaid(cfg, linkedId, total)
+    if (!order) return NextResponse.json({ ok: true, skipped: 'already paid or amount mismatch' })
 
     const { data: deal } = await db
       .from('deals').update({ shopify_order_id: order.id })
-      .eq('account_id', accountId).eq('shopify_order_id', draftId)
+      .eq('account_id', accountId).eq('shopify_order_id', linkedId)
       .select('id, contact_id, pipeline_id, stage_id').maybeSingle()
     if (deal?.pipeline_id) {
       const { data: stages } = await db

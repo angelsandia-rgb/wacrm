@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   send: vi.fn(async () => ({ messageId: 'm1' })),
   resolve: vi.fn(async () => ({ contactId: 'c1', conversationId: 'conv1' })),
   attach: vi.fn(async () => 'd1'),
+  checkout: vi.fn(async () => 'https://app.recurrente.com/checkout-session/ch_1'),
 }))
 
 const STAGES = [
@@ -38,6 +39,8 @@ vi.mock('@/lib/shopify/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/shopify/api')>()),
   verifyShopifyHmac: () => true,
   attachOrderToDeal: m.attach,
+  loadShopifyConfig: async () => ({ recurrenteSecretKey: 'sk' }),
+  createRecurrenteCheckout: m.checkout,
 }))
 
 import { POST } from './route'
@@ -135,5 +138,35 @@ describe('Shopify webhook — orders/updated (the admin "Actualización de pedid
       fulfillments: [{ status: 'success', tracking_number: 'GT9', shipment_status: 'delivered' }],
     })
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's5' } })
+  })
+})
+
+describe('Shopify webhook — web orders paid by card link', () => {
+  it('sends the Recurrente link tied to the order with the order number', async () => {
+    m.deal = null
+    m.inWindow = true
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/12', name: '#1003', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      payment_gateway_names: ['Tarjeta de crédito o débito (link de pago por WhatsApp)'], line_items: [{ title: 'Retrovisor', quantity: 1 }],
+      shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(m.checkout).toHaveBeenCalledWith('sk', expect.objectContaining({ orderId: 'gid://shopify/Order/12', total: 300, title: 'Retrovisor x1' }))
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      contentText: expect.stringContaining('*#1003*'),
+    }))
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      contentText: expect.stringContaining('https://app.recurrente.com/checkout-session/ch_1'),
+    }))
+  })
+
+  it('cash on delivery gets no link', async () => {
+    m.deal = null
+    m.inWindow = true
+    m.checkout.mockClear()
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/13', name: '#1004', total_price: '300.00', currency: 'GTQ',
+      payment_gateway_names: ['Pago contra entrega (COD)'], shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(m.checkout).not.toHaveBeenCalled()
   })
 })

@@ -679,3 +679,27 @@ export async function completePaidDraftOrder(
   if (!order) throw new ShopifyError(data.draftOrderComplete.userErrors.map((e) => e.message).join('; ') || 'draftOrderComplete failed')
   return order
 }
+
+/** A web-store order placed with the "Tarjeta (link de pago por WhatsApp)"
+ *  manual method, paid through its Recurrente link: record the payment in
+ *  Shopify. Null when already paid or the amount doesn't match what's owed. */
+export async function markOrderPaid(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  orderId: string,
+  expectedTotal: number,
+): Promise<{ id: string; name: string } | null> {
+  const { order } = await shopifyGraphql<{
+    order: { name: string; displayFinancialStatus: string | null; totalOutstandingSet: { shopMoney: { amount: string } } } | null
+  }>(cfg, `query($id: ID!) { order(id: $id) { name displayFinancialStatus totalOutstandingSet { shopMoney { amount } } } }`, { id: orderId })
+  if (!order || order.displayFinancialStatus === 'PAID') return null
+  if (Math.abs(Number(order.totalOutstandingSet.shopMoney.amount) - expectedTotal) > 0.009) {
+    console.warn(`[recurrente] ${orderId} owes ${order.totalOutstandingSet.shopMoney.amount} != paid ${expectedTotal}, not marked paid`)
+    return null
+  }
+  const data = await shopifyGraphql<{ orderMarkAsPaid: { order: { id: string; name: string } | null; userErrors: { message: string }[] } }>(
+    cfg, `mutation($id: ID!) { orderMarkAsPaid(input: { id: $id }) { order { id name } userErrors { message } } }`, { id: orderId },
+  )
+  const paid = data.orderMarkAsPaid.order
+  if (!paid) throw new ShopifyError(data.orderMarkAsPaid.userErrors.map((e) => e.message).join('; ') || 'orderMarkAsPaid failed')
+  return paid
+}

@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, markOrderPaid, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -329,5 +329,21 @@ describe('loadOrderStatuses', () => {
     const found = await loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone: '', text: '¿cómo va mi pedido?' })
     expect(found.map((o) => o.name)).toEqual(['Pedido registrado (aún sin número de pedido)', '#1009'])
     expect(describeOrderStatuses(found)).toContain('el número de pedido llega por WhatsApp al confirmarse el pago')
+  })
+})
+
+describe('markOrderPaid', () => {
+  const cfg = { shop: 'x.myshopify.com', token: 't' }
+  const owed = (amount: string, status = 'PENDING') => new Response(JSON.stringify({ data: { order: { name: '#1003', displayFinancialStatus: status, totalOutstandingSet: { shopMoney: { amount } } } } }))
+  it('marks a web card order paid when Recurrente collected exactly what it owes', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(owed('300.00'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { orderMarkAsPaid: { order: { id: 'gid://shopify/Order/12', name: '#1003' }, userErrors: [] } } })))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await markOrderPaid(cfg, 'gid://shopify/Order/12', 300)).toEqual({ id: 'gid://shopify/Order/12', name: '#1003' })
+  })
+  it('does nothing when already paid or the amount differs', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(owed('0.00', 'PAID')).mockResolvedValueOnce(owed('300.00')))
+    expect(await markOrderPaid(cfg, 'gid://shopify/Order/12', 300)).toBeNull()
+    expect(await markOrderPaid(cfg, 'gid://shopify/Order/12', 250)).toBeNull()
   })
 })

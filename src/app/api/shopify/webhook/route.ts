@@ -7,7 +7,7 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { isWithinMessagingWindow } from '@/lib/messaging/window'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, DELIVERED_STAGE_NAME, normalizeGtPhone, ORDER_TAG, pickForwardStage, SHIPPED_STAGE_NAME,
+  attachOrderToDeal, createRecurrenteCheckout, DELIVERED_STAGE_NAME, loadShopifyConfig, PAYMENT_GATEWAYS, normalizeGtPhone, ORDER_TAG, pickForwardStage, SHIPPED_STAGE_NAME,
   SHIPPED_TEMPLATE_NAME, trackingSentence, verifyShopifyHmac,
 } from '@/lib/shopify/api'
 
@@ -19,6 +19,9 @@ interface ShopifyOrderPayload {
   total_price: string
   currency: string
   tags?: string
+  financial_status?: string | null
+  payment_gateway_names?: string[] | null
+  line_items?: { title?: string | null; quantity?: number | null }[] | null
   phone?: string | null
   customer?: { first_name?: string | null; phone?: string | null } | null
   shipping_address?: ShopifyAddress | null
@@ -155,9 +158,10 @@ async function handleOrderCreated(
     })
     const totalText = formatCurrency(total, order.currency)
     const templateName = cfg.confirmation_template_name as string | null
+    const payLine = await cardPaymentLine(db, accountId, order, total)
     const sent = await notifyCustomer(db, accountId, conversationId,
       `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}* por ${totalText}. ` +
-      `Ese es su número de pedido para darle seguimiento. ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
+      `Ese es su número de pedido para darle seguimiento.${payLine} ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
       templateName
         ? { name: templateName, language: (cfg.confirmation_template_language as string) || 'es', params: [firstName || 'cliente', order.name, totalText] }
         : null)
@@ -168,6 +172,29 @@ async function handleOrderCreated(
     console.error(`[shopify webhook] order ${order.name} (account ${accountId}) follow-up failed:`, err instanceof Error ? err.message : err)
   }
   return NextResponse.json({ ok: true })
+}
+
+/** Web orders placed with the "Tarjeta (link de pago por WhatsApp)" method
+ *  get their Recurrente link in the confirmation; the Recurrente webhook then
+ *  marks the order paid. '' for cash on delivery.
+ *  ponytail: outside the 24h window the template can't carry the link; add a
+ *  link template if web card orders from never-written customers matter. */
+async function cardPaymentLine(db: SupabaseClient, accountId: string, order: ShopifyOrderPayload, total: number): Promise<string> {
+  const byCard = (order.payment_gateway_names ?? []).some((g) => g === PAYMENT_GATEWAYS.card || /tarjeta/i.test(g))
+  if (!byCard || order.financial_status === 'paid' || total <= 0) return ''
+  const later = ' En breve le enviamos por aquí el link de pago con tarjeta.'
+  try {
+    const cfg = await loadShopifyConfig(db, accountId)
+    if (!cfg?.recurrenteSecretKey) return later
+    const label = (order.line_items ?? []).map((i) => `${i.title ?? 'Producto'} x${i.quantity ?? 1}`).join(', ') || `Pedido ${order.name}`
+    const link = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
+      title: label.slice(0, 120), total, currency: order.currency, orderId: order.admin_graphql_api_id,
+    })
+    return ` Para pagar con tarjeta use este link seguro: ${link} — al confirmarse el pago preparamos su envío.`
+  } catch (err) {
+    console.error(`[shopify webhook] order ${order.name} (account ${accountId}) recurrente link failed:`, err instanceof Error ? err.message : err)
+    return later
+  }
 }
 
 async function handleShipping(
