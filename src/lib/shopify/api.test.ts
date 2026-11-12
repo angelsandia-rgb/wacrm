@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -329,5 +329,21 @@ describe('loadOrderStatuses', () => {
     const found = await loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone: '', text: '¿cómo va mi pedido?' })
     expect(found.map((o) => o.name)).toEqual(['Pedido registrado (aún sin número de pedido)', '#1009'])
     expect(describeOrderStatuses(found)).toContain('PENDIENTE con tarjeta')
+  })
+})
+
+describe('outOfStockTitles', () => {
+  it('flags only tracked, deny-oversell variants short of the quantity (Dropi stock synced by Dropify)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [
+      { id: 'a', inventoryQuantity: 0, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+      { id: 'b', inventoryQuantity: 5, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+      { id: 'c', inventoryQuantity: 0, inventoryPolicy: 'CONTINUE', inventoryItem: { tracked: true } },
+      { id: 'd', inventoryQuantity: 1, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+    ] } }))))
+    const lines = [
+      { variantId: '1', quantity: 1, title: 'Drone' }, { variantId: '2', quantity: 2, title: 'Freidora' },
+      { variantId: '3', quantity: 1, title: 'Luces' }, { variantId: '4', quantity: 2, title: 'Proyector' },
+    ]
+    expect(await outOfStockTitles({ shop: 'x.myshopify.com', token: 't' }, lines)).toEqual(['Drone', 'Proyector'])
   })
 })

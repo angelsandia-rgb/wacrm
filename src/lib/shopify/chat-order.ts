@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone,
+  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles,
   PAYMENT_GATEWAYS, ShopifyError,
 } from './api'
 
@@ -77,6 +77,26 @@ export async function createShopifyOrderFromChat(args: {
     const p = byName.get(item.name.trim().toLowerCase())
     if (!p) return fail(`"${item.name}" no coincide con un producto activo de Shopify`)
     lines.push({ variantId: p.shopify_variant_id as string, quantity: item.qty, price: Number(p.price), title: p.name as string })
+  }
+
+  // Provider stock first: no order, no payment link for what Dropi can't ship.
+  // A failed check doesn't block — Shopify itself refuses oversold real orders.
+  let missing: string[] = []
+  try {
+    missing = await outOfStockTitles(cfg, lines)
+  } catch (err) {
+    console.error('[shopify] stock check failed, continuing:', err instanceof Error ? err.message : err)
+  }
+  if (missing.length) {
+    const what = missing.join(', ')
+    if (!byAgent) {
+      try {
+        await sendText(`Le ofrezco una disculpa 🙏 En este momento no tenemos existencias de ${what}. Un asesor le escribe por aquí para ofrecerle una alternativa o avisarle cuándo vuelve a estar disponible.`)
+      } catch (err) {
+        console.error('[shopify] out-of-stock notice failed:', err)
+      }
+    }
+    return handoff(byAgent ? `Sin existencias en Dropi: ${what}` : `🛒 Sin existencias en Dropi para el pedido (${label}): ${what}. Ofrécele una alternativa al cliente.`)
   }
 
   const { data: account } = await db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle()

@@ -682,3 +682,20 @@ export async function completePaidDraftOrder(
   if (!order) throw new ShopifyError(data.draftOrderComplete.userErrors.map((e) => e.message).join('; ') || 'draftOrderComplete failed')
   return order
 }
+
+/** Lines the store can't cover right now. Shopify's inventory is Dropi's
+ *  stock (Dropify syncs it), so this is the provider check before a payment
+ *  link goes out. Untracked or "continue selling" variants never block. */
+export async function outOfStockTitles(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  lines: { variantId: string; quantity: number; title: string }[],
+): Promise<string[]> {
+  const ids = lines.map((l) => (l.variantId.startsWith('gid://') ? l.variantId : `gid://shopify/ProductVariant/${l.variantId}`))
+  const data = await shopifyGraphql<{ nodes: ({ id: string; inventoryQuantity: number | null; inventoryPolicy: string; inventoryItem: { tracked: boolean } } | null)[] }>(
+    cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id inventoryQuantity inventoryPolicy inventoryItem { tracked } } } }`, { ids },
+  )
+  return lines.filter((l, i) => {
+    const v = data.nodes[i]
+    return v && v.inventoryItem.tracked && v.inventoryPolicy === 'DENY' && (v.inventoryQuantity ?? 0) < l.quantity
+  }).map((l) => l.title)
+}
