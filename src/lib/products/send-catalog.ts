@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendMessageToConversation, SendMessageError } from '@/lib/whatsapp/send-message'
 import { signCatalogConversation } from '@/lib/products/catalog-link-token'
+import { loadShopifyConfig, shopifyGraphql } from '@/lib/shopify/api'
 
 export class SendCatalogError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -40,6 +41,26 @@ export function catalogUrlForConversation(
 ): string {
   const path = catalogSlug ? `/c/${catalogSlug}` : `/catalog/${accountId}`
   return `${siteBaseUrl()}${path}?c=${signCatalogConversation(conversationId)}`
+}
+
+/** A store connected to Shopify sells from its own storefront (cart,
+ *  checkout, stock), so that is "the catalog" the customer gets — its
+ *  primary domain, or the myshopify one (it redirects there) if the
+ *  lookup fails. Null when the account has no Shopify store. */
+export async function shopifyStoreUrl(db: SupabaseClient, accountId: string): Promise<string | null> {
+  let cfg
+  try {
+    cfg = await loadShopifyConfig(db, accountId)
+  } catch {
+    return null
+  }
+  if (!cfg) return null
+  try {
+    const data = await shopifyGraphql<{ shop: { primaryDomain: { url: string } } }>(cfg, '{ shop { primaryDomain { url } } }')
+    return data.shop.primaryDomain.url.replace(/\/+$/, '')
+  } catch {
+    return `https://${cfg.shop}`
+  }
 }
 
 interface CatalogDeliveryRow {
@@ -128,6 +149,22 @@ export async function sendCatalogToConversation(
       throw err
     }
     return { catalogUrl: null }
+  }
+
+  const store = await shopifyStoreUrl(db, accountId)
+  if (store) {
+    try {
+      await sendMessageToConversation(db, accountId, {
+        conversationId,
+        messageType: 'text',
+        contentText: `Aquí puede ver todos nuestros productos y hacer su pedido: ${store}`,
+        senderType,
+      })
+    } catch (err) {
+      if (err instanceof SendMessageError) throw new SendCatalogError(err.message, err.status)
+      throw err
+    }
+    return { catalogUrl: store }
   }
 
   // 'digital' — unchanged behavior, requires at least one active

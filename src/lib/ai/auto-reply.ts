@@ -44,7 +44,7 @@ import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
-import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation } from '@/lib/products/send-catalog'
+import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation, shopifyStoreUrl } from '@/lib/products/send-catalog'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
@@ -1575,7 +1575,8 @@ For airport transport, record the guest's request in nota on the relevant existi
         try {
           outboundText = canonicalizeCatalogUrls(
             outboundText,
-            catalogUrlForConversation(accountId, catalogSlug, conversationId),
+            (catalogDeliveryMode === 'digital' ? await shopifyStoreUrl(db, accountId) : null)
+              ?? catalogUrlForConversation(accountId, catalogSlug, conversationId),
           )
         } catch {
           // NEXT_PUBLIC_SITE_URL missing → strip rather than crash the turn.
