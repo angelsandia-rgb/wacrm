@@ -63,3 +63,9 @@ describe("formatCurrencyShort", () => {
     expect(formatCurrencyShort(1_000, "ZZZ")).toBe("ZZZ 1.0k");
   });
 });
+
+describe('formatCurrency GTQ', () => {
+  it('writes quetzales the Guatemalan way, without a space', () => {
+    expect(formatCurrency(1199, 'GTQ')).toBe('Q1,199')
+  })
+})

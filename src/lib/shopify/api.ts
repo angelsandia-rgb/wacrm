@@ -503,14 +503,23 @@ export async function loadOrderStatuses(args: {
     .from('deals').select('shopify_order_id')
     .eq('account_id', accountId).eq('contact_id', contactId).not('shopify_order_id', 'is', null)
     .order('updated_at', { ascending: false }).limit(3)
-  // Drafts (gid://shopify/DraftOrder/…) aren't orders yet; nothing to track.
-  const ids = (deals ?? []).map((d) => d.shopify_order_id as string).filter((id) => id.includes('/Order/'))
+  const ids = (deals ?? []).map((d) => d.shopify_order_id as string)
   const found: OrderStatus[] = []
   if (ids.length) {
-    const data = await shopifyGraphql<{ nodes: (OrderStatus | null)[] }>(
-      cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } } }`, { ids },
+    // A draft is a registered order still waiting (card payment, or "Crear
+    // pedidos reales" off): the customer must hear it exists, not be asked
+    // for a number they never got. A completed draft reports its order.
+    const data = await shopifyGraphql<{ nodes: ((OrderStatus & { status?: string; order?: OrderStatus | null }) | null)[] }>(
+      cfg,
+      `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } ... on DraftOrder { name createdAt status order { ${ORDER_FIELDS} } } } }`,
+      { ids },
     )
-    found.push(...data.nodes.filter((n): n is OrderStatus => Boolean(n?.name)))
+    for (const n of data.nodes) {
+      if (!n?.name) continue
+      if (n.status === undefined) found.push(n)
+      else if (n.order) found.push(n.order)
+      else found.push(draftStatus(n.createdAt))
+    }
   }
   const number = text.match(/#\s?(\d{3,})/)?.[1]
   if (number && !found.some((o) => o.name === `#${number}`)) {
@@ -522,6 +531,15 @@ export async function loadOrderStatuses(args: {
     if (order && mine && [order.phone, order.shippingAddress?.phone].some((p) => digitsTail(p) === mine)) found.push(order)
   }
   return found
+}
+
+/** A registered order that is still a draft — it has no order number yet. */
+function draftStatus(createdAt: string): OrderStatus {
+  return {
+    name: 'Pedido registrado (aún sin número de pedido)', createdAt, cancelledAt: null,
+    displayFinancialStatus: 'PENDIENTE: si eligió tarjeta, el número de pedido llega por WhatsApp al confirmarse el pago con el link enviado; si es contra entrega, se confirma en breve',
+    displayFulfillmentStatus: 'UNFULFILLED', phone: null, shippingAddress: null, fulfillments: [],
+  }
 }
 
 export interface ContactOrder {
