@@ -509,16 +509,16 @@ export async function loadOrderStatuses(args: {
     // A draft is a registered order still waiting (card payment, or "Crear
     // pedidos reales" off): the customer must hear it exists, not be asked
     // for a number they never got. A completed draft reports its order.
-    const data = await shopifyGraphql<{ nodes: ((OrderStatus & { status?: string; order?: OrderStatus | null }) | null)[] }>(
+    const data = await shopifyGraphql<{ nodes: ((OrderStatus & { status?: string; tags?: string[]; order?: OrderStatus | null }) | null)[] }>(
       cfg,
-      `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } ... on DraftOrder { name createdAt status order { ${ORDER_FIELDS} } } } }`,
+      `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } ... on DraftOrder { name createdAt status tags order { ${ORDER_FIELDS} } } } }`,
       { ids },
     )
     for (const n of data.nodes) {
       if (!n?.name) continue
       if (n.status === undefined) found.push(n)
       else if (n.order) found.push(n.order)
-      else found.push(draftStatus(n.createdAt))
+      else found.push(draftStatus(n.createdAt, (n.tags ?? []).includes(CARD_TAG)))
     }
   }
   const number = text.match(/#\s?(\d{3,})/)?.[1]
@@ -534,11 +534,14 @@ export async function loadOrderStatuses(args: {
 }
 
 /** A registered order that is still a draft — it has no order number yet. */
-function draftStatus(createdAt: string): OrderStatus {
+function draftStatus(createdAt: string, card: boolean): OrderStatus {
   return {
     name: 'Pedido registrado (aún sin número de pedido)', createdAt, cancelledAt: null,
-    displayFinancialStatus: 'PENDIENTE: si eligió tarjeta, el número de pedido llega por WhatsApp al confirmarse el pago con el link enviado; si es contra entrega, se confirma en breve',
-    displayFulfillmentStatus: 'UNFULFILLED', phone: null, shippingAddress: null, fulfillments: [],
+    displayFinancialStatus: card
+      ? 'PENDIENTE con tarjeta: el número de pedido llega por WhatsApp en cuanto se pague con el link enviado'
+      : 'contra entrega, en confirmación: el número de pedido llega por WhatsApp al confirmarse',
+    displayFulfillmentStatus: card ? 'aún no se prepara (espera el pago)' : 'aún no se prepara (en confirmación)',
+    phone: null, shippingAddress: null, fulfillments: [],
   }
 }
 

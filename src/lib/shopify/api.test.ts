@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
+  buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
   completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
@@ -323,11 +323,11 @@ describe('loadOrderStatuses', () => {
     }
     const order = { id: 'gid://shopify/Order/9', name: '#1009', createdAt: '2026-11-12T00:00:00Z', cancelledAt: null, displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'UNFULFILLED', phone: null, shippingAddress: null, fulfillments: [] }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [
-      { name: '#D3', createdAt: '2026-11-12T06:05:00Z', status: 'OPEN', order: null },
+      { name: '#D3', createdAt: '2026-11-12T06:05:00Z', status: 'OPEN', tags: ['chat-sandia', CARD_TAG], order: null },
       { name: '#D2', createdAt: '2026-11-11T06:05:00Z', status: 'COMPLETED', order },
     ] } }))))
     const found = await loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone: '', text: '¿cómo va mi pedido?' })
     expect(found.map((o) => o.name)).toEqual(['Pedido registrado (aún sin número de pedido)', '#1009'])
-    expect(describeOrderStatuses(found)).toContain('el número de pedido llega por WhatsApp al confirmarse el pago')
+    expect(describeOrderStatuses(found)).toContain('PENDIENTE con tarjeta')
   })
 })
