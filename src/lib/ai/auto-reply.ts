@@ -2306,7 +2306,11 @@ For airport transport, record the guest's request in nota on the relevant existi
     // so either can fire alongside any of the above.
     if (markDealWon) {
       try {
-        await flagDealClosing({ db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId, alreadyAssigned: Boolean(conv.assigned_agent_id), isHotel })
+        // A connected store closes the sale itself (create_shopify_order): no hand-off.
+        await flagDealClosing({
+          db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), keepChat: isHotel || Boolean(shopifyOrderProposal && shopifyOrders),
+        })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] flagDealClosing failed:', err)
@@ -2464,7 +2468,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           }),
           sendText: async (contentText) => {
             await sendMessageToConversation(db, accountId, {
-              conversationId, messageType: 'text', contentText, senderType: neverSelfPause ? 'bot' : 'agent',
+              conversationId, messageType: 'text', contentText, senderType: 'bot',
             })
           },
         })
@@ -3460,11 +3464,12 @@ async function flagDealClosing(args: {
   configOwnerUserId: string
   handoffAgentId: string | null
   alreadyAssigned: boolean
-  isHotel?: boolean
+  /** Hotel or a store order: only the log, the bot keeps the chat. */
+  keepChat?: boolean
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned, isHotel = false } = args
+  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned, keepChat = false } = args
 
-  if (!isHotel) {
+  if (!keepChat) {
     await handOffToHuman({
       db,
       accountId,
@@ -3482,7 +3487,7 @@ async function flagDealClosing(args: {
     action: 'flag_deal_closing',
     target_id: conversationId,
     input: { source: 'auto_reply_autonomous' },
-    result: { conversation_id: conversationId, handed_off_to: isHotel ? null : handoffAgentId },
+    result: { conversation_id: conversationId, handed_off_to: keepChat ? null : handoffAgentId },
   })
 }
 

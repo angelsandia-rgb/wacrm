@@ -304,9 +304,9 @@ describe('pickForwardStage (shipping updates)', () => {
 describe('trackingSentence', () => {
   it('gives the guide number, carrier and link when Dropi sent them', () => {
     expect(trackingSentence({ tracking_number: 'GT123', tracking_company: 'Cargo Expreso', tracking_url: 'https://t/GT123' }))
-      .toBe('Tu número de guía es GT123 (Cargo Expreso). Puedes rastrearlo aquí: https://t/GT123')
+      .toBe('Número de guía: GT123 (Cargo Expreso). Rastreo: https://t/GT123')
   })
   it('never leaves the template parameter empty', () => {
-    expect(trackingSentence({ tracking_number: null })).toBe('El mensajero te contactará antes de la entrega.')
+    expect(trackingSentence({ tracking_number: null })).toBe('El mensajero le contactará antes de la entrega.')
   })
 })
