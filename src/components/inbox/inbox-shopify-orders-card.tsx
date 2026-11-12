@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Loader2, Plus, ShoppingBag, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -30,6 +30,19 @@ interface ContactOrder {
 }
 interface ProductOption { name: string; price: number }
 
+/** Tagged with its conversation: a late answer for a thread the agent left
+ *  never shows, because `checked` compares against the current one. */
+async function fetchOrders(id: string) {
+  try {
+    const res = await fetch(`/api/shopify/orders?conversation_id=${encodeURIComponent(id)}`)
+    const body = await readResponseJson<{ connected?: boolean; orders?: ContactOrder[] }>(res)
+    if (res.ok) return { conversationId: id, connected: Boolean(body?.connected), orders: body?.orders ?? [] }
+  } catch {
+    // Card stays hidden when the lookup fails.
+  }
+  return { conversationId: id, connected: false, orders: [] as ContactOrder[] }
+}
+
 const selectClass = 'border-input bg-background h-8 w-full rounded-lg border px-2 text-sm'
 
 /**
@@ -55,23 +68,12 @@ export function InboxShopifyOrdersCard({
   const [payment, setPayment] = useState<'cod' | 'card'>('cod')
   const [saving, setSaving] = useState(false)
 
-  const load = useCallback(async (id: string) => {
-    let next = { conversationId: id, connected: false, orders: [] as ContactOrder[] }
-    try {
-      const res = await fetch(`/api/shopify/orders?conversation_id=${encodeURIComponent(id)}`)
-      const body = await readResponseJson<{ connected?: boolean; orders?: ContactOrder[] }>(res)
-      if (res.ok) next = { conversationId: id, connected: Boolean(body?.connected), orders: body?.orders ?? [] }
-    } catch {
-      // Card stays hidden when the lookup fails.
-    }
-    // Tagged with its conversation: a late answer for a thread the agent left
-    // never shows, because `checked` below compares against the current one.
-    setResult(next)
-  }, [])
-
   useEffect(() => {
-    if (conversationId) void load(conversationId)
-  }, [conversationId, load])
+    if (!conversationId) return
+    let on = true
+    void fetchOrders(conversationId).then((r) => { if (on) setResult(r) })
+    return () => { on = false }
+  }, [conversationId])
 
   async function openForm() {
     setFullName(contactName)
@@ -105,7 +107,7 @@ export function InboxShopifyOrdersCard({
       }
       toast.success(body.order.draft ? t('createdAwaitingPayment') : t('created', { name: body.order.name }))
       setOpen(false)
-      void load(conversationId)
+      setResult(await fetchOrders(conversationId))
     } finally {
       setSaving(false)
     }

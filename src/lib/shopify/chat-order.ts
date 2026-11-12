@@ -113,8 +113,8 @@ export async function createShopifyOrderFromChat(args: {
 
   const totalText = formatCurrency(order.total, currency)
   let payLine = order.draft
-    ? `Pagas ${totalText} al recibir.`
-    : `Pagas ${totalText} al recibir. Tu número de pedido es ${order.name}: guárdalo para darle seguimiento.`
+    ? `Pago contra entrega: ${totalText}.`
+    : `Pago contra entrega: ${totalText}. Número de pedido: *${order.name}* (para darle seguimiento).`
   let paymentLink: string | null = null
   if (proposal.payment === 'card') {
     if (cfg.recurrenteSecretKey) {
@@ -128,17 +128,16 @@ export async function createShopifyOrderFromChat(args: {
       }
     }
     payLine = paymentLink
-      ? `Paga ${totalText} con tarjeta aquí: ${paymentLink} — en cuanto se confirme el pago te enviamos tu número de pedido y preparamos tu envío.`
-      : `Un asesor te enviará por aquí el link de pago con tarjeta por ${totalText}.`
+      ? `Pago con tarjeta (${totalText}) en este link seguro: ${paymentLink} — al confirmarse el pago llega por aquí el número de pedido y se prepara el envío.`
+      : `En breve llega por aquí el link de pago con tarjeta por ${totalText}.`
   }
   try {
     // A draft's "#D3" isn't the order number the customer tracks; the real
     // one comes with the payment confirmation (recurrente-webhook).
     const heading = order.draft ? '✅ Pedido registrado' : `✅ Pedido ${order.name} confirmado`
-    await sendText(
-      `${heading}: ${label}. Envío a ${proposal.address}, ${proposal.departamento}. ${payLine} ` +
-      'Cuando quieras saber cómo va tu pedido, escríbenos por aquí.',
-    )
+    const where = proposal.address.toLowerCase().includes(proposal.departamento.toLowerCase())
+      ? proposal.address : `${proposal.address}, ${proposal.departamento}`
+    await sendText(`${heading}: ${label}. Envío a ${where}. ${payLine} Para saber cómo va el pedido, basta con escribir por aquí.`)
   } catch (err) {
     console.error('[shopify] order confirmation send failed:', err)
   }

@@ -60,7 +60,7 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
       messageType: 'template', templateName: 'pedido_enviado',
-      templateParams: ['Ángel', '#1001', 'Tu número de guía es GT9 (Forza).'],
+      templateParams: ['Ángel', '#1001', 'Número de guía: GT9 (Forza).'],
     }))
   })
 
@@ -68,7 +68,7 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
     m.inWindow = true
     await hook('fulfillments/create', { order_id: 77, name: '#1001.1', tracking_number: 'GT9' })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
-      messageType: 'text', contentText: '🚚 Tu pedido #1001 ya va en camino. Tu número de guía es GT9.',
+      messageType: 'text', contentText: '🚚 Su pedido #1001 ya va en camino. Número de guía: GT9.',
     }))
   })
 
@@ -117,7 +117,7 @@ describe('Shopify webhook — orders/updated (the admin "Actualización de pedid
     })
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
-      contentText: '🚚 Tu pedido #1001 ya va en camino. Tu número de guía es GT9.',
+      contentText: '🚚 Su pedido #1001 ya va en camino. Número de guía: GT9.',
     }))
   })
 

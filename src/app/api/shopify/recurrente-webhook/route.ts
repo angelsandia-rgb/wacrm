@@ -80,8 +80,8 @@ export async function POST(request: Request) {
       const { conversationId } = await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)
       await sendMessageToConversation(db, accountId, {
         conversationId, messageType: 'text', senderType: 'bot',
-        contentText: `✅ Recibimos tu pago de ${formatCurrency(total, checkout.currency)}. Tu pedido ${order.name} quedó confirmado y ya lo preparamos para envío. ` +
-          `${order.name} es tu número de pedido: cuando quieras saber cómo va, escríbenos por aquí.`,
+        contentText: `✅ Recibimos su pago de ${formatCurrency(total, checkout.currency)}. Su pedido quedó confirmado y ya lo preparamos para envío. ` +
+          `Número de pedido: *${order.name}*. Para saber cómo va, basta con escribir por aquí.`,
       })
     }
   } catch (err) {
