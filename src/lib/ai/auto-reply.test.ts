@@ -5125,6 +5125,21 @@ describe('dispatchInboundToAiReply — hotel: a teammate already answered (owner
 
 describe('hotel discreet assistance regression', () => {
   beforeEach(() => { h.state.account = { default_currency: 'GTQ', industry_vertical: 'hotel' } })
+  it('saves Aura Marina answering the bot even after an earlier reception handoff', async () => {
+    h.state.conv = { assigned_agent_id: 'ana', ai_autoreply_disabled: false, ai_reply_count: 1, ai_handoff_summary: '🤝 Pendiente de recepción. Solicitud.', ai_handoff_at: '2026-11-11T02:00:00Z' }
+    h.teammateTookOver.mockResolvedValue(true)
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'Si desean 2 suites dobles, indíqueme por favor para cuántas personas en total serían y su nombre, para dejar la solicitud lista.', createdAt: '2026-11-11T03:13:57Z' },
+      { role: 'user', content: 'Somos cuatro adultos y mi nombre es Aura Marina Gómez', createdAt: '2026-11-11T03:15:24Z' },
+    ])
+    h.generateReply.mockResolvedValue({ text: 'Gracias, Sra. Aura Marina. La solicitud de dos suites para cuatro adultos queda pendiente de disponibilidad.', handoff: false, markDealWon: false, moveToStageName: null,
+      contactName: 'Aura Marina Gómez', reservationProposals: [{ category: 'habitaciones', fields: { servicio: 'Suite Clásica Doble', personas: '4', adultos: '4', habitaciones: '2' }, confirmed: false }] })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining('HOTEL INTAKE ANSWER') }))
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(expect.anything(), ARGS.accountId, expect.objectContaining({ guests: 4, adults: 4, rooms: 2 }))
+    expect(h.state.contactUpdates).toContainEqual(expect.objectContaining({ name: 'Aura Marina Gómez' }))
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
   it('acknowledges a cancellation for hotel review without executing it after the staff window', async () => {
     h.teammateTookOver.mockResolvedValue(true)
     h.buildConversationContext.mockResolvedValue([{ role: 'assistant', content: 'Si hay Sr Santoyo las reservo' }, { role: 'user', content: 'Mañana cancelado' }])
@@ -5768,6 +5783,34 @@ describe('hotel reception notifications for assigned chats', () => {
 
 
 describe('Richard room recommendation with an estimate', () => {
+  it.each([
+    ['14-15 noviembre', '2026-11-14', '2026-11-15'],
+    ['Solo para una persona llego jueves y me retiro sábado', '2026-11-12', '2026-11-14'],
+  ])('retains the understood date range instead of erasing checkout: %s', async (answer, entrada, salida) => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero hospedaje para una persona' }, { role: 'assistant', content: 'Indíqueme la fecha de entrada y la fecha de salida.' }, { role: 'user', content: answer }])
+    h.generateReply.mockResolvedValue({ text: 'Para su estadía, el hotel confirma el total según la habitación elegida.', handoff: false, markDealWon: false, moveToStageName: null,
+      reservationProposals: [{ category: 'habitaciones', fields: { entrada, salida, personas: '1' }, confirmed: false }] })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.upsertReservationRequest).toHaveBeenCalledWith(expect.anything(), ARGS.accountId, expect.objectContaining({ check_in: entrada, check_out: salida }))
+    expect(h.engineSendText.mock.calls.map(c => c[0].text).join(' ')).not.toContain('Qué fecha de salida desea')
+  })
+  it('replaces a model-priced recommendation using the actual adult occupancy (Katie)', async () => {
+    h.state.products = [{ id: 'junior', name: 'Junior Suite Familiar', category_id: 'rooms' }]
+    h.state.reservationRow = { id: 'rr-katie', product_id: null, service_name: null, guests: 3, check_in: '2026-11-14', check_out: '2026-11-15', category: 'habitaciones' }
+    h.state.productRates = [
+      { day_of_week: 'sat', occupancy: 'group', price: 1125, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'child', price: 200, date_from: null, date_to: null },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Buen día precio hospedaje 3 adultos' }, { role: 'user', content: '14-15 noviembre' }])
+    h.generateReply.mockResolvedValue({ text: 'La opción que se ajusta es la Junior Suite Familiar, Q1,500 para 5 personas.', handoff: false, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    const text = h.engineSendText.mock.calls[0]?.[0]?.text
+    expect(text).toContain('1,125')
+    expect(text).not.toContain('1,500')
+    expect(text).not.toContain('5 personas')
+    expect(h.upsertReservationRequest).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-18T03:00:00Z'))

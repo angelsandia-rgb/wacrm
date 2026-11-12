@@ -5467,3 +5467,34 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   envió el catálogo. Ahora (`src/lib/ai/auto-reply.ts`) se envía el catálogo
   con una línea breve; la excepción de foto solo-marcador aplica a todas las
   verticales y "catalofo" cuenta como pedido de catálogo.
+
+### 2026-11-11 — Codex (cuatro correcciones de atención del hotel)
+
+- **Fechas:** el control de duración acepta rangos como `14-15 noviembre`
+  y salidas como `me retiro sábado` o `salimos el sábado`. Conserva la
+  salida interpretada y sigue bloqueando noches inferidas de una sola fecha.
+- **Tarifas por ocupación:** una recomendación con precio del modelo también
+  pasa por el cálculo estructurado. Se reemplaza la recomendación tarifada
+  por el importe verificado para las fechas y ocupación reales. El caso de
+  Katie (3 adultos, 14–15/11) usa Q1,125; no Q1,500 para otra ocupación.
+  Solo se recupera el número de adultos de una declaración explícita del
+  huésped, sin asumir que un total de personas significa adultos.
+- **Continuidad de datos:** una petición del bot sin signos de pregunta
+  (`indíqueme ... personas ... nombre`) también admite la respuesta. Si
+  contesta a esa petición después de una derivación automática, se permite
+  guardar la solicitud; no se descartan sus acciones como mera información.
+  Se mantienen las pausas manuales y las decisiones operativas de recepción.
+- **Cotizaciones:** las preguntas repetidas del bot no reinician la elección
+  del cliente. Se reconocen `Sí una nueva`, `Nueva solicitud` y la cotización
+  prometida que aún no se envió. Una respuesta ambigua después de la primera
+  pregunta se deriva con contexto, sin repetir indefinidamente la pregunta.
+
+Pruebas de regresión con los casos de Katie, Aura Marina y Amaya, rangos
+cortos y salida expresada como día de la semana. Sin migraciones ni cambios
+de tarifas, reservas o mensajes reales. Despliegue pendiente del merge.
+
+Validación: 2,904 pruebas completas y 455 específicas en verde, TypeScript,
+lint sin errores y build de producción correcto. La suite completa usa
+`--testTimeout=30000` por el tiempo del análisis de traducciones en Windows.
+`package-lock.json` sin cambios. `graphify update .` no pudo arrancar por
+su entorno uv local roto.

@@ -4,6 +4,12 @@ import type { ChatMessage } from './types'
 const user = (content: string): ChatMessage => ({ role: 'user', content })
 const ask: ChatMessage = { role: 'assistant', content: EVENT_TRIAGE_QUESTION }
 describe('event quotation triage', () => {
+  it.each(['Si una nueva', 'Nueva solicitud'])('remembers Amaya choosing a new request: %s', text => {
+    expect(hotelEventTriage([user('Evento'), ask, user(text), ask, user('Para 14 personas')])).toBe('new')
+  })
+  it('recognizes a missing promised quotation without asking its status again', () => {
+    expect(hotelEventTriage([user('Evento'), ask, user('Buenas noches no me han enviado la cotización solicitada')])).toBe('existing')
+  })
   it('does not restart intake for an event whose quote staff already manage', () => {
     expect(hotelEventTriage([{ role: 'assistant', senderType: 'agent', content: 'Por favor para modificar su cotizacion' }, user('Gracias el día del evento le puedo realizar el pago'), { role: 'assistant', senderType: 'agent', content: 'Si asi es' }, user('Muy amable')])).toBe('existing')
   })
@@ -28,13 +34,13 @@ describe('event quotation triage', () => {
     expect(hotelEventTriage([user('Boda'), ask, user(text)])).toBe('new')
   })
   it.each(['Si', 'No tengo cotizacion', '50 personas'])('does not assume new from ambiguity: %s', text => {
-    expect(hotelEventTriage([user('Evento'), ask, user(text)])).toBe('ask')
+    expect(hotelEventTriage([user('Evento'), ask, user(text)])).toBe('existing')
   })
   it('retains the new request across intake turns', () => {
     expect(hotelEventTriage([user('Quiero cotizar una boda'), { role: 'assistant', content: 'Para que fecha?' }, user('El 25 para 50 personas')])).toBe('new')
   })
   it('does not treat bot descriptions as customer selections', () => {
-    expect(hotelEventTriage([user('Evento'), ask, user('Si')])).toBe('ask')
+    expect(hotelEventTriage([user('Evento'), ask, user('Si')])).toBe('existing')
   })
   it('drops event state when the customer changes topic', () => {
     expect(hotelEventTriage([user('Mi cotizacion de boda'), user('Quiero una habitacion')])).toBe('none')

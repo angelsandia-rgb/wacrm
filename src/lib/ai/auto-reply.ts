@@ -9,7 +9,7 @@ import { hotelEventTriage, EVENT_TRIAGE_QUESTION, eventFollowupLine } from './ho
 import { roomBannerVariant } from './hotel-room-banner'
 import { withinAiAttentionHours, OutsideAiAttentionHours } from './auto-reply-schedule'
 import { repairHotelPartyFields } from './hotel-party'
-import { shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest, HOTEL_RECEPTION_PENDING_PREFIX, HOTEL_FAMILY_LODGING_POLICY } from './hotel-assistance'
+import { answersHotelIntakeQuestion, shouldDeferHotelStaffFollowup, hasUnconfirmedStayDuration, hotelReceptionReason, hotelCurrentRequest, isHotelReceptionPending, isAlreadyHandedOffRequest, HOTEL_RECEPTION_PENDING_PREFIX, HOTEL_FAMILY_LODGING_POLICY } from './hotel-assistance'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { waitForQuietPeriod } from './debounce'
@@ -839,11 +839,15 @@ export async function dispatchInboundToAiReply(
 
     // Deterministic reception routing precedes rate-limit/provider fallbacks:
     // an operation that belongs to staff must not produce a guest message.
-    const receptionPending = neverSelfPause && isHotelReceptionPending(conv.ai_handoff_summary)
+    const receptionCasePending = neverSelfPause && isHotelReceptionPending(conv.ai_handoff_summary)
     // Wait for a new inbound, including when a policy update makes an old
     // reception case newly eligible. Never replay that old message on recovery.
-    if (receptionPending && isAlreadyHandedOffRequest(messages, conv.ai_handoff_at)) return
-    const requestMessages = receptionPending ? hotelCurrentRequest(messages, conv.ai_handoff_at) : messages
+    if (receptionCasePending && isAlreadyHandedOffRequest(messages, conv.ai_handoff_at)) return
+    const requestMessages = receptionCasePending ? hotelCurrentRequest(messages, conv.ai_handoff_at) : messages
+    // A new answer to the bot's own intake may be saved. It is not an
+    // unrelated informational turn that must discard reservation actions.
+    const intakeAnswer = neverSelfPause && answersHotelIntakeQuestion(requestMessages, messages)
+    const receptionPending = receptionCasePending && !intakeAnswer
     if (neverSelfPause && hotelChangeRequest(requestMessages)) {
       const alreadyAcknowledged = receptionPending || previousAssistantMessage(messages).includes('le confirmar\u00e1 si es posible realizarla')
       if (!alreadyAcknowledged) {
@@ -1168,11 +1172,15 @@ export async function dispatchInboundToAiReply(
       : ''
     const confirmationNote = isHotel ? hotelAvailabilityCommitment(businessTimeZone) : ''
     const eventNote = newEvent ? 'EVENT NEW QUOTATION: The guest explicitly requests a NEW event quotation. Continue assisting and collect only missing event type, date, guest count and service needs. Do not route merely because this is an event or group quotation. Never invent prices, capacity or confirmed availability. Existing quotes and quote numbers belong to hotel staff. Do not send lodging banners for event inquiries.' : ''
-    const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : '', isHotel ? HOTEL_FAMILY_LODGING_POLICY : ''].filter(Boolean).join('\n\n')
+    const intakeNote = intakeAnswer ? 'HOTEL INTAKE ANSWER: The customer is answering your own previous request for booking details. Reuse and save the supplied dates, headcount and name with record_reservation. Ask only for missing details. Do not hand off merely because staff participated earlier. Availability, payments and booking changes still belong to reception.' : ''
+    const systemPrompt = [baseSystemPrompt, confirmationNote, eventNote, intakeNote, isHotel ? recentExchangeNote(messages) : '', teammateNote, receptionNote, isHotel ? HOTEL_DIRECT_SERVICE_POLICY : '', isHotel ? HOTEL_FAMILY_LODGING_POLICY : ''].filter(Boolean).join('\n\n')
 
     let generation: GenerateResult
     try {
       generation = await generateReplyWithOneRetry({ config, systemPrompt, messages })
+      if (intakeAnswer && generation.handoff) {
+        generation = await generateReplyWithOneRetry({ config, systemPrompt: systemPrompt + '\nThe latest message answers your own intake request. Save those details before preparing the pending request for reception; do not discard them with a bare handoff.', messages })
+      }
     } catch (err) {
       if (err instanceof OutsideAiAttentionHours) throw err
       // The provider call failed even after the transient-error retry.
@@ -1373,7 +1381,7 @@ For airport transport, record the guest's request in nota on the relevant existi
         ...generation,
         reservationProposals: (generation.reservationProposals ?? []).map((proposal) =>
           isStayCategoryName(proposal.category)
-            ? { ...proposal, fields: repairHotelPartyFields(proposal.fields) }
+            ? { ...proposal, fields: repairHotelPartyFields(proposal.fields, messages) }
             : proposal),
       }
     }
@@ -2098,17 +2106,20 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     let recommendedRoomQuestion: string | undefined
     let recommendedRoomEstimateAdded = false
-    if (isHotel && !receptionPending && !staffQuotedPrice && mentionedAmounts(outboundText).length === 0
+    if (isHotel && !receptionPending && !staffQuotedPrice
       && reservationProposals.filter(p => isStayCategoryName(p.category)).length === savedStays.length
       && !isClosingMessage(latestUserMessage(messages))
       && !isSpecialRateTalk(messages.filter(m => m.role === 'user').map(m => m.content))) {
       try {
         const recommended = await loadRecommendedRoomEstimate({ db, accountId, conversationId,
           roomNames: hotelCategoryProductNames.get('habitaciones') ?? [], modelText: outboundText,
-          todayISO: dateKeyInZone(new Date(), businessTimeZone), currency: hotelCurrency, english: isEnglishText(outboundText) })
-        if (recommended && !messages.some(m => m.role === 'assistant' && m.content.includes(recommended.text))) {
+          todayISO: dateKeyInZone(new Date(), businessTimeZone), currency: hotelCurrency, english: isEnglishText(outboundText), messages })
+        const hasModelPrices = mentionedAmounts(outboundText).length > 0
+        if (recommended && (hasModelPrices || !messages.some(m => m.role === 'assistant' && m.content.includes(recommended.text)))) {
           recommendedRoomEstimateAdded = true
-          outboundText = [outboundText, recommended.text].join('\n\n')
+          // A recommendation's model-written amount/occupancy is not a quote.
+          // Replace the whole priced recommendation, not just its currency token.
+          outboundText = hasModelPrices ? recommended.text : [outboundText, recommended.text].join('\n\n')
           if (!/[?\u00bf]/.test(outboundText)) recommendedRoomQuestion = recommended.question
         }
       } catch (err) {
