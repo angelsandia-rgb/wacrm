@@ -3,11 +3,13 @@ import { formatCurrency } from '@/lib/currency'
 import { formatDateEs } from '@/lib/products/rates'
 import { loadStayPricingInputs, priceStay, type StayForPricing } from '@/lib/reservations/price'
 import { replyNamesProduct } from './hotel-media-intent'
+import { explicitAdultOnlyParty } from './hotel-party'
+import type { ChatMessage } from './types'
 
 /** Quote a suggested room as an alternative, never select it or update the request. */
 export async function loadRecommendedRoomEstimate(args: {
   db: SupabaseClient; accountId: string; conversationId: string; roomNames: string[]
-  modelText: string; todayISO: string; currency: string; english?: boolean
+  modelText: string; todayISO: string; currency: string; english?: boolean; messages?: ChatMessage[]
 }): Promise<{ text: string; question: string; productName: string; total: number } | null> {
   const { db, accountId, conversationId, roomNames, modelText, todayISO, currency, english } = args
   if (!roomNames.length || !/opci[o\u00f3]n|recomiend|alternativa|le ofrecemos|se ajusta|le encaja|ideal|option|recommend|good fit/i.test(modelText)) return null
@@ -17,6 +19,7 @@ export async function loadRecommendedRoomEstimate(args: {
     .eq('status', 'pending').eq('is_active_build', true).maybeSingle()
   if (error || !stay || stay.product_id || stay.service_name?.trim() || stay.guest_confirmed_at
     || !stay.check_in || !stay.check_out || stay.check_in < todayISO || !stay.guests || (stay.rooms ?? 1) !== 1) return null
+  const pricingStay = { ...stay, adults: stay.adults ?? explicitAdultOnlyParty(args.messages ?? [], stay.guests) }
   const { data: products, error: productError } = await db.from('products').select('id, name')
     .eq('account_id', accountId).eq('is_active', true)
   if (productError) return null
@@ -30,7 +33,8 @@ export async function loadRecommendedRoomEstimate(args: {
     if (/\bno (?:hay|tenemos|ofrecemos|recomiendo)|sin disponibilidad|agotad|vendid/.test(clause)
       || /^\s*(?:ya )?(?:no esta|esta agotada|esta vendida|sin disponibilidad)/.test(after)) continue
     const { rates, maxGuests } = await loadStayPricingInputs(db, accountId, product.id)
-    const quote = priceStay(rates, stay as StayForPricing, maxGuests)
+    if (rates.some(r => r.requires_confirmation && r.date_from && r.date_to && r.date_from < stay.check_out && r.date_to >= stay.check_in)) continue
+    const quote = priceStay(rates, pricingStay as StayForPricing, maxGuests)
     if (quote.kind !== 'quoted' || !quote.nights.length || quote.missing.length || quote.partial.length || quote.total <= 0) continue
     const total = quote.total * quote.rooms
     const amount = formatCurrency(total, currency)

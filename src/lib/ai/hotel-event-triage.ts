@@ -17,7 +17,8 @@ export function hotelEventTriage(messages: ChatMessage[]): EventTriage {
       // Staff taking up the quote mid-intake also makes it theirs (VSR 2026-11-06:
       // "se estará enviando su cotización" → guest thanks → bot re-asked triage).
       if (message.senderType === 'agent' && /\b(?:cotiz\w*|presupuesto|propuesta)\b/.test(text)) { staffQuote = true; if (state === 'ask') state = 'existing' }
-      if (message.senderType !== 'agent' && message.content === EVENT_TRIAGE_QUESTION) { state = 'ask'; asked = true }
+      // Repeated bot questions must not erase a choice the guest made.
+      if (message.senderType !== 'agent' && message.content === EVENT_TRIAGE_QUESTION) { if (state === 'none') state = 'ask'; asked = true }
       continue
     }
     if (EVENT.test(text)) { if (state === 'none') state = staffQuote ? 'existing' : 'ask' }
@@ -25,14 +26,15 @@ export function hotelEventTriage(messages: ChatMessage[]): EventTriage {
     if (state === 'none') continue
     const noQuote = /\b(no tengo|no tenemos|aun no tengo|todavia no tengo)\b/.test(text)
     const newQuote = /\b(?:quiero|quisiera|deseo|necesito|queremos|solicitar|solicito) (?:una |que me |que nos )?(?:cotiz\w*|presupuesto)\b|\bcotiz\w* nueva\b|\bnueva cotiz\w*\b/.test(text)
-    const existing = !noQuote && (/\b(?:mi|nuestra) cotizacion\b|\b(?:tengo|tenemos|ya tengo|ya tenemos) (?:el |un |una )?(?:numero|cotizacion)\b|\b(?:cotizacion|tramite) (?:esta |sigue )?(?:en curso|en proceso|pendiente)\b|\bya (?:me |nos )?(?:cotizaron|enviaron la cotizacion)\b/.test(text)
+    const existing = !noQuote && (/\b(?:mi|nuestra) cotizacion\b|\b(?:tengo|tenemos|ya tengo|ya tenemos) (?:el |un |una )?(?:numero|cotizacion)\b|\b(?:cotizacion|tramite) (?:esta |sigue )?(?:en curso|en proceso|pendiente)\b|\bya (?:me |nos )?(?:cotizaron|enviaron la cotizacion)\b|\bno (?:me|nos) han enviado la cotizacion\b/.test(text)
       || /\b(?:en curso|en proceso|en tramite)\b|\b(?:numero|cotizacion|folio)\s*[:#-]?\s*[a-z]*[-/]?\d+\b/.test(text)
       || (asked && /^(?:\s*\d{3,}\s*|pendiente)$/.test(text)))
     if (existing) state = 'existing'
-    else if (newQuote || (asked && /^(?:cotizar|nueva|deseo cotizar)[.!\s]*$/.test(text))) state = 'new'
+    else if (newQuote || (asked && /^(?:(?:si[,.]?\s+)?(?:una\s+)?nueva(?:\s+solicitud)?|cotizar|deseo cotizar)[.!\s]*$/.test(text.trim()))) state = 'new'
     else if (noQuote) state = 'ask'
   }
-  return state
+  // Route an ambiguous answer after the one status question to staff.
+  return state === 'ask' && asked ? 'existing' : state
 }
 
 export function eventFollowupLine(afterHours: boolean): string {

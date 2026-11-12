@@ -4,6 +4,15 @@ import type { ChatMessage } from './types'
 const user = (content: string): ChatMessage => ({ role: 'user', content })
 
 describe('guest answers to Angela intake questions', () => {
+  it('accepts Aura Marina answering a request without question marks', () => {
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: 'Si desean 2 suites dobles, indíqueme por favor para cuántas personas en total serían y su nombre, para dejar la solicitud lista.' },
+      user('Somos cuatro adultos y mi nombre es Aura Marina Gómez'),
+    ]
+    expect(shouldDeferHotelStaffFollowup(messages, true)).toBe(false)
+    expect(shouldDeferHotelStaffFollowup([messages[1]], true, messages)).toBe(false)
+    expect(shouldDeferHotelStaffFollowup(messages, true, [{ ...messages[0], senderType: 'agent' }, messages[1]])).toBe(true)
+  })
   const question: ChatMessage = { role: 'assistant', content: 'Para 2 y 3 noches, ¿qué fecha de entrada tienen prevista? El hotel confirmará el total.', createdAt: '2026-10-22T05:18:00Z' }
   const answer = { ...user('Entrada 30 de diciembre'), createdAt: '2026-10-22T06:14:00Z' }
   it('accepts Joyce arrival date even when the pending-case context contains only that answer', () => {
@@ -55,6 +64,12 @@ describe('staff-owned hotel conversations', () => {
   })
 })
 describe('explicit stay length', () => {
+  it.each(['14-15 noviembre', 'Solo para una persona llego jueves y me retiro sábado', 'Llegamos jueves y salimos el sábado'])('accepts the actual guest departure: %s', text => {
+    expect(hasUnconfirmedStayDuration([user('Precio de hospedaje para noviembre'), user(text)])).toBe(false)
+  })
+  it('does not mistake a single numeric arrival date for a range', () => {
+    expect(hasUnconfirmedStayDuration([user('Entrada 14-11-2026')])).toBe(true)
+  })
   it('does not infer Fanny’s checkout from her arrival date and guest count', () => {
     expect(hasUnconfirmedStayDuration([user('Estoy interesada en alojamiento para el domingo 18 de octubre'), user('Somos 3 adultos y 2 niños de 4 y 2 años')])).toBe(true)
   })
