@@ -368,6 +368,13 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
 export const ORDERS_PIPELINE_NAME = 'Pedidos'
 export const ORDER_PLACED_STAGE_NAME = 'Pedido creado'
 export const PAYMENT_CONFIRMED_STAGE_NAME = 'Pago confirmado'
+export const SHIPPED_STAGE_NAME = 'Enviado'
+export const DELIVERED_STAGE_NAME = 'Entregado'
+/** Approved WhatsApp UTILITY template (Settings → Plantillas) used to tell a
+ *  customer outside the 24 h window that their order shipped. Params: name,
+ *  order number, tracking sentence. */
+// ponytail: fixed template name per convention; make it a shopify_config column when a second store needs another name.
+export const SHIPPED_TEMPLATE_NAME = 'pedido_enviado'
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
 
@@ -385,10 +392,28 @@ export function pickOrderStage<T extends { name?: unknown }>(stages: T[]): T | n
 export function pickPaidStage<T extends { id: string; name?: unknown; position?: unknown }>(
   stages: T[], currentStageId: string | null,
 ): T | null {
-  const paid = stages.find((s) => sameName(s.name, PAYMENT_CONFIRMED_STAGE_NAME))
-  if (!paid || paid.id === currentStageId) return null
+  return pickForwardStage(stages, currentStageId, PAYMENT_CONFIRMED_STAGE_NAME)
+}
+
+/** The stage named `name` when it is ahead of the deal's current stage; null
+ *  when missing, current, or behind (a late/duplicate webhook never moves a
+ *  deal backwards, and a null result means "nothing new to tell the customer"). */
+export function pickForwardStage<T extends { id: string; name?: unknown; position?: unknown }>(
+  stages: T[], currentStageId: string | null, name: string,
+): T | null {
+  const target = stages.find((s) => sameName(s.name, name))
+  if (!target || target.id === currentStageId) return null
   const current = stages.find((s) => s.id === currentStageId)
-  return current && Number(current.position) >= Number(paid.position) ? null : paid
+  return current && Number(current.position) >= Number(target.position) ? null : target
+}
+
+/** Pure: the tracking sentence of a shipped-order message. */
+export function trackingSentence(f: { tracking_company?: string | null; tracking_number?: string | null; tracking_url?: string | null }): string {
+  if (f.tracking_number) {
+    const via = f.tracking_company ? ` (${f.tracking_company})` : ''
+    return `Tu número de guía es ${f.tracking_number}${via}.${f.tracking_url ? ` Puedes rastrearlo aquí: ${f.tracking_url}` : ''}`
+  }
+  return 'El mensajero te contactará antes de la entrega.'
 }
 
 /** Point the contact's open deal at this order (or open one in the
@@ -444,6 +469,7 @@ export function verifyShopifyHmac(rawBody: string, header: string | null, secret
 // ------------------------------------------------------------ order status
 
 export interface OrderStatus {
+  id?: string
   name: string
   createdAt: string
   cancelledAt: string | null
@@ -454,7 +480,7 @@ export interface OrderStatus {
   fulfillments: { displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[]
 }
 
-const ORDER_FIELDS = `name createdAt cancelledAt displayFinancialStatus displayFulfillmentStatus phone
+const ORDER_FIELDS = `id name createdAt cancelledAt displayFinancialStatus displayFulfillmentStatus phone
   shippingAddress { phone }
   fulfillments(first: 5) { displayStatus trackingInfo { company number url } }`
 
@@ -496,6 +522,47 @@ export async function loadOrderStatuses(args: {
     if (order && mine && [order.phone, order.shippingAddress?.phone].some((p) => digitsTail(p) === mine)) found.push(order)
   }
   return found
+}
+
+export interface ContactOrder {
+  shopifyId: string
+  title: string
+  total: number
+  /** A card order still waiting for its Recurrente payment (a draft). */
+  awaitingPayment: boolean
+  status: OrderStatus | null
+}
+
+/** The contact's Shopify orders for the inbox card ("¿cómo va la compra?"):
+ *  every deal pointing at an order or a draft, newest first, with the live
+ *  payment/preparation/tracking state of the real orders. Null when the
+ *  account has no store connected. */
+export async function listContactOrders(db: SupabaseClient, accountId: string, contactId: string): Promise<ContactOrder[] | null> {
+  const cfg = await loadShopifyConfig(db, accountId)
+  if (!cfg) return null
+  const { data: deals } = await db
+    .from('deals').select('title, value, shopify_order_id')
+    .eq('account_id', accountId).eq('contact_id', contactId).not('shopify_order_id', 'is', null)
+    .order('updated_at', { ascending: false }).limit(5)
+  const rows = deals ?? []
+  const ids = rows.map((d) => d.shopify_order_id as string).filter((id) => id.includes('/Order/'))
+  const byId = new Map<string, OrderStatus>()
+  if (ids.length) {
+    const data = await shopifyGraphql<{ nodes: (OrderStatus | null)[] }>(
+      cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } } }`, { ids },
+    )
+    for (const n of data.nodes) if (n?.id) byId.set(n.id, n)
+  }
+  return rows.map((d) => {
+    const id = d.shopify_order_id as string
+    return {
+      shopifyId: id,
+      title: d.title as string,
+      total: Number(d.value) || 0,
+      awaitingPayment: id.includes('/DraftOrder/'),
+      status: byId.get(id) ?? null,
+    }
+  })
 }
 
 /** One prompt line per order — data for the model, not instructions. */

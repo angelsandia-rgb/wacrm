@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useCan } from '@/hooks/use-can';
 import { InboxPatientCard } from '@/components/clinic/inbox-patient-card';
 import { InboxReservationsCard } from '@/components/hotel/inbox-reservations-card';
+import { InboxShopifyOrdersCard } from '@/components/inbox/inbox-shopify-orders-card';
 import { formatCurrency, CURRENCIES } from '@/lib/currency';
 import type {
   Contact,
@@ -640,6 +641,7 @@ export function ContactSidebar({
 
           <InboxPatientCard contactId={contact.id} />
           <InboxReservationsCard conversationId={conversationId} />
+          <InboxShopifyOrdersCard conversationId={conversationId} contactName={displayName} contactPhone={phone} />
 
           {/* Phone — always shown and editable, even for an
               Instagram/Facebook contact with no phone identity yet, so

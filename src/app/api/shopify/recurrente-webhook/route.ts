@@ -8,7 +8,10 @@ import {
 } from '@/lib/shopify/api'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const PAID_EVENTS = new Set(['intent.succeeded', 'payment_intent.succeeded'])
+// The checkout also offers bank transfer (payment_method_types card +
+// bank_transfer + balance), which reports through its own event. Safe to
+// widen: the payment state is always re-read from Recurrente below.
+const PAID_EVENTS = new Set(['intent.succeeded', 'payment_intent.succeeded', 'bank_transfer_intent.succeeded'])
 
 /**
  * Recurrente webhook (Settings → Shopify shows the URL, with `?account=`).
@@ -77,7 +80,8 @@ export async function POST(request: Request) {
       const { conversationId } = await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)
       await sendMessageToConversation(db, accountId, {
         conversationId, messageType: 'text', senderType: 'bot',
-        contentText: `✅ Recibimos tu pago de ${formatCurrency(total, checkout.currency)}. Tu pedido ${order.name} quedó confirmado y ya lo preparamos para envío.`,
+        contentText: `✅ Recibimos tu pago de ${formatCurrency(total, checkout.currency)}. Tu pedido ${order.name} quedó confirmado y ya lo preparamos para envío. ` +
+          `${order.name} es tu número de pedido: cuando quieras saber cómo va, escríbenos por aquí.`,
       })
     }
   } catch (err) {

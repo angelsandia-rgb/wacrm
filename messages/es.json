@@ -3147,5 +3147,35 @@
       "viewPatient": "Ver paciente",
       "newAppt": "Nueva cita"
     }
+  },
+  "ShopifyOrders": {
+    "title": "Pedidos Shopify",
+    "create": "Crear pedido",
+    "none": "Sin pedidos todavía.",
+    "awaitingPayment": "Esperando pago con tarjeta",
+    "cancelled": "Cancelado",
+    "payment": "Pago: {status}",
+    "preparation": "Preparación: {status}",
+    "delivery": "Entrega: {status}",
+    "tracking": "Guía:",
+    "formTitle": "Crear pedido en Shopify",
+    "products": "Productos",
+    "pickProduct": "Elige un producto",
+    "qty": "Cantidad",
+    "removeLine": "Quitar producto",
+    "addLine": "Agregar producto",
+    "fullName": "Nombre completo",
+    "phone": "Teléfono",
+    "address": "Dirección de entrega",
+    "departamento": "Departamento o municipio",
+    "paymentMethod": "Forma de pago",
+    "cod": "Contra entrega",
+    "card": "Tarjeta (link de Recurrente)",
+    "totalHint": "Total: {total}. El cliente recibe por WhatsApp la confirmación con su número de pedido.",
+    "cancel": "Cancelar",
+    "submit": "Crear y enviar por WhatsApp",
+    "created": "Pedido {name} creado y enviado al cliente",
+    "createdAwaitingPayment": "Pedido creado: se envió el link de pago al cliente",
+    "createFailed": "No se pudo crear el pedido"
   }
 }
