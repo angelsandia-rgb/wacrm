@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, pickPaidStage, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -282,5 +282,31 @@ describe('paid card order stage', () => {
   })
   it('leaves pipelines without that stage alone', () => {
     expect(pickPaidStage(stages.filter((s) => s.id !== 's3'), 's2')).toBeNull()
+  })
+})
+
+describe('pickForwardStage (shipping updates)', () => {
+  const stages = [
+    { id: 's1', name: 'Consulta', position: 0 }, { id: 's2', name: 'Pedido creado', position: 1 },
+    { id: 's3', name: 'Pago confirmado', position: 2 }, { id: 's4', name: 'Enviado', position: 3 },
+    { id: 's5', name: 'Entregado', position: 4 },
+  ]
+  it('moves an order forward to Enviado / Entregado', () => {
+    expect(pickForwardStage(stages, 's2', 'Enviado')?.id).toBe('s4')
+    expect(pickForwardStage(stages, 's4', 'Entregado')?.id).toBe('s5')
+  })
+  it('returns null for a repeated or late update, so the customer is not told twice', () => {
+    expect(pickForwardStage(stages, 's4', 'Enviado')).toBeNull()
+    expect(pickForwardStage(stages, 's5', 'Enviado')).toBeNull()
+  })
+})
+
+describe('trackingSentence', () => {
+  it('gives the guide number, carrier and link when Dropi sent them', () => {
+    expect(trackingSentence({ tracking_number: 'GT123', tracking_company: 'Cargo Expreso', tracking_url: 'https://t/GT123' }))
+      .toBe('Tu número de guía es GT123 (Cargo Expreso). Puedes rastrearlo aquí: https://t/GT123')
+  })
+  it('never leaves the template parameter empty', () => {
+    expect(trackingSentence({ tracking_number: null })).toBe('El mensajero te contactará antes de la entrega.')
   })
 })

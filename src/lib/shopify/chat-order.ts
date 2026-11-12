@@ -26,8 +26,13 @@ export async function createShopifyOrderFromChat(args: {
   proposal: NonNullable<GenerateResult['shopifyOrderProposal']>
   handoff: (reason: string) => Promise<void>
   sendText: (text: string) => Promise<void>
-}): Promise<void> {
+  /** 'agent': a teammate placed it from the inbox (POST /api/shopify/orders) —
+   *  `handoff` receives the bare reason for the UI and no follow-up handoff is
+   *  raised, the agent is already on the chat. Defaults to the AI. */
+  actor?: 'ai' | 'agent'
+}): Promise<{ id: string; name: string; draft: boolean; paymentLink: string | null } | void> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, proposal, handoff, sendText } = args
+  const byAgent = args.actor === 'agent'
   const label = proposal.items.map((i) => `${i.name} x${i.qty}`).join(', ')
 
   let cfg
@@ -49,11 +54,13 @@ export async function createShopifyOrderFromChat(args: {
     .limit(1)
   if (recent?.length) {
     console.warn('[shopify] create_shopify_order: order already created for this chat in the last 30 min, skipping')
+    if (byAgent) await handoff('Ya se creó un pedido para este chat hace menos de 30 minutos')
     return
   }
 
-  const fail = (reason: string) =>
-    handoff(`🤖 La IA confirmó un pedido (${label}) pero no se pudo crear en Shopify: ${reason}. Créalo manualmente.`)
+  const fail = (reason: string) => byAgent
+    ? handoff(reason)
+    : handoff(`🤖 La IA confirmó un pedido (${label}) pero no se pudo crear en Shopify: ${reason}. Créalo manualmente.`)
 
   if (normalizeGtPhone(proposal.phone).replace(/\D/g, '').length < 11) return fail(`teléfono inválido "${proposal.phone}"`)
   if (!departamentoCode(proposal.departamento)) return fail(`departamento desconocido "${proposal.departamento}"`)
@@ -97,7 +104,7 @@ export async function createShopifyOrderFromChat(args: {
     actor_user_id: configOwnerUserId,
     action: 'create_shopify_order',
     target_id: conversationId,
-    input: { conversation_id: conversationId, ...proposal, source: 'auto_reply_autonomous' },
+    input: { conversation_id: conversationId, ...proposal, source: byAgent ? 'agent_manual' : 'auto_reply_autonomous' },
     result: { order_id: order.id, name: order.name, draft: order.draft, total: order.total },
   })
   if (logError) console.error('[shopify] create_shopify_order log failed:', logError.message)
@@ -105,25 +112,32 @@ export async function createShopifyOrderFromChat(args: {
   await attachOrderToDeal({ db, accountId, userId: configOwnerUserId, contactId, order, currency })
 
   const totalText = formatCurrency(order.total, currency)
-  let payLine = `Pagas ${totalText} al recibir.`
+  let payLine = order.draft
+    ? `Pagas ${totalText} al recibir.`
+    : `Pagas ${totalText} al recibir. Tu número de pedido es ${order.name}: guárdalo para darle seguimiento.`
   let paymentLink: string | null = null
   if (proposal.payment === 'card') {
     if (cfg.recurrenteSecretKey) {
       try {
         paymentLink = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
-          title: `Pedido ${order.name}`, total: order.total, currency, orderId: order.id,
+          // The customer sees this on Recurrente's page — the items, not a draft "#D3".
+          title: label.slice(0, 120), total: order.total, currency, orderId: order.id,
         })
       } catch (err) {
         console.error('[shopify] recurrente checkout failed:', err instanceof Error ? err.message : err)
       }
     }
     payLine = paymentLink
-      ? `Paga ${totalText} con tarjeta aquí: ${paymentLink} — en cuanto se confirme el pago preparamos tu envío.`
+      ? `Paga ${totalText} con tarjeta aquí: ${paymentLink} — en cuanto se confirme el pago te enviamos tu número de pedido y preparamos tu envío.`
       : `Un asesor te enviará por aquí el link de pago con tarjeta por ${totalText}.`
   }
   try {
+    // A draft's "#D3" isn't the order number the customer tracks; the real
+    // one comes with the payment confirmation (recurrente-webhook).
+    const heading = order.draft ? '✅ Pedido registrado' : `✅ Pedido ${order.name} confirmado`
     await sendText(
-      `✅ Pedido ${order.name} registrado: ${label}. Envío a ${proposal.address}, ${proposal.departamento}. ${payLine}`,
+      `${heading}: ${label}. Envío a ${proposal.address}, ${proposal.departamento}. ${payLine} ` +
+      'Cuando quieras saber cómo va tu pedido, escríbenos por aquí.',
     )
   } catch (err) {
     console.error('[shopify] order confirmation send failed:', err)
@@ -133,7 +147,7 @@ export async function createShopifyOrderFromChat(args: {
   // completed automatically (/api/shopify/recurrente-webhook) — no handoff,
   // the AI keeps the chat.
   const autoCompletes = proposal.payment === 'card' && paymentLink && cfg.ordersLive && cfg.recurrenteWebhookSecret
-  if (order.draft && !autoCompletes) {
+  if (order.draft && !autoCompletes && !byAgent) {
     // A human has to finish it in Shopify: a card order once Recurrente shows
     // it paid (mark it paid there, so Dropi never collects cash), or any order
     // while "Crear pedidos reales" is off.
@@ -144,4 +158,5 @@ export async function createShopifyOrderFromChat(args: {
       : 'complétalo para que llegue a Dropi.'
     await handoff(`🛒 Borrador ${order.name} en Shopify (${label}, ${totalText}, ${PAYMENT_GATEWAYS[proposal.payment]}): ${todo}`)
   }
+  return { id: order.id, name: order.name, draft: order.draft, paymentLink }
 }

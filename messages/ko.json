@@ -3147,5 +3147,35 @@
       "viewPatient": "환자 보기",
       "newAppt": "새 예약"
     }
+  },
+  "ShopifyOrders": {
+    "title": "Shopify 주문",
+    "create": "주문 생성",
+    "none": "아직 주문이 없습니다.",
+    "awaitingPayment": "카드 결제 대기 중",
+    "cancelled": "취소됨",
+    "payment": "결제: {status}",
+    "preparation": "처리: {status}",
+    "delivery": "배송: {status}",
+    "tracking": "운송장:",
+    "formTitle": "Shopify 주문 생성",
+    "products": "상품",
+    "pickProduct": "상품 선택",
+    "qty": "수량",
+    "removeLine": "상품 삭제",
+    "addLine": "상품 추가",
+    "fullName": "이름",
+    "phone": "전화번호",
+    "address": "배송 주소",
+    "departamento": "지역",
+    "paymentMethod": "결제 방법",
+    "cod": "착불",
+    "card": "카드 (Recurrente 링크)",
+    "totalHint": "합계: {total}. 고객은 WhatsApp으로 주문 번호가 포함된 확인 메시지를 받습니다.",
+    "cancel": "취소",
+    "submit": "생성 후 WhatsApp으로 전송",
+    "created": "주문 {name}이(가) 생성되어 고객에게 전송되었습니다",
+    "createdAwaitingPayment": "주문 생성됨: 고객에게 결제 링크를 보냈습니다",
+    "createFailed": "주문을 생성할 수 없습니다"
   }
 }

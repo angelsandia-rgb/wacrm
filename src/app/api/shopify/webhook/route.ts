@@ -1,14 +1,20 @@
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { isWithinMessagingWindow } from '@/lib/messaging/window'
 import { formatCurrency } from '@/lib/currency'
-import { attachOrderToDeal, normalizeGtPhone, ORDER_TAG, verifyShopifyHmac } from '@/lib/shopify/api'
+import {
+  attachOrderToDeal, DELIVERED_STAGE_NAME, normalizeGtPhone, ORDER_TAG, pickForwardStage, SHIPPED_STAGE_NAME,
+  SHIPPED_TEMPLATE_NAME, trackingSentence, verifyShopifyHmac,
+} from '@/lib/shopify/api'
 
 interface ShopifyAddress { first_name?: string | null; name?: string | null; phone?: string | null }
 interface ShopifyOrderPayload {
   admin_graphql_api_id: string
+  fulfillments?: (ShopifyFulfillmentPayload & { status?: string | null })[] | null
   name: string
   total_price: string
   currency: string
@@ -18,15 +24,32 @@ interface ShopifyOrderPayload {
   shipping_address?: ShopifyAddress | null
   billing_address?: ShopifyAddress | null
 }
+interface ShopifyFulfillmentPayload {
+  order_id?: number
+  name?: string | null
+  shipment_status?: string | null
+  tracking_company?: string | null
+  tracking_number?: string | null
+  tracking_url?: string | null
+}
+
+const TRACKING_HINT = 'Cuando quieras saber cómo va tu pedido, escríbenos por aquí.'
 
 /**
- * Shopify `orders/create` (configured in the store's Settings →
- * Notifications → Webhooks). The account is resolved from
- * X-Shopify-Shop-Domain and the body is HMAC-checked with that
- * account's webhook secret or, failing that, its app client secret. Web-store orders get a contact, a deal and
- * a WhatsApp confirmation; orders Chat Sandía created itself (tag
- * `chat-sandia`) are skipped — the chat already confirmed them.
- * Always 200 once authenticated, so Shopify doesn't retry a handled order.
+ * Shopify webhooks (store Settings → Notifications → Webhooks, all pointing
+ * here). The account is resolved from X-Shopify-Shop-Domain and the body is
+ * HMAC-checked with that account's webhook secret or, failing that, its app
+ * client secret. Always 200 once authenticated, so Shopify doesn't retry.
+ *
+ * - `orders/create`: web-store orders get a contact, a deal and a WhatsApp
+ *   message with their order number. Orders Chat Sandía created itself (tag
+ *   `chat-sandia`) are skipped — the chat already confirmed them.
+ * - `orders/updated` (the admin's "Actualización de pedido" — Notifications
+ *   offers no fulfillment topics) and, for app-registered webhooks,
+ *   `fulfillments/create|update`: Dropify writes Dropi's shipment back as a
+ *   Shopify fulfillment. The order's deal moves to "Enviado" / "Entregado"
+ *   and the customer is told — only when the deal actually advances, so the
+ *   many repeated updates never send twice.
  */
 export async function POST(request: Request) {
   const raw = await request.text()
@@ -45,15 +68,66 @@ export async function POST(request: Request) {
   if (!cfg || !keys.some((k) => verifyShopifyHmac(raw, hmac, decrypt(k)))) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
-  if (request.headers.get('x-shopify-topic') !== 'orders/create') return NextResponse.json({ ok: true })
+  const topic = request.headers.get('x-shopify-topic')
+  if (!topic || !HANDLED_TOPICS.has(topic)) return NextResponse.json({ ok: true })
 
-  let order: ShopifyOrderPayload
+  let body: unknown
   try {
-    order = JSON.parse(raw) as ShopifyOrderPayload
+    body = JSON.parse(raw)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
   const accountId = cfg.account_id as string
+  if (topic === 'orders/create') {
+    return handleOrderCreated(db, accountId, cfg, body as ShopifyOrderPayload)
+  }
+  if (topic === 'orders/updated' || topic === 'orders/fulfilled') {
+    const order = body as ShopifyOrderPayload
+    const fs = order.fulfillments ?? []
+    const live = fs.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
+    if (!live.length) return NextResponse.json({ ok: true, skipped: 'not shipped' })
+    return handleShipping(db, accountId, {
+      orderGid: order.admin_graphql_api_id, orderName: order.name,
+      delivered: live.some((f) => f.shipment_status === 'delivered'),
+      tracking: live.find((f) => f.tracking_number) ?? live[0],
+    })
+  }
+  const f = body as ShopifyFulfillmentPayload
+  const delivered = f.shipment_status === 'delivered'
+  // A fulfillments/update only matters once the carrier marks it delivered.
+  if (!f.order_id || (!delivered && topic !== 'fulfillments/create')) return NextResponse.json({ ok: true, skipped: 'no stage change' })
+  return handleShipping(db, accountId, {
+    // "#1001.1" is the fulfillment; the customer knows the order as "#1001".
+    orderGid: `gid://shopify/Order/${f.order_id}`, orderName: (f.name ?? '').split('.')[0] || 'tu pedido',
+    delivered, tracking: f,
+  })
+}
+
+const HANDLED_TOPICS = new Set(['orders/create', 'orders/updated', 'orders/fulfilled', 'fulfillments/create', 'fulfillments/update'])
+
+/** Free-form text inside the 24 h window; the approved template outside it
+ *  (a web customer who never wrote to us). False when neither can reach them. */
+async function notifyCustomer(
+  db: SupabaseClient, accountId: string, conversationId: string, text: string,
+  template: { name: string; language: string; params: string[] } | null,
+): Promise<boolean> {
+  if (await isWithinMessagingWindow(db, conversationId)) {
+    await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', senderType: 'bot', contentText: text })
+    return true
+  }
+  if (!template) return false
+  await sendMessageToConversation(db, accountId, {
+    conversationId, messageType: 'template', senderType: 'bot',
+    templateName: template.name, templateLanguage: template.language, templateParams: template.params,
+  })
+  return true
+}
+
+async function handleOrderCreated(
+  db: SupabaseClient, accountId: string,
+  cfg: { user_id: unknown; confirmation_template_name: unknown; confirmation_template_language: unknown },
+  order: ShopifyOrderPayload,
+) {
   const tags = (order.tags ?? '').split(',').map((t) => t.trim())
   if (tags.includes(ORDER_TAG)) return NextResponse.json({ ok: true, skipped: 'chat-sandia order' })
 
@@ -80,23 +154,57 @@ export async function POST(request: Request) {
       order: { id: order.admin_graphql_api_id, name: order.name, total },
     })
     const totalText = formatCurrency(total, order.currency)
-    // A brand-new web customer has no open 24h window, so only a template reaches them;
-    // the text fallback only lands when they wrote to us recently.
-    await sendMessageToConversation(db, accountId, cfg.confirmation_template_name
-      ? {
-          conversationId, messageType: 'template', senderType: 'bot',
-          templateName: cfg.confirmation_template_name as string,
-          templateLanguage: (cfg.confirmation_template_language as string) || 'es',
-          templateParams: [firstName || 'cliente', order.name, totalText],
-        }
-      : {
-          conversationId, messageType: 'text', senderType: 'bot',
-          contentText: `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos tu pedido ${order.name} por ${totalText}. ¿Nos confirmas que los datos de entrega son correctos?`,
-        })
+    const templateName = cfg.confirmation_template_name as string | null
+    const sent = await notifyCustomer(db, accountId, conversationId,
+      `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos tu pedido ${order.name} por ${totalText}. ` +
+      `Ese es tu número de pedido para darle seguimiento. ¿Nos confirmas que los datos de entrega son correctos? ${TRACKING_HINT}`,
+      templateName
+        ? { name: templateName, language: (cfg.confirmation_template_language as string) || 'es', params: [firstName || 'cliente', order.name, totalText] }
+        : null)
+    if (!sent) console.warn(`[shopify webhook] order ${order.name} (account ${accountId}): no confirmation template configured and no open 24h window, customer not notified`)
   } catch (err) {
     // Logged, not retried: a failed WhatsApp send must not make Shopify re-deliver
     // and open a second deal for the same order.
     console.error(`[shopify webhook] order ${order.name} (account ${accountId}) follow-up failed:`, err instanceof Error ? err.message : err)
+  }
+  return NextResponse.json({ ok: true })
+}
+
+async function handleShipping(
+  db: SupabaseClient, accountId: string,
+  ship: { orderGid: string; orderName: string; delivered: boolean; tracking: ShopifyFulfillmentPayload },
+) {
+  const { delivered, orderName } = ship
+  const f = ship.tracking
+  const stageName = delivered ? DELIVERED_STAGE_NAME : SHIPPED_STAGE_NAME
+
+  const { data: deal } = await db
+    .from('deals').select('id, contact_id, pipeline_id, stage_id')
+    .eq('account_id', accountId).eq('shopify_order_id', ship.orderGid).maybeSingle()
+  if (!deal?.pipeline_id) return NextResponse.json({ ok: true, skipped: 'no deal' })
+
+  const { data: stages } = await db.from('pipeline_stages').select('id, name, position').eq('pipeline_id', deal.pipeline_id)
+  const next = pickForwardStage(stages ?? [], (deal.stage_id as string | null) ?? null, stageName)
+  if (!next) return NextResponse.json({ ok: true, skipped: 'already there' })
+  await db.from('deals').update({ stage_id: next.id }).eq('id', deal.id).eq('account_id', accountId)
+
+  try {
+    const { data: contact } = await db
+      .from('contacts').select('phone, name').eq('id', deal.contact_id).eq('account_id', accountId).maybeSingle()
+    if (!contact?.phone) return NextResponse.json({ ok: true, skipped: 'no phone' })
+    const { conversationId } = await resolveConversationByPhone(
+      db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null,
+    )
+    const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
+    const sent = delivered
+      ? await notifyCustomer(db, accountId, conversationId,
+          `📦 Tu pedido ${orderName} fue entregado. ¡Gracias por tu compra! Si tienes cualquier duda con tu producto, escríbenos por aquí.`, null)
+      : await notifyCustomer(db, accountId, conversationId,
+          `🚚 Tu pedido ${orderName} ya va en camino. ${trackingSentence(f)}`,
+          { name: SHIPPED_TEMPLATE_NAME, language: 'es', params: [firstName, orderName, trackingSentence(f)] })
+    if (!sent) console.warn(`[shopify webhook] ${orderName} (account ${accountId}) ${stageName}: outside 24h window, customer not notified`)
+  } catch (err) {
+    console.error(`[shopify webhook] shipping update for ${orderName} (account ${accountId}) notify failed:`, err instanceof Error ? err.message : err)
   }
   return NextResponse.json({ ok: true })
 }
