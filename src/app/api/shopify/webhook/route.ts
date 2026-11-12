@@ -33,7 +33,7 @@ interface ShopifyFulfillmentPayload {
   tracking_url?: string | null
 }
 
-const TRACKING_HINT = 'Cuando quieras saber cómo va tu pedido, escríbenos por aquí.'
+const TRACKING_HINT = 'Para saber cómo va el pedido, basta con escribir por aquí.'
 
 /**
  * Shopify webhooks (store Settings → Notifications → Webhooks, all pointing
@@ -156,8 +156,8 @@ async function handleOrderCreated(
     const totalText = formatCurrency(total, order.currency)
     const templateName = cfg.confirmation_template_name as string | null
     const sent = await notifyCustomer(db, accountId, conversationId,
-      `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos tu pedido ${order.name} por ${totalText}. ` +
-      `Ese es tu número de pedido para darle seguimiento. ¿Nos confirmas que los datos de entrega son correctos? ${TRACKING_HINT}`,
+      `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}* por ${totalText}. ` +
+      `Ese es su número de pedido para darle seguimiento. ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
       templateName
         ? { name: templateName, language: (cfg.confirmation_template_language as string) || 'es', params: [firstName || 'cliente', order.name, totalText] }
         : null)
@@ -198,9 +198,9 @@ async function handleShipping(
     const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
     const sent = delivered
       ? await notifyCustomer(db, accountId, conversationId,
-          `📦 Tu pedido ${orderName} fue entregado. ¡Gracias por tu compra! Si tienes cualquier duda con tu producto, escríbenos por aquí.`, null)
+          `📦 Su pedido ${orderName} fue entregado. ¡Gracias por su compra! Cualquier duda con el producto, nos escribe por aquí.`, null)
       : await notifyCustomer(db, accountId, conversationId,
-          `🚚 Tu pedido ${orderName} ya va en camino. ${trackingSentence(f)}`,
+          `🚚 Su pedido ${orderName} ya va en camino. ${trackingSentence(f)}`,
           { name: SHIPPED_TEMPLATE_NAME, language: 'es', params: [firstName, orderName, trackingSentence(f)] })
     if (!sent) console.warn(`[shopify webhook] ${orderName} (account ${accountId}) ${stageName}: outside 24h window, customer not notified`)
   } catch (err) {

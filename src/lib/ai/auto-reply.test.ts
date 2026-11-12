@@ -2315,6 +2315,18 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.createShopifyOrderFromChat).toHaveBeenCalledWith(expect.objectContaining({ proposal }))
   })
 
+  it('store: a confirmed purchase with the order marker keeps the chat with the bot — no hand-off (Casa Ceiba 2026-11-12)', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    h.state.products = [{ id: 'p1', name: 'Freidora de Aire' }]
+    const proposal = { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' as const }
+    h.generateReply.mockResolvedValue({ text: '¡Gracias! Registro su pedido.', handoff: false, markDealWon: true, moveToStageName: null, sendCatalog: false, shopifyOrderProposal: proposal })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.createShopifyOrderFromChat).toHaveBeenCalledWith(expect.objectContaining({ proposal }))
+    expect(h.state.updatePayload ?? {}).not.toHaveProperty('assigned_agent_id')
+    expect(h.state.messageInserts.filter((m) => String(m.content_text ?? '').includes('confirmó explícitamente la compra'))).toHaveLength(0)
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'flag_deal_closing')).toHaveLength(1)
+  })
+
   it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
     h.buildConversationContext.mockResolvedValue([
       { role: 'user', content: 'Buenas noches' },

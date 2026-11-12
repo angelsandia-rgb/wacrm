@@ -66,7 +66,8 @@ export function formatCurrency(
   const code = (currency || DEFAULT_CURRENCY).trim();
   const amount = Number(value) || 0;
   try {
-    return new Intl.NumberFormat(undefined, {
+    // The server's default locale renders "GTQ 500"; customers read "Q500".
+    return new Intl.NumberFormat(code === "GTQ" ? "es-GT" : undefined, {
       style: "currency",
       currency: code,
       minimumFractionDigits: 0,

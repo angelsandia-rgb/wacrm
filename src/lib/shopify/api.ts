@@ -411,9 +411,9 @@ export function pickForwardStage<T extends { id: string; name?: unknown; positio
 export function trackingSentence(f: { tracking_company?: string | null; tracking_number?: string | null; tracking_url?: string | null }): string {
   if (f.tracking_number) {
     const via = f.tracking_company ? ` (${f.tracking_company})` : ''
-    return `Tu número de guía es ${f.tracking_number}${via}.${f.tracking_url ? ` Puedes rastrearlo aquí: ${f.tracking_url}` : ''}`
+    return `Número de guía: ${f.tracking_number}${via}.${f.tracking_url ? ` Rastreo: ${f.tracking_url}` : ''}`
   }
-  return 'El mensajero te contactará antes de la entrega.'
+  return 'El mensajero le contactará antes de la entrega.'
 }
 
 /** Point the contact's open deal at this order (or open one in the
