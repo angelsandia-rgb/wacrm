@@ -5467,3 +5467,28 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   envió el catálogo. Ahora (`src/lib/ai/auto-reply.ts`) se envía el catálogo
   con una línea breve; la excepción de foto solo-marcador aplica a todas las
   verticales y "catalofo" cuenta como pedido de catálogo.
+
+### 2026-11-11 — Claude Code (Casa Ceiba: pedidos autónomos de punta a punta)
+
+- **#355 Flujo de pedidos autónomo (Shopify + Dropi + Recurrente + WhatsApp).**
+  El cliente recibe siempre su número de pedido real por WhatsApp: los pedidos
+  web (`orders/create`) con texto dentro de 24 h o con la plantilla
+  `pedido_recibido` fuera de ella; los del chat con el número real en vez del
+  borrador "#D". El webhook atiende `orders/updated` (el "Actualización de
+  pedido" del panel de Shopify) y `fulfillments/*`: cuando Dropify escribe el
+  envío de Dropi, el negocio pasa a Enviado/Entregado (`pickForwardStage`,
+  sin avisos repetidos) y el cliente recibe su guía (plantilla
+  `pedido_enviado` fuera de 24 h). Recurrente también confirma pagos por
+  transferencia. Nueva tarjeta "Pedidos Shopify" en el panel del contacto
+  (estado de pago, preparación y guía) con "Crear pedido"
+  (`POST /api/shopify/orders`, rol agente), mismo camino que la IA.
+- **Merge sin CI:** GitHub Actions dejó de crear ejecuciones desde el 9/11
+  (sin incidente reportado). Con autorización de Angel se quitó
+  temporalmente el check obligatorio de `protect-main`, se fusionó y se
+  restauró de inmediato. Validado localmente: typecheck, lint, build,
+  2902/2902 pruebas.
+- **Cesi como vendedor:** sección "Cómo vendes" en su prompt (menú
+  comprar/ya compré, una recomendación con razón, cierre con pregunta,
+  objeciones: envío gratis y pago al recibir).
+- **Pendiente del dueño:** activar "Crear pedidos reales" + plantilla
+  `pedido_recibido`; aprobación de Meta de ambas plantillas.
