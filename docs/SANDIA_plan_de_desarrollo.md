@@ -5492,3 +5492,54 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   objeciones: envío gratis y pago al recibir).
 - **Pendiente del dueño:** activar "Crear pedidos reales" + plantilla
   `pedido_recibido`; aprobación de Meta de ambas plantillas.
+
+### 2026-11-12 / 13 — Claude Code (Casa Ceiba: pruebas en vivo, confirmación contra entrega, carritos y plantillas)
+
+- **#358 La IA conserva el chat al cerrar un pedido** (`keepChat`, sin traspaso
+  al confirmar), montos `Q1,199` sin espacio (`currency.ts`) y trato de usted
+  en todos los avisos de pedido.
+- **#359 / #360 "¿Cómo va mi pedido?" con borradores:** `loadOrderStatuses`
+  lee también `DraftOrder` y dice si espera el pago con tarjeta o la
+  confirmación contra entrega, sin inventar número de pedido.
+- **#362 Existencias antes de vender:** `outOfStockTitles` revisa el stock de
+  Shopify (que Dropify sincroniza de Dropi) antes de crear el pedido o mandar
+  el link de Recurrente; sin existencias, se disculpa y pasa a un asesor.
+  Opción A del pago con tarjeta en la web: botón "Pagar con tarjeta por
+  WhatsApp" en el carrito (`layout/theme.liquid`), checkout solo contra
+  entrega.
+- **#363 / #364 Catálogo = tienda Shopify:** con Shopify conectado, el
+  catálogo que manda la IA es el dominio principal de la tienda
+  (`shopifyStoreUrl`), y catálogo, menú y cotización que manda la IA se guardan
+  como `bot`, no `agent` (antes bloqueaban la recuperación de traspasos
+  temporales).
+- **#365 Cesi confirma los pedidos web contra entrega:** etapa nueva **"Por
+  confirmar"** en el tablero Pedidos de Casa Ceiba (creada por SQL), etiqueta
+  `por-confirmar` y mensaje con resumen y "Responda SÍ". Marcadores
+  `confirm_shopify_order` / `cancel_shopify_order`: confirma → "Pedido
+  creado" + `confirmado-whatsapp` + notificación; cancela → `cliente-cancela`
+  + traspaso a asesor (nunca cancela solo). Probado en vivo con #1002
+  (confirmar) y #1003 (cancelar), con Dropify en pausa; ambos cancelados.
+- **#366 Carritos abandonados por WhatsApp:** `runAbandonedCartSweep` en el
+  cron de seguimientos; una hora después (máx. 24 h, 8–20 h) un solo
+  recordatorio con productos, total y link de recuperación. Migración **178**
+  `shopify_cart_reminders` (aplicada a mano).
+- **#367 Plantillas fuera de la ventana de 24 h:** `src/lib/shopify/notify.ts`
+  usa la primera plantilla APROBADA por Meta (confirmar_pedido,
+  pago_confirmado, pedido_en_camino/pedido_enviado, pedido_entregado). Corrige
+  el webhook de Recurrente, que fallaba con clientes fuera de la ventana.
+- **#368 Recordatorio de pedidos sin confirmar:** a las 3 h sin respuesta un
+  recordatorio (plantilla `recordatorio_confirmacion` fuera de la ventana); a
+  las 24 h aviso al equipo. Etiquetas `recordatorio-confirmacion` y
+  `sin-confirmar-24h`.
+- **Plantillas enviadas a Meta (Zernio), todas PENDING al cierre:**
+  confirmar_pedido, recordatorio_confirmacion, pago_confirmado,
+  recordatorio_pago, pedido_en_camino, pedido_entregado, novedad_entrega,
+  pedido_cancelado, carrito_abandonado, seguimiento_compra, opinion_compra
+  (más pedido_recibido y pedido_enviado del 12/11, >2 días en revisión).
+- **Tienda:** entrega pareja "2 a 3 días hábiles" (checkout y 19
+  descripciones de producto corregidas en el admin de Shopify).
+- **Pendiente:** aprobación de Meta (si sigue igual, soporte de Zernio);
+  cambiar el seguimiento de 24 h a `seguimiento_compra` al aprobarse; primer
+  pedido real con "Crear pedidos reales" para ver qué devuelve Dropify;
+  novedades de Dropi (no hay API pública; Dropi tiene MCP oficial y token de
+  integración).
