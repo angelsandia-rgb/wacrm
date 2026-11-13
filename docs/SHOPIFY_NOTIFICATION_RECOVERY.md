@@ -4,6 +4,8 @@ Antes de desplegar este cambio, aplicar `supabase/migrations/179_shopify_notific
 
 La cola solamente permite acceso con service role. La clave `(account_id, event_key)` conserva un único trabajo por pedido y tipo de aviso. El cron existente `/api/ai/followups/cron` reclama hasta 25 trabajos vencidos mediante `FOR UPDATE SKIP LOCKED`, con una reserva de diez minutos. Un envío fallido o una plantilla aún sin aprobar se reintenta a los quince minutos. Si un proceso muere, su reserva vence y otro puede continuar.
 
+Validación previa: la migración se ejecutó en PostgreSQL embebido (PGlite), incluida su segunda aplicación. Se verificaron las claves por cuenta, el vencimiento y recuperación de reservas, el rechazo de resultados de workers anteriores, la exclusión de trabajos enviados y los permisos de los roles anon/service_role. Esta prueba no sustituye la comprobación con Shopify y WhatsApp en una cuenta de pruebas.
+
 Los eventos de creación y envío responden 500 cuando no pueden persistir el trabajo. Un fallo de WhatsApp, una vez guardado el trabajo, no obliga a recrear el pedido. Los reintentos de Recurrente recuperan el pedido ya pagado y continúan su registro y aviso.
 
 Los recordatorios y alertas vuelven a consultar la decisión local y el pedido en Shopify: se descartan si se confirmó, solicitó cancelar, canceló o despachó. Un recordatorio también se descarta si el cliente respondió o ya pasaron 24 horas; en ese momento corresponde la alerta al equipo. Las notificaciones internas llevan IDs persistidos para que una repetición de la inserción no las duplique. No se añaden etiquetas de recordatorio antes de enviar.
