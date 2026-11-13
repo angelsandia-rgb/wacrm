@@ -380,7 +380,6 @@ export const DELIVERED_STAGE_NAME = 'Entregado'
  *  customer outside the 24 h window that their order shipped. Params: name,
  *  order number, tracking sentence. */
 // ponytail: fixed template name per convention; make it a shopify_config column when a second store needs another name.
-export const SHIPPED_TEMPLATE_NAME = 'pedido_enviado'
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
 

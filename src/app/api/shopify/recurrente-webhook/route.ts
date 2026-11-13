@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { notifyCustomer, ORDER_TEMPLATES } from '@/lib/shopify/notify'
 import { formatCurrency } from '@/lib/currency'
 import {
   completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, pickPaidStage, verifySvixSignature,
@@ -78,11 +78,14 @@ export async function POST(request: Request) {
       : { data: null }
     if (contact?.phone) {
       const { conversationId } = await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)
-      await sendMessageToConversation(db, accountId, {
-        conversationId, messageType: 'text', senderType: 'bot',
-        contentText: `✅ Recibimos su pago de ${formatCurrency(total, checkout.currency)}. Su pedido quedó confirmado y ya lo preparamos para envío. ` +
+      const amount = formatCurrency(total, checkout.currency)
+      const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
+      // Outside the 24 h window (paid a day later) the pago_confirmado template carries it.
+      const sent = await notifyCustomer(db, accountId, conversationId,
+        `✅ Recibimos su pago de ${amount}. Su pedido quedó confirmado y ya lo preparamos para envío. ` +
           `Número de pedido: *${order.name}*. Para saber cómo va, basta con escribir por aquí.`,
-      })
+        { names: ORDER_TEMPLATES.paid, params: [firstName, amount, order.name] })
+      if (!sent) console.warn(`[recurrente webhook] ${order.name} (account ${accountId}): outside 24h window and no approved template, customer not notified`)
     }
   } catch (err) {
     // 500 → Recurrente retries; a completed draft is skipped on the retry.
