@@ -41,6 +41,15 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('parseGeneration', () => {
+  it('reads the web COD order confirmation markers and strips them', () => {
+    const ok = parseGeneration('¡Listo, su pedido queda confirmado! [[ACTION:confirm_shopify_order]]')
+    expect(ok.orderConfirmation).toBe('confirm')
+    expect(ok.text).toBe('¡Listo, su pedido queda confirmado!')
+    // Cancel wins if both slip in: shipping a refused order is the costly mistake.
+    expect(parseGeneration('Entendido. [[ACTION:confirm_shopify_order]] [[ACTION:cancel_shopify_order]]').orderConfirmation).toBe('cancel')
+    expect(parseGeneration('Hola').orderConfirmation).toBeUndefined()
+  })
+
   it('returns text with no handoff', () => {
     expect(parseGeneration('Hello there')).toEqual({
       text: 'Hello there',

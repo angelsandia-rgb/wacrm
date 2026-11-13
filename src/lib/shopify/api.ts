@@ -367,6 +367,12 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
 /** The dropshipping kit's orders board (src/lib/verticals) and its order stage. */
 export const ORDERS_PIPELINE_NAME = 'Pedidos'
 export const ORDER_PLACED_STAGE_NAME = 'Pedido creado'
+/** Web cash-on-delivery orders wait here until the customer confirms them
+ *  by WhatsApp (src/lib/shopify/order-confirmation.ts). Optional stage. */
+export const CONFIRM_STAGE_NAME = 'Por confirmar'
+export const TO_CONFIRM_TAG = 'por-confirmar'
+export const CONFIRMED_TAG = 'confirmado-whatsapp'
+export const CANCEL_REQUESTED_TAG = 'cliente-cancela'
 export const PAYMENT_CONFIRMED_STAGE_NAME = 'Pago confirmado'
 export const SHIPPED_STAGE_NAME = 'Enviado'
 export const DELIVERED_STAGE_NAME = 'Entregado'
@@ -699,3 +705,23 @@ export async function outOfStockTitles(
     return v && v.inventoryItem.tracked && v.inventoryPolicy === 'DENY' && (v.inventoryQuantity ?? 0) < l.quantity
   }).map((l) => l.title)
 }
+
+/** Add/remove order tags (staff filter on them in Shopify: por-confirmar,
+ *  confirmado-whatsapp, cliente-cancela). */
+export async function updateOrderTags(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  orderId: string,
+  add: string[],
+  remove: string[],
+): Promise<void> {
+  const m = `mutation($id: ID!, $add: [String!]!, $remove: [String!]!) {
+    a: tagsAdd(id: $id, tags: $add) { userErrors { message } }
+    r: tagsRemove(id: $id, tags: $remove) { userErrors { message } }
+  }`
+  const data = await shopifyGraphql<{ a: { userErrors: { message: string }[] }; r: { userErrors: { message: string }[] } }>(
+    cfg, m, { id: orderId, add, remove },
+  )
+  const errors = [...data.a.userErrors, ...data.r.userErrors].map((e) => e.message)
+  if (errors.length) throw new ShopifyError(errors.join('; '))
+}
+

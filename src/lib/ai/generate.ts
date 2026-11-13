@@ -27,6 +27,8 @@ import {
   CREATE_QUOTE_SENTINEL_SUFFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX,
+  CONFIRM_SHOPIFY_ORDER_SENTINEL,
+  CANCEL_SHOPIFY_ORDER_SENTINEL,
   QUICK_REPLY_SENTINEL_PREFIX,
   QUICK_REPLY_SENTINEL_SUFFIX,
   RECORD_RESERVATION_SENTINEL_PREFIX,
@@ -240,6 +242,11 @@ export function parseGeneration(
   // undefined (not null) when absent: the key stays optional on GenerateResult.
   const shopifyOrderProposal = (shopifyOrderMatch && parseShopifyOrderPayload(shopifyOrderMatch[1])) || undefined
 
+  // Cancel wins over confirm: shipping something the customer refused is the costly mistake.
+  const orderConfirmation: GenerateResult['orderConfirmation'] = raw.includes(CANCEL_SHOPIFY_ORDER_SENTINEL)
+    ? 'cancel'
+    : raw.includes(CONFIRM_SHOPIFY_ORDER_SENTINEL) ? 'confirm' : undefined
+
   const quickReplyMatch = raw.match(
     new RegExp(
       `${escapeRegExp(QUICK_REPLY_SENTINEL_PREFIX)}(.+?)${escapeRegExp(QUICK_REPLY_SENTINEL_SUFFIX)}`,
@@ -335,6 +342,8 @@ export function parseGeneration(
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(shopifyOrderMatch ? shopifyOrderMatch[0] : '', '')
+    .split(CONFIRM_SHOPIFY_ORDER_SENTINEL).join('')
+    .split(CANCEL_SHOPIFY_ORDER_SENTINEL).join('')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
     .replace(RESERVATION_MARKER_RE, '') // strips EVERY record_reservation marker, not just the first
     .replace(apptActionMatch ? apptActionMatch[0] : '', '')
@@ -408,6 +417,7 @@ export function parseGeneration(
     sentinelLeakDetected,
     quoteProposal,
     shopifyOrderProposal,
+    orderConfirmation,
     quickReplyId,
     reservationProposals,
     appointmentAction,

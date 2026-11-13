@@ -86,6 +86,16 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — web COD order confirmation', () => {
+  it('teaches the confirm/cancel markers only while an order awaits confirmation', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderConfirmation: '#1002' })
+    expect(p).toContain('ORDER AWAITING CONFIRMATION')
+    expect(p).toContain('[[ACTION:confirm_shopify_order]]')
+    expect(p).toContain('[[ACTION:cancel_shopify_order]]')
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('confirm_shopify_order')
+  })
+})
+
 describe('buildSystemPrompt — send_catalog', () => {
   it('tells the model not to write the catalog link itself', () => {
     const p = buildSystemPrompt({

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   deal: null as Record<string, unknown> | null,
+  /** The duplicate check (`select('id')`) on deals; null = new order. */
+  seen: null as Record<string, unknown> | null,
+  stages: [] as Record<string, unknown>[],
   contact: { phone: '50254852732', name: 'Ángel Durán' } as Record<string, unknown> | null,
   updates: [] as { table: string; row: Record<string, unknown> }[],
   inWindow: false,
@@ -20,11 +23,12 @@ function chain(table: string) {
     shopify_config: { account_id: 'a1', user_id: 'u1', webhook_secret: 'k', client_secret: null, confirmation_template_name: 'pedido_recibido', confirmation_template_language: 'es' },
     deals: m.deal, contacts: m.contact,
   }
+  let cols = ''
   const c: Record<string, unknown> = {
-    select: () => c, eq: () => c,
-    maybeSingle: async () => ({ data: rows[table] ?? null }),
+    select: (s: string) => { cols = s; return c }, eq: () => c,
+    maybeSingle: async () => ({ data: table === 'deals' && cols === 'id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
-    then: (ok: (v: unknown) => unknown) => ok({ data: table === 'pipeline_stages' ? STAGES : null, error: null }),
+    then: (ok: (v: unknown) => unknown) => ok({ data: table === 'pipeline_stages' ? m.stages : null, error: null }),
   }
   return c
 }
@@ -38,6 +42,7 @@ vi.mock('@/lib/shopify/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/shopify/api')>()),
   verifyShopifyHmac: () => true,
   attachOrderToDeal: m.attach,
+  loadShopifyConfig: async () => null,
 }))
 
 import { POST } from './route'
@@ -49,6 +54,8 @@ const hook = (topic: string, body: unknown) => POST(new Request('http://x/api/sh
 
 beforeEach(() => {
   m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's2' }
+  m.seen = null
+  m.stages = STAGES
   m.updates = []
   m.inWindow = false
   m.send.mockClear()
@@ -99,6 +106,34 @@ describe('Shopify webhook — web-store orders', () => {
     })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
       messageType: 'template', templateName: 'pedido_recibido', templateParams: ['Ana', '#1002', expect.stringContaining('300')],
+    }))
+  })
+
+  it('asks a cash-on-delivery customer to confirm and parks the deal in "Por confirmar"', async () => {
+    m.inWindow = true
+    m.deal = { pipeline_id: 'p1' }
+    m.stages = [{ id: 's1', name: 'Por confirmar', position: 1 }, ...STAGES]
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      line_items: [{ title: 'Retrovisor', quantity: 1 }],
+      shipping_address: { first_name: 'Ana', phone: '42883689', address1: '4a calle 8-20', city: 'Mixco' },
+    })
+    expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's1' } })
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      messageType: 'text',
+      contentText: expect.stringMatching(/#1002\*:\n• 1 x Retrovisor\nTotal: Q300, pago contra entrega\.\nEntrega en: 4a calle 8-20, Mixco\.[\s\S]*¿Confirma su pedido\? Responda \*SÍ\*/),
+    }))
+  })
+
+  it('keeps the plain order-number message when the board has no "Por confirmar" stage', async () => {
+    m.inWindow = true
+    m.deal = { pipeline_id: 'p1' }
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      contentText: expect.stringContaining('Ese es su número de pedido'),
     }))
   })
 
