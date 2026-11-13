@@ -80,12 +80,13 @@ export async function createShopifyOrderFromChat(args: {
   }
 
   // Provider stock first: no order, no payment link for what Dropi can't ship.
-  // A failed check doesn't block — Shopify itself refuses oversold real orders.
+  // A provider outage must not produce an unchecked order or payment link.
   let missing: string[] = []
   try {
     missing = await outOfStockTitles(cfg, lines)
   } catch (err) {
-    console.error('[shopify] stock check failed, continuing:', err instanceof Error ? err.message : err)
+    console.error('[shopify] stock check failed:', err instanceof Error ? err.message : err)
+    return fail('No se pudieron verificar las existencias. Reintente antes de crear el pedido o cobrar.')
   }
   if (missing.length) {
     const what = missing.join(', ')

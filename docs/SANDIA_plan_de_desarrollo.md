@@ -34,6 +34,8 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-12 — Correcciones de seguridad operativa de Shopify preparadas por Codex, pendientes de publicación.** El formulario de pedidos reinicia los datos de entrega por cliente; un error de inventario impide crear pedidos o enlaces de pago. Los avisos de pedido usan una cola persistente con reintentos y reservas entre workers. Las decisiones de confirmar/cancelar se guardan localmente y excluyen recordatorios pendientes. Antes de publicar este cambio, aplicar la migración 179; ver `docs/SHOPIFY_NOTIFICATION_RECOVERY.md`. Esta entrada no afirma que los cambios estén desplegados.
+
 **(actualizado 2026-08-15, última sesión: Claude Code)**
 
 **Bloque 1 (múltiples números de WhatsApp por empresa) está completo en
@@ -5543,3 +5545,14 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   pedido real con "Crear pedidos reales" para ver qué devuelve Dropify;
   novedades de Dropi (no hay API pública; Dropi tiene MCP oficial y token de
   integración).
+
+## 2026-11-12 — Codex: correcciones de la auditoría de Shopify
+
+- Se corrigió la reutilización de dirección, departamento y forma de pago al cambiar de cliente o abrir un nuevo pedido. Los errores de red muestran el aviso de fallo del formulario.
+- La creación de pedidos y enlaces de pago se detiene si no se puede consultar el inventario o si la variante no existe.
+- Migración 179: cola de avisos por cuenta y evento, reservas con SKIP LOCKED y vencimiento, y decisión de confirmación en deals. Avisos de creación, envío, entrega y pago se conservan y reintentan con el cron existente. Las alertas internas usan IDs estables para reintentos.
+- Los recordatorios ya no se etiquetan como enviados antes de enviarse; se descartan ante confirmación, cancelación solicitada, despacho o respuesta del cliente. Se respeta el horario de atención en los reintentos de recordatorios y alertas.
+- Recurrente recupera el pedido pagado al reintentar un borrador ya completado para continuar su registro y aviso sin volver a completarlo.
+- Pruebas: suite completa y casos adicionales de inventario, persistencia, concurrencia, plantillas pendientes y cancelaciones. TypeScript y ESLint sin errores; package-lock.json sin cambios. Los resultados finales se registran en el PR.
+- Graphify se intentó consultar y actualizar, pero el ejecutable falla con `uv trampoline failed to canonicalize script path`; no se pudo regenerar el grafo.
+- Pendiente de publicación: aplicar la migración 179 antes del despliegue, obtener aprobación del merge y ejecutar la prueba integral en una cuenta de pruebas. No se enviaron mensajes ni se crearon pedidos o cobros reales durante esta corrección. Procedimiento y límites: docs/SHOPIFY_NOTIFICATION_RECOVERY.md.

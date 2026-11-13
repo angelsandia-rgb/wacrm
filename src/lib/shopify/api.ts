@@ -663,20 +663,23 @@ export async function getRecurrenteCheckout(secretKey: string, checkoutId: strin
 }
 
 /** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Returns
- *  null when the draft is already completed (webhook retries, the legacy and
- *  unified events both arriving) or its total doesn't match `expectedTotal`. */
+ *  Reuses the paid order on webhook retries. Null on an amount mismatch. */
 export async function completePaidDraftOrder(
   cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   draftId: string,
   expectedTotal: number,
 ): Promise<{ id: string; name: string } | null> {
   const { draftOrder } = await shopifyGraphql<{
-    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } } } | null
-  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } } }`, { id: draftId })
-  if (!draftOrder || draftOrder.status === 'COMPLETED') return null
+    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } }; order?: { id: string; name: string; displayFinancialStatus: string } | null } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } order { id name displayFinancialStatus } } }`, { id: draftId })
+  if (!draftOrder) return null
   if (Math.abs(Number(draftOrder.totalPriceSet.shopMoney.amount) - expectedTotal) > 0.009) {
     console.warn(`[recurrente] ${draftId} total ${draftOrder.totalPriceSet.shopMoney.amount} != paid ${expectedTotal}, not completed`)
     return null
+  }
+  if (draftOrder.status === 'COMPLETED') {
+    if (!draftOrder.order || draftOrder.order.displayFinancialStatus !== 'PAID') return null
+    return { id: draftOrder.order.id, name: draftOrder.order.name }
   }
   // No paymentPending → Shopify records the order as paid.
   const data = await shopifyGraphql<{
@@ -701,6 +704,7 @@ export async function outOfStockTitles(
   )
   return lines.filter((l, i) => {
     const v = data.nodes[i]
+    if (!v) throw new ShopifyError(`No se pudo verificar el inventario de ${l.title}`)
     return v && v.inventoryItem.tracked && v.inventoryPolicy === 'DENY' && (v.inventoryQuantity ?? 0) < l.quantity
   }).map((l) => l.title)
 }

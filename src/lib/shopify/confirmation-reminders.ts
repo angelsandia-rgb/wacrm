@@ -2,8 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCurrency } from '@/lib/currency'
 import { withinBusinessHours } from '@/lib/ai/followups'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { CONFIRM_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, shopifyGraphql, updateOrderTags } from './api'
-import { notifyCustomer } from './notify'
+import { CANCEL_REQUESTED_TAG, CONFIRMED_TAG, CONFIRM_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, shopifyGraphql } from './api'
+import { enqueueOrderNotification } from './notification-jobs'
 
 export const REMINDED_TAG = 'recordatorio-confirmacion'
 export const UNCONFIRMED_TAG = 'sin-confirmar-24h'
@@ -16,6 +16,7 @@ export function confirmationStep(args: {
   waitingMs: number; tags: string[]; customerWroteSince: boolean
 }): 'remind' | 'escalate' | null {
   const { waitingMs, tags, customerWroteSince } = args
+  if (tags.includes(CANCEL_REQUESTED_TAG) || tags.includes(CONFIRMED_TAG)) return null
   if (waitingMs >= ESCALATE_AFTER_MS && !tags.includes(UNCONFIRMED_TAG)) return 'escalate'
   if (waitingMs >= REMIND_AFTER_MS && !tags.includes(REMINDED_TAG) && !customerWroteSince) return 'remind'
   return null
@@ -31,7 +32,7 @@ export function reminderText(firstName: string, orderName: string, total: string
  * Web cash-on-delivery orders waiting in "Por confirmar": one WhatsApp
  * reminder 3 h after the request when the customer hasn't written back
  * (8:00–20:00 local), and at 24 h an alert to the team to call or cancel
- * in Dropi. Shopify tags record each step, so it never repeats. Rides the
+ * in Dropi. Durable notification jobs record each step. Rides the
  * follow-ups cron.
  */
 export async function runConfirmationReminderSweep(admin: SupabaseClient, now: Date = new Date()): Promise<{ reminded: number; escalated: number }> {
@@ -41,6 +42,7 @@ export async function runConfirmationReminderSweep(admin: SupabaseClient, now: D
   const { data: deals } = await admin
     .from('deals').select('id, account_id, contact_id, title, value, currency, shopify_order_id, updated_at')
     .in('stage_id', stages.map((s) => s.id as string)).eq('status', 'open').like('shopify_order_id', 'gid://shopify/Order/%')
+    .is('shopify_confirmation_decision', null)
     .limit(100)
   for (const deal of deals ?? []) {
     const accountId = deal.account_id as string
@@ -66,27 +68,31 @@ export async function runConfirmationReminderSweep(admin: SupabaseClient, now: D
       if (!step) continue
 
       if (step === 'escalate') {
-        await updateOrderTags(cfg, deal.shopify_order_id as string, [UNCONFIRMED_TAG], [])
-        const { data: recipients } = await admin.from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin'])
+        const { data: recipients, error } = await admin.from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin'])
+        if (error) throw error
         if (recipients?.length) {
-          await admin.from('notifications').insert(recipients.map((r) => ({
-            account_id: accountId, user_id: r.user_id as string, type: 'ai_handoff', conversation_id: conversationId,
-            title: `Pedido ${order.name} sin confirmar`,
-            body: `⏰ El pedido ${order.name} lleva 24 h sin confirmar por WhatsApp. Llame al cliente o cancélelo en Dropi y en Shopify antes de que se despache.`,
-          })))
+          await enqueueOrderNotification(admin, accountId, `${deal.shopify_order_id}:unconfirmed`, {
+            conversationId, text: '', template: null,
+            confirmation: { orderId: deal.shopify_order_id as string, contactId: deal.contact_id as string, since, reminder: false },
+            staff: {
+              userIds: recipients.map((r) => r.user_id as string),
+              title: `Pedido ${order.name} sin confirmar`,
+              body: `⏰ El pedido ${order.name} lleva 24 h sin confirmar por WhatsApp. Llame al cliente o cancélelo en Dropi y en Shopify antes de que se despache.`,
+            },
+          })
         }
         res.escalated++
         continue
       }
 
-      // Tag first: a failed tag write must never mean a second reminder later.
-      await updateOrderTags(cfg, deal.shopify_order_id as string, [REMINDED_TAG], [])
       const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || ''
       const total = formatCurrency(Number(deal.value) || 0, (deal.currency as string) || 'GTQ')
-      const sent = await notifyCustomer(admin, accountId, conversationId, reminderText(firstName, order.name, total),
-        { names: REMINDER_TEMPLATE, params: [firstName || 'cliente', order.name] })
-      if (sent) res.reminded++
-      else console.warn(`[confirmation reminders] ${order.name} (account ${accountId}): outside 24h window and no approved template`)
+      await enqueueOrderNotification(admin, accountId, `${deal.shopify_order_id}:reminder`, {
+        conversationId, text: reminderText(firstName, order.name, total),
+        template: { names: REMINDER_TEMPLATE, params: [firstName || 'cliente', order.name] },
+        confirmation: { orderId: deal.shopify_order_id as string, contactId: deal.contact_id as string, since, reminder: true },
+      })
+      res.reminded++
     } catch (err) {
       console.error('[confirmation reminders] deal failed', deal.id, err instanceof Error ? err.message : err)
     }

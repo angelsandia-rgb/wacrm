@@ -17,6 +17,7 @@ export async function loadPendingOrderConfirmation(
   const { data: deals } = await db
     .from('deals').select('id, title, shopify_order_id, stage_id, pipeline_id')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'open')
+    .is('shopify_confirmation_decision', null)
     .not('shopify_order_id', 'is', null)
     .order('updated_at', { ascending: false }).limit(3)
   const withStage = (deals ?? []).filter((d) => d.stage_id && String(d.shopify_order_id).startsWith('gid://shopify/Order/'))
@@ -43,6 +44,10 @@ export async function resolveOrderConfirmation(args: {
 }): Promise<string> {
   const { db, accountId, conversationId, pending, decision } = args
   const confirmed = decision === 'confirm'
+  // Persist the customer's answer locally even if Shopify's tag API is down.
+  const { error: decisionError } = await db.from('deals').update({ shopify_confirmation_decision: decision })
+    .eq('id', pending.dealId).eq('account_id', accountId)
+  if (decisionError) throw new Error(`Cannot save order confirmation: ${decisionError.message}`)
   if (confirmed) {
     const { data: stages } = await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pending.pipelineId)
     const placed = (stages ?? []).find((s) => sameName(s.name, ORDER_PLACED_STAGE_NAME))

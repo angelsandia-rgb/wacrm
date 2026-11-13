@@ -13,6 +13,8 @@ const m = vi.hoisted(() => ({
   send: vi.fn(async () => ({ messageId: 'm1' })),
   resolve: vi.fn(async () => ({ contactId: 'c1', conversationId: 'conv1' })),
   attach: vi.fn(async () => 'd1'),
+  jobs: new Map<string, { payload: import('@/lib/shopify/notification-jobs').OrderNotification; sent: boolean }>(),
+  queueError: false,
 }))
 
 const STAGES = [
@@ -28,7 +30,7 @@ function chain(table: string) {
   let cols = ''
   const c: Record<string, unknown> = {
     select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c,
-    maybeSingle: async () => ({ data: table === 'deals' && cols === 'id' ? m.seen : rows[table] ?? null }),
+    maybeSingle: async () => ({ data: table === 'deals' && cols === 'id, stage_id, pipeline_id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
     then: (ok: (v: unknown) => unknown) => ok({
       data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved : null, error: null,
@@ -42,6 +44,20 @@ vi.mock('@/lib/whatsapp/encryption', () => ({ decrypt: (v: string) => v }))
 vi.mock('@/lib/whatsapp/resolve-conversation', () => ({ resolveConversationByPhone: m.resolve }))
 vi.mock('@/lib/whatsapp/send-message', () => ({ sendMessageToConversation: m.send }))
 vi.mock('@/lib/messaging/window', () => ({ isWithinMessagingWindow: async () => m.inWindow }))
+vi.mock('@/lib/shopify/notification-jobs', () => ({
+  enqueueOrderNotification: async (_db: unknown, _account: string, key: string, payload: import('@/lib/shopify/notification-jobs').OrderNotification) => {
+    if (m.queueError) throw new Error('queue unavailable')
+    if (!m.jobs.has(key)) m.jobs.set(key, { payload, sent: false })
+  },
+  runOrderNotificationSweep: async (db: never, account: string, key: string) => {
+    const job = m.jobs.get(key)
+    if (!job || job.sent) return
+    try {
+      const { notifyCustomer } = await import('@/lib/shopify/notify')
+      job.sent = await notifyCustomer(db, account, job.payload.conversationId, job.payload.text, job.payload.template)
+    } catch { /* persisted for the next sweep */ }
+  },
+}))
 vi.mock('@/lib/shopify/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/shopify/api')>()),
   verifyShopifyHmac: () => true,
@@ -63,10 +79,26 @@ beforeEach(() => {
   m.approved = [{ name: 'pedido_enviado', language: 'es' }, { name: 'pedido_recibido', language: 'es' }]
   m.updates = []
   m.inWindow = false
-  m.send.mockClear()
+  m.send.mockReset().mockResolvedValue({ messageId: 'm1' })
+  m.attach.mockClear()
+  m.jobs.clear()
+  m.queueError = false
 })
 
 describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)', () => {
+  it('does not advance the deal if its notification cannot be persisted', async () => {
+    m.queueError = true
+    const response = await hook('fulfillments/create', { order_id: 77, name: '#1001.1' })
+    expect(response.status).toBe(500)
+    expect(m.updates).toEqual([])
+    expect(m.send).not.toHaveBeenCalled()
+  })
+  it('retains a failed shipping notification after moving the stage', async () => {
+    m.send.mockRejectedValueOnce(new Error('WhatsApp unavailable'))
+    await hook('fulfillments/create', { order_id: 77, name: '#1001.1' })
+    expect(m.jobs.get('gid://shopify/Order/77:shipped')?.sent).toBe(false)
+    expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
+  })
   it('moves the deal to Enviado and sends the shipped template outside the 24h window', async () => {
     await hook('fulfillments/create', { order_id: 77, name: '#1001.1', tracking_number: 'GT9', tracking_company: 'Forza' })
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { notifyCustomer, ORDER_TEMPLATES } from '@/lib/shopify/notify'
+import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
+import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 import { formatCurrency } from '@/lib/currency'
 import {
   completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, pickPaidStage, verifySvixSignature,
@@ -63,15 +64,22 @@ export async function POST(request: Request) {
     const order = await completePaidDraftOrder(cfg, draftId, total)
     if (!order) return NextResponse.json({ ok: true, skipped: 'already completed or amount mismatch' })
 
-    const { data: deal } = await db
-      .from('deals').update({ shopify_order_id: order.id })
-      .eq('account_id', accountId).eq('shopify_order_id', draftId)
-      .select('id, contact_id, pipeline_id, stage_id').maybeSingle()
+    const { data: deal, error: lookupError } = await db.from('deals')
+      .select('id, contact_id, pipeline_id, stage_id').eq('account_id', accountId)
+      .in('shopify_order_id', [draftId, order.id]).maybeSingle()
+    if (lookupError) throw lookupError
+    if (deal) {
+      const { error } = await db.from('deals').update({ shopify_order_id: order.id }).eq('id', deal.id).eq('account_id', accountId)
+      if (error) throw error
+    }
     if (deal?.pipeline_id) {
       const { data: stages } = await db
         .from('pipeline_stages').select('id, name, position').eq('pipeline_id', deal.pipeline_id)
       const paid = pickPaidStage(stages ?? [], deal.stage_id ?? null)
-      if (paid) await db.from('deals').update({ stage_id: paid.id }).eq('id', deal.id).eq('account_id', accountId)
+      if (paid) {
+        const { error } = await db.from('deals').update({ stage_id: paid.id }).eq('id', deal.id).eq('account_id', accountId)
+        if (error) throw error
+      }
     }
     const { data: contact } = deal?.contact_id
       ? await db.from('contacts').select('phone, name').eq('id', deal.contact_id).eq('account_id', accountId).maybeSingle()
@@ -81,14 +89,16 @@ export async function POST(request: Request) {
       const amount = formatCurrency(total, checkout.currency)
       const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
       // Outside the 24 h window (paid a day later) the pago_confirmado template carries it.
-      const sent = await notifyCustomer(db, accountId, conversationId,
-        `✅ Recibimos su pago de ${amount}. Su pedido quedó confirmado y ya lo preparamos para envío. ` +
+      const eventKey = `${order.id}:paid`
+      await enqueueOrderNotification(db, accountId, eventKey, {
+        conversationId, text: `✅ Recibimos su pago de ${amount}. Su pedido quedó confirmado y ya lo preparamos para envío. ` +
           `Número de pedido: *${order.name}*. Para saber cómo va, basta con escribir por aquí.`,
-        { names: ORDER_TEMPLATES.paid, params: [firstName, amount, order.name] })
-      if (!sent) console.warn(`[recurrente webhook] ${order.name} (account ${accountId}): outside 24h window and no approved template, customer not notified`)
+        template: { names: ORDER_TEMPLATES.paid, params: [firstName, amount, order.name] },
+      })
+      await runOrderNotificationSweep(db, accountId, eventKey)
     }
   } catch (err) {
-    // 500 → Recurrente retries; a completed draft is skipped on the retry.
+    // 500 → Recurrente retries; the completed order is reused on retry.
     console.error(`[recurrente webhook] checkout ${checkoutId} (account ${accountId}) failed:`, err instanceof Error ? err.message : err)
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
   }

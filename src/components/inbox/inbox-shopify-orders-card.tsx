@@ -78,6 +78,9 @@ export function InboxShopifyOrdersCard({
   async function openForm() {
     setFullName(contactName)
     setPhone(contactPhone ?? '')
+    setAddress('')
+    setDepartamento('Guatemala')
+    setPayment('cod')
     setLines([{ name: '', qty: 1 }])
     setOpen(true)
     if (!products.length) {
@@ -108,6 +111,8 @@ export function InboxShopifyOrdersCard({
       toast.success(body.order.draft ? t('createdAwaitingPayment') : t('created', { name: body.order.name }))
       setOpen(false)
       setResult(await fetchOrders(conversationId))
+    } catch {
+      toast.error(t('createFailed'))
     } finally {
       setSaving(false)
     }
