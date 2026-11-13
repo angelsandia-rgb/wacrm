@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { runFollowupSweep } from '@/lib/ai/followups-sweep'
 import { runAbandonedCartSweep } from '@/lib/shopify/abandoned-carts'
+import { runConfirmationReminderSweep } from '@/lib/shopify/confirmation-reminders'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { describeError } from '@/lib/observability/describe-error'
 
@@ -41,11 +42,16 @@ export async function GET(request: Request) {
       console.error('[followups/cron] abandoned carts failed:', describeError(err))
       return null
     })
+    const confirmations = await runConfirmationReminderSweep(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] confirmation reminders failed:', describeError(err))
+      return null
+    })
     await recordHeartbeat('followups_cron', {
       detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
-        (carts ? `; carts sent ${carts.sent}, failed ${carts.failed}` : ''),
+        (carts ? `; carts sent ${carts.sent}, failed ${carts.failed}` : '') +
+        (confirmations ? `; confirmations reminded ${confirmations.reminded}, escalated ${confirmations.escalated}` : ''),
     })
-    return NextResponse.json({ ...result, carts })
+    return NextResponse.json({ ...result, carts, confirmations })
   } catch (err) {
     const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)
