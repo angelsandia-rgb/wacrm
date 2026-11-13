@@ -5545,6 +5545,17 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   pedido real con "Crear pedidos reales" para ver qué devuelve Dropify;
   novedades de Dropi (no hay API pública; Dropi tiene MCP oficial y token de
   integración).
+- **Zernio (13/11, después de #369):** el webhook "WPP OFICIAL"
+  (→ `/api/whatsapp/webhook/zernio`) **no tenía activado**
+  `whatsapp.template.status_updated`, así que una aprobación de Meta nunca
+  habría llegado a `message_templates` y `notify.ts` jamás habría usado las
+  plantillas. Activado, junto con `whatsapp.account.status_updated`,
+  `whatsapp.account.name_status_updated` y `whatsapp.account.alert_received`
+  (el código los ignora sin error). El número +502 4288 3689 aparece en
+  Zernio como **"Sending limited"** y con nombre visible **"Demo"**; probable
+  causa de que las plantillas sigan en PENDING. Se escribió a soporte de
+  Zernio (chat del panel). Pendiente: revisar el estado directo en Zernio
+  (`listZernioTemplates`) por si alguna se aprobó antes de activar el evento.
 
 ## 2026-11-12 — Codex: correcciones de la auditoría de Shopify
 
