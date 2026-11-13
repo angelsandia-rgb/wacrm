@@ -3,13 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
-import { isWithinMessagingWindow } from '@/lib/messaging/window'
 import { formatCurrency } from '@/lib/currency'
 import {
   attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, ORDER_TAG, pickForwardStage,
-  SHIPPED_STAGE_NAME, SHIPPED_TEMPLATE_NAME, TO_CONFIRM_TAG, trackingSentence, updateOrderTags, verifyShopifyHmac,
+  SHIPPED_STAGE_NAME, TO_CONFIRM_TAG, trackingSentence, updateOrderTags, verifyShopifyHmac,
 } from '@/lib/shopify/api'
+import { notifyCustomer, ORDER_TEMPLATES } from '@/lib/shopify/notify'
 
 interface ShopifyAddress {
   first_name?: string | null; name?: string | null; phone?: string | null
@@ -110,24 +109,6 @@ export async function POST(request: Request) {
 
 const HANDLED_TOPICS = new Set(['orders/create', 'orders/updated', 'orders/fulfilled', 'fulfillments/create', 'fulfillments/update'])
 
-/** Free-form text inside the 24 h window; the approved template outside it
- *  (a web customer who never wrote to us). False when neither can reach them. */
-async function notifyCustomer(
-  db: SupabaseClient, accountId: string, conversationId: string, text: string,
-  template: { name: string; language: string; params: string[] } | null,
-): Promise<boolean> {
-  if (await isWithinMessagingWindow(db, conversationId)) {
-    await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', senderType: 'bot', contentText: text })
-    return true
-  }
-  if (!template) return false
-  await sendMessageToConversation(db, accountId, {
-    conversationId, messageType: 'template', senderType: 'bot',
-    templateName: template.name, templateLanguage: template.language, templateParams: template.params,
-  })
-  return true
-}
-
 async function handleOrderCreated(
   db: SupabaseClient, accountId: string,
   cfg: { user_id: unknown; confirmation_template_name: unknown; confirmation_template_language: unknown },
@@ -170,8 +151,10 @@ async function handleOrderCreated(
         ? confirmationRequest(order, firstName, totalText)
         : `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}* por ${totalText}. ` +
           `Ese es su número de pedido para darle seguimiento. ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
-      templateName
-        ? { name: templateName, language: (cfg.confirmation_template_language as string) || 'es', params: [firstName || 'cliente', order.name, totalText] }
+      // The confirmation request uses confirmar_pedido; the plain order-number
+      // message keeps the account's own template (shopify_config).
+      awaiting || templateName
+        ? { names: awaiting ? ORDER_TEMPLATES.confirm : [templateName as string], params: [firstName || 'cliente', order.name, totalText] }
         : null)
     if (!sent) console.warn(`[shopify webhook] order ${order.name} (account ${accountId}): no confirmation template configured and no open 24h window, customer not notified`)
   } catch (err) {
@@ -238,10 +221,11 @@ async function handleShipping(
     const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
     const sent = delivered
       ? await notifyCustomer(db, accountId, conversationId,
-          `📦 Su pedido ${orderName} fue entregado. ¡Gracias por su compra! Cualquier duda con el producto, nos escribe por aquí.`, null)
+          `📦 Su pedido ${orderName} fue entregado. ¡Gracias por su compra! Cualquier duda con el producto, nos escribe por aquí.`,
+          { names: ORDER_TEMPLATES.delivered, params: [firstName, orderName] })
       : await notifyCustomer(db, accountId, conversationId,
           `🚚 Su pedido ${orderName} ya va en camino. ${trackingSentence(f)}`,
-          { name: SHIPPED_TEMPLATE_NAME, language: 'es', params: [firstName, orderName, trackingSentence(f)] })
+          { names: ORDER_TEMPLATES.shipped, params: [firstName, orderName, trackingSentence(f)] })
     if (!sent) console.warn(`[shopify webhook] ${orderName} (account ${accountId}) ${stageName}: outside 24h window, customer not notified`)
   } catch (err) {
     console.error(`[shopify webhook] shipping update for ${orderName} (account ${accountId}) notify failed:`, err instanceof Error ? err.message : err)

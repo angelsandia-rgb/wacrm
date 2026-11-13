@@ -5,6 +5,8 @@ const m = vi.hoisted(() => ({
   /** The duplicate check (`select('id')`) on deals; null = new order. */
   seen: null as Record<string, unknown> | null,
   stages: [] as Record<string, unknown>[],
+  /** message_templates rows Meta approved. */
+  approved: [] as { name: string; language: string }[],
   contact: { phone: '50254852732', name: 'Ángel Durán' } as Record<string, unknown> | null,
   updates: [] as { table: string; row: Record<string, unknown> }[],
   inWindow: false,
@@ -25,10 +27,12 @@ function chain(table: string) {
   }
   let cols = ''
   const c: Record<string, unknown> = {
-    select: (s: string) => { cols = s; return c }, eq: () => c,
+    select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c,
     maybeSingle: async () => ({ data: table === 'deals' && cols === 'id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
-    then: (ok: (v: unknown) => unknown) => ok({ data: table === 'pipeline_stages' ? m.stages : null, error: null }),
+    then: (ok: (v: unknown) => unknown) => ok({
+      data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved : null, error: null,
+    }),
   }
   return c
 }
@@ -56,6 +60,7 @@ beforeEach(() => {
   m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's2' }
   m.seen = null
   m.stages = STAGES
+  m.approved = [{ name: 'pedido_enviado', language: 'es' }, { name: 'pedido_recibido', language: 'es' }]
   m.updates = []
   m.inWindow = false
   m.send.mockClear()
@@ -69,6 +74,19 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
       messageType: 'template', templateName: 'pedido_enviado',
       templateParams: ['Ángel', '#1001', 'Número de guía: GT9 (Forza).'],
     }))
+  })
+
+  it('prefers the usted template pedido_en_camino once Meta approves it', async () => {
+    m.approved = [{ name: 'pedido_enviado', language: 'es' }, { name: 'pedido_en_camino', language: 'es' }]
+    await hook('fulfillments/create', { order_id: 77, name: '#1001.1', tracking_number: 'GT9' })
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({ templateName: 'pedido_en_camino' }))
+  })
+
+  it('stays silent outside the window when no shipped template is approved', async () => {
+    m.approved = []
+    await hook('fulfillments/create', { order_id: 77, name: '#1001.1', tracking_number: 'GT9' })
+    expect(m.send).not.toHaveBeenCalled()
+    expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
   })
 
   it('sends plain text with the guide inside the 24h window', async () => {
@@ -122,6 +140,19 @@ describe('Shopify webhook — web-store orders', () => {
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
       messageType: 'text',
       contentText: expect.stringMatching(/#1002\*:\n• 1 x Retrovisor\nTotal: Q300, pago contra entrega\.\nEntrega en: 4a calle 8-20, Mixco\.[\s\S]*¿Confirma su pedido\? Responda \*SÍ\*/),
+    }))
+  })
+
+  it('asks a customer who never wrote to confirm with the confirmar_pedido template', async () => {
+    m.deal = { pipeline_id: 'p1' }
+    m.stages = [{ id: 's1', name: 'Por confirmar', position: 1 }, ...STAGES]
+    m.approved = [{ name: 'confirmar_pedido', language: 'es' }]
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      messageType: 'template', templateName: 'confirmar_pedido', templateParams: ['Ana', '#1002', 'Q300'],
     }))
   })
 
