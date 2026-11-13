@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { runFollowupSweep } from '@/lib/ai/followups-sweep'
+import { runAbandonedCartSweep } from '@/lib/shopify/abandoned-carts'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { describeError } from '@/lib/observability/describe-error'
 
@@ -35,10 +36,16 @@ export async function GET(request: Request) {
 
   try {
     const result = await runFollowupSweep(supabaseAdmin())
-    await recordHeartbeat('followups_cron', {
-      detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}`,
+    // Abandoned Shopify carts ride the same schedule; never fails the follow-ups run.
+    const carts = await runAbandonedCartSweep(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] abandoned carts failed:', describeError(err))
+      return null
     })
-    return NextResponse.json(result)
+    await recordHeartbeat('followups_cron', {
+      detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
+        (carts ? `; carts sent ${carts.sent}, failed ${carts.failed}` : ''),
+    })
+    return NextResponse.json({ ...result, carts })
   } catch (err) {
     const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)
