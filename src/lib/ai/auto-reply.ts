@@ -52,6 +52,7 @@ import { formatWithOffset, describeNowInZone, describeUpcomingWeekdaysInZone, da
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
+import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
 import { describeOrderStatuses, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
@@ -956,6 +957,7 @@ export async function dispatchInboundToAiReply(
     let hasRestaurantMenu = false
     let shopifyOrders = false
     let shopifyOrderStatus: string | null = null
+    let pendingOrder: PendingOrder | null = null
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
@@ -991,6 +993,13 @@ export async function dispatchInboundToAiReply(
       if (enrichment[3].status === 'fulfilled') quickReplies = enrichment[3].value
       if (enrichment[4].status === 'fulfilled') knownContactFacts = enrichment[4].value
       if (enrichment[5].status === 'fulfilled') shopifyOrders = Boolean(enrichment[5].value.data)
+      if (shopifyOrders) {
+        try {
+          pendingOrder = await loadPendingOrderConfirmation(db, accountId, contactId)
+        } catch (err) {
+          console.error('[ai auto-reply] pending order confirmation lookup failed:', err)
+        }
+      }
       // Order-status questions only: one live Shopify read, never on ordinary turns.
       const latestText = latestUserMessage(messages)
       if (shopifyOrders && ORDER_STATUS_QUESTION_RE.test(latestText)) {
@@ -1150,6 +1159,7 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       shopifyOrders,
       shopifyOrderStatus,
+      pendingOrderConfirmation: pendingOrder?.orderName ?? null,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -1384,7 +1394,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, orderConfirmation, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
@@ -2454,6 +2464,22 @@ For airport transport, record the guest's request in nota on the relevant existi
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_quote_chat failed:', err)
+      }
+    }
+
+    // Only taught while a web COD order waits for this customer's answer.
+    if (orderConfirmation && pendingOrder) {
+      try {
+        const line = await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation })
+        if (orderConfirmation === 'cancel') {
+          await handOffToHuman({
+            db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+            alreadyAssigned: Boolean(conv.assigned_agent_id), summary: line,
+          })
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] order confirmation failed:', err)
       }
     }
 

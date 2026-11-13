@@ -7,11 +7,14 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { isWithinMessagingWindow } from '@/lib/messaging/window'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, DELIVERED_STAGE_NAME, normalizeGtPhone, ORDER_TAG, pickForwardStage, SHIPPED_STAGE_NAME,
-  SHIPPED_TEMPLATE_NAME, trackingSentence, verifyShopifyHmac,
+  attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, ORDER_TAG, pickForwardStage,
+  SHIPPED_STAGE_NAME, SHIPPED_TEMPLATE_NAME, TO_CONFIRM_TAG, trackingSentence, updateOrderTags, verifyShopifyHmac,
 } from '@/lib/shopify/api'
 
-interface ShopifyAddress { first_name?: string | null; name?: string | null; phone?: string | null }
+interface ShopifyAddress {
+  first_name?: string | null; name?: string | null; phone?: string | null
+  address1?: string | null; address2?: string | null; city?: string | null
+}
 interface ShopifyOrderPayload {
   admin_graphql_api_id: string
   fulfillments?: (ShopifyFulfillmentPayload & { status?: string | null })[] | null
@@ -19,6 +22,8 @@ interface ShopifyOrderPayload {
   total_price: string
   currency: string
   tags?: string
+  financial_status?: string | null
+  line_items?: { title?: string | null; quantity?: number | null }[] | null
   phone?: string | null
   customer?: { first_name?: string | null; phone?: string | null } | null
   shipping_address?: ShopifyAddress | null
@@ -149,15 +154,22 @@ async function handleOrderCreated(
     const { contactId, conversationId } = await resolveConversationByPhone(
       db, accountId, phone, order.shipping_address?.name || firstName || null,
     )
-    await attachOrderToDeal({
+    const dealId = await attachOrderToDeal({
       db, accountId, userId: cfg.user_id as string, contactId, currency: order.currency,
       order: { id: order.admin_graphql_api_id, name: order.name, total },
     })
     const totalText = formatCurrency(total, order.currency)
     const templateName = cfg.confirmation_template_name as string | null
+    // Web orders are cash on delivery (card goes through WhatsApp): the
+    // customer confirms before it ships — most COD returns are orders
+    // nobody confirmed. Cesi reads their answer (order-confirmation.ts).
+    const cod = order.financial_status !== 'paid'
+    const awaiting = cod && dealId ? await markAwaitingConfirmation(db, accountId, dealId, order.admin_graphql_api_id) : false
     const sent = await notifyCustomer(db, accountId, conversationId,
-      `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}* por ${totalText}. ` +
-      `Ese es su número de pedido para darle seguimiento. ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
+      awaiting
+        ? confirmationRequest(order, firstName, totalText)
+        : `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}* por ${totalText}. ` +
+          `Ese es su número de pedido para darle seguimiento. ¿Nos confirma que los datos de entrega son correctos? ${TRACKING_HINT}`,
       templateName
         ? { name: templateName, language: (cfg.confirmation_template_language as string) || 'es', params: [firstName || 'cliente', order.name, totalText] }
         : null)
@@ -168,6 +180,34 @@ async function handleOrderCreated(
     console.error(`[shopify webhook] order ${order.name} (account ${accountId}) follow-up failed:`, err instanceof Error ? err.message : err)
   }
   return NextResponse.json({ ok: true })
+}
+
+/** Pure: the WhatsApp message asking a web COD customer to confirm. */
+function confirmationRequest(order: ShopifyOrderPayload, firstName: string, totalText: string): string {
+  const items = (order.line_items ?? []).map((i) => `• ${i.quantity ?? 1} x ${i.title ?? 'Producto'}`).join('\n')
+  const a = order.shipping_address
+  const where = [a?.address1, a?.address2, a?.city].map((p) => (p ?? '').trim()).filter(Boolean).join(', ')
+  return `¡Hola${firstName ? ` ${firstName}` : ''}! Recibimos su pedido *${order.name}*:\n${items ? `${items}\n` : ''}` +
+    `Total: ${totalText}, pago contra entrega.${where ? `\nEntrega en: ${where}.` : ''}\n\n` +
+    `¿Confirma su pedido? Responda *SÍ* y lo preparamos para envío. Si hay que corregir algo, díganos qué.`
+}
+
+/** Deal → "Por confirmar" (when the board has that stage) and the order
+ *  tagged por-confirmar. False without the stage: the old flow applies. */
+async function markAwaitingConfirmation(db: SupabaseClient, accountId: string, dealId: string, orderId: string): Promise<boolean> {
+  const { data: deal } = await db.from('deals').select('pipeline_id').eq('id', dealId).eq('account_id', accountId).maybeSingle()
+  if (!deal?.pipeline_id) return false
+  const { data: stages } = await db.from('pipeline_stages').select('id, name').eq('pipeline_id', deal.pipeline_id)
+  const stage = (stages ?? []).find((s) => String(s.name).trim().toLowerCase() === CONFIRM_STAGE_NAME.toLowerCase())
+  if (!stage) return false
+  await db.from('deals').update({ stage_id: stage.id }).eq('id', dealId).eq('account_id', accountId)
+  try {
+    const cfg = await loadShopifyConfig(db, accountId)
+    if (cfg) await updateOrderTags(cfg, orderId, [TO_CONFIRM_TAG], [])
+  } catch (err) {
+    console.error(`[shopify webhook] ${orderId} por-confirmar tag failed:`, err instanceof Error ? err.message : err)
+  }
+  return true
 }
 
 async function handleShipping(
