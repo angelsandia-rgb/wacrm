@@ -34,6 +34,8 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-13 — Continuación del PR #371 (Codex), código pendiente de publicación.** Los pedidos consecutivos de un contacto ya no sobrescriben su trato anterior ni heredan su confirmación/cancelación. Los carritos utilizan la cola de reintentos, recuperan fallos anteriores dentro de su vigencia y se verifican de nuevo en Shopify antes de enviar. Ajuste operativo ya aplicado: se sincronizó `pedido_enviado` a APPROVED según Zernio; la cuenta tiene `pedido_enviado` y `pedido_recibido` aprobadas y 11 plantillas pendientes, sin forzar aprobaciones. Sigue siendo necesario aplicar la migración 179 antes de desplegar el PR.
+
 **2026-11-12 — Correcciones de seguridad operativa de Shopify preparadas por Codex, pendientes de publicación.** El formulario de pedidos reinicia los datos de entrega por cliente; un error de inventario impide crear pedidos o enlaces de pago. Los avisos de pedido usan una cola persistente con reintentos y reservas entre workers. Las decisiones de confirmar/cancelar se guardan localmente y excluyen recordatorios pendientes. Antes de publicar este cambio, aplicar la migración 179; ver `docs/SHOPIFY_NOTIFICATION_RECOVERY.md`. Esta entrada no afirma que los cambios estén desplegados.
 
 **(actualizado 2026-08-15, última sesión: Claude Code)**
@@ -5567,3 +5569,11 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Pruebas: 250 archivos y 2,940 pruebas aprobadas, incluidos inventario, persistencia, concurrencia, plantillas pendientes y cancelaciones. TypeScript y ESLint sin errores; compilación normal de producción con Turbopack aprobada y 143 páginas generadas; package-lock.json sin cambios. Migración ejecutada dos veces en PostgreSQL embebido (PGlite 0.5.16), con comprobaciones de claves por cuenta, reservas y recuperación, workers anteriores, trabajos enviados, permisos y restricción de decisiones aprobadas.
 - Graphify se intentó consultar y actualizar, pero el ejecutable falla con `uv trampoline failed to canonicalize script path`; no se pudo regenerar el grafo.
 - Pendiente de publicación: aplicar la migración 179 antes del despliegue, obtener aprobación del merge y ejecutar la prueba integral en una cuenta de pruebas. No se enviaron mensajes ni se crearon pedidos o cobros reales durante esta corrección. Procedimiento y límites: docs/SHOPIFY_NOTIFICATION_RECOVERY.md.
+
+## 2026-11-13 — Codex: pedidos repetidos, recuperación de carritos y plantillas
+
+- Cada ID de pedido conserva su propio trato y su respuesta. Un segundo pedido del mismo contacto crea otro trato o utiliza uno sin pedido; las repeticiones del mismo ID recuperan el existente. La asignación de un trato vacío compara su estado antes de actualizarlo.
+- Los recordatorios de carritos pasan a shopify_notification_jobs. Se excluyen los éxitos del registro anterior y se recuperan los fallos aún vigentes. Los reintentos consultan el checkout actual por Node: no envían si ya se completó, venció o cambió el teléfono; esperan ante actividad reciente y respetan el horario y los contactos excluidos.
+- Sincronización operativa aplicada a la cuenta de Casa Ceiba: pedido_enviado pasó de PENDING a APPROVED al comprobar el estado real de Zernio. Verificación posterior: pedido_enviado y pedido_recibido aprobadas, 11 pendientes. No se modificaron contenidos ni se forzaron aprobaciones. Copia previa de estados en tmp/zernio-template-status-before-sync.json.
+- Pruebas: 252 archivos y 2,957 pruebas aprobadas. Se añadieron casos de compras repetidas tras confirmación/cancelación, aislamiento por cuenta, recuperación de carritos fallidos, plantillas pendientes, compra completada durante la espera y cambios de teléfono. ESLint sin errores; package-lock.json sin cambios. La compilación final y CI se registran en el PR.
+- El código sigue en el PR #371 y no se ha desplegado. La migración 179 no cambió respecto de la versión validada en PostgreSQL embebido. Mantener el orden: migración, despliegue y comprobación en una cuenta de pruebas.

@@ -1,15 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrderNotification } from './notification-jobs'
+import type { AbandonedCheckout } from './abandoned-cart-data'
 
 const m = vi.hoisted(() => ({
   notify: vi.fn(), tags: [] as string[], muted: false, inbound: false, decision: null as string | null,
+  cart: null as AbandonedCheckout | null,
 }))
 vi.mock('./notify', () => ({ notifyCustomer: m.notify }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
-vi.mock('./api', () => ({
+vi.mock('./api', async (original) => ({
+  ...(await original<typeof import('./api')>()),
   CANCEL_REQUESTED_TAG: 'cliente-cancela', CONFIRMED_TAG: 'confirmado-whatsapp',
   loadShopifyConfig: async () => ({}),
-  shopifyGraphql: async () => ({ order: { tags: m.tags, cancelledAt: null } }),
+  shopifyGraphql: async () => ({ order: { tags: m.tags, cancelledAt: null }, node: m.cart }),
 }))
 import { enqueueOrderNotification, runOrderNotificationSweep } from './notification-jobs'
 
@@ -58,9 +61,19 @@ function database() {
 }
 const payload: OrderNotification = { conversationId: 'c', text: 'Pedido enviado', template: null }
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-13T16:00:00Z'))
   m.notify.mockReset().mockResolvedValue(true)
   m.tags = []; m.inbound = false; m.muted = false; m.decision = null
+  m.cart = {
+    id: 'cart', updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(), completedAt: null,
+    abandonedCheckoutUrl: 'https://store/checkouts/recover', customer: null,
+    shippingAddress: { firstName: 'Ana', phone: '54852732' },
+    totalPriceSet: { shopMoney: { amount: '300.00', currencyCode: 'GTQ' } },
+    lineItems: { nodes: [{ title: 'Producto', quantity: 1 }] },
+  }
 })
+afterEach(() => { vi.useRealTimers() })
 
 describe('durable Shopify notification delivery', () => {
   it('retries an unavailable template, keeps the original payload and does not resend success', async () => {
@@ -133,6 +146,70 @@ describe('durable Shopify notification delivery', () => {
     jobs.get('a:order:unconfirmed')!.status = 'pending' // simulate crash after insertion, before marking success
     await runOrderNotificationSweep(db)
     expect(notifications.size).toBe(2)
+    expect(m.notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('abandoned cart recovery in the same durable queue', () => {
+  const cartJob: OrderNotification = { ...payload, cart: { checkoutId: 'cart', contactId: 'ct', phone: '+50254852732', storeName: 'Casa Ceiba' } }
+  it('retries a pending template then sends the current cart once', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.notify.mockResolvedValueOnce(false)
+    expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+    m.cart!.lineItems.nodes = [{ title: 'Producto actualizado', quantity: 2 }]
+    expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+    expect(m.notify).toHaveBeenLastCalledWith(db, 'a', 'c', expect.stringContaining('2 x Producto actualizado'), {
+      names: ['carrito_abandonado'], params: ['Ana', '2 x Producto actualizado', 'https://store/checkouts/recover'],
+    })
+    await runOrderNotificationSweep(db)
+    expect(m.notify).toHaveBeenCalledTimes(2)
+  })
+  it('does not remind a cart completed while delivery was pending', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.notify.mockResolvedValueOnce(false)
+    await runOrderNotificationSweep(db)
+    m.cart!.completedAt = new Date().toISOString()
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+    expect(m.notify).toHaveBeenCalledTimes(1)
+  })
+  it('does not send the previous customer’s cart after its phone changes', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.cart!.shippingAddress!.phone = '55555555'
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+    expect(m.notify).not.toHaveBeenCalled()
+  })
+  it('drops carts older than 24 hours', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.cart!.updatedAt = new Date(Date.now() - 25 * 3600_000).toISOString()
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+    expect(m.notify).not.toHaveBeenCalled()
+  })
+  it('waits again if the customer just edited the cart', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.cart!.updatedAt = new Date().toISOString()
+    expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+    expect(m.notify).not.toHaveBeenCalled()
+  })
+  it('waits for business hours on retries', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    vi.setSystemTime(new Date('2026-11-13T03:00:00Z'))
+    m.cart!.updatedAt = new Date(Date.now() - 2 * 3600_000).toISOString()
+    expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+    vi.setSystemTime(new Date('2026-11-13T14:00:00Z'))
+    expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+    expect(m.notify).toHaveBeenCalledTimes(1)
+  })
+  it('respects contacts marked without AI', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    m.muted = true
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
     expect(m.notify).not.toHaveBeenCalled()
   })
 })

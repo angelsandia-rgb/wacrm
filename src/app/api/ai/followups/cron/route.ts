@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     const orderNotifications = await runOrderNotificationSweep(supabaseAdmin())
     await recordHeartbeat('followups_cron', {
       detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
-        (carts ? `; carts sent ${carts.sent}, failed ${carts.failed}` : '') +
+        (carts ? `; carts sent ${carts.sent}, pending ${carts.pending}, failed ${carts.failed}` : '') +
         (confirmations ? `; confirmations reminded ${confirmations.reminded}, escalated ${confirmations.escalated}` : '') +
         `; order notifications sent ${orderNotifications.sent}, pending ${orderNotifications.pending}`,
     })

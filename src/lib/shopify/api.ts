@@ -421,7 +421,7 @@ export function trackingSentence(f: { tracking_company?: string | null; tracking
   return 'El mensajero le contactará antes de la entrega.'
 }
 
-/** Point the contact's open deal at this order (or open one in the
+/** Reuse this order's deal or an unassigned open deal (or open one in the
  *  "Pedidos" pipeline — else the oldest — at "Pedido creado" — else the
  *  first stage). An open deal still sitting in the orders board's first
  *  stage ("Consulta") moves to "Pedido creado". */
@@ -430,7 +430,13 @@ export async function attachOrderToDeal(args: {
   order: { id: string; name: string; total: number }; currency: string
 }): Promise<string | null> {
   const { db, accountId, userId, contactId, order, currency } = args
+  const { data: existing, error: existingError } = await db.from('deals').select('id')
+    .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+  if (existingError) throw new ShopifyError(`Order lookup failed: ${existingError.message}`)
+  if (existing) return existing.id as string
+
   const fields: Record<string, unknown> = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
+  fields.shopify_confirmation_decision = null
   const { data: pipelines } = await db
     .from('pipelines').select('id, name').eq('account_id', accountId)
     .order('created_at', { ascending: true })
@@ -440,14 +446,18 @@ export async function attachOrderToDeal(args: {
     : { data: [] as { id: string; name: string }[] }
   const stage = pickOrderStage(stages ?? [])
 
-  const { data: open } = await db
+  const { data: open, error: openError } = await db
     .from('deals').select('id, stage_id')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'open')
+    .is('shopify_order_id', null)
     .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+  if (openError) throw new ShopifyError(`Open deal lookup failed: ${openError.message}`)
   if (open) {
     if (stage && stages?.[0] && open.stage_id === stages[0].id && stage.id !== stages[0].id) fields.stage_id = stage.id
-    await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
-    return open.id as string
+    const { data: linked, error } = await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
+      .is('shopify_order_id', null).select('id').maybeSingle()
+    if (error) throw new ShopifyError(`Cannot link order: ${error.message}`)
+    if (linked) return linked.id as string
   }
   if (!pipeline || !stage) return null
   const { data: deal, error } = await db.from('deals').insert({
