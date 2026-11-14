@@ -59,13 +59,13 @@ Como referencia de calidad se usaron investigaciones de [NN/G sobre confianza, f
 
 ## Validación y publicación
 
-Dieciséis escenarios con el modelo real configurado pasaron comprobaciones sobre precio, presupuesto, confianza, negativa, despedida con pedido pendiente, daño con evidencia ya enviada, doble cobro, garantía general, devolución, persona, cancelación, seguimiento, foto, compra COD confirmada, cambio de resumen y solicitud de baja. Solo se generaron respuestas y propuestas con datos ficticios: no se ejecutaron acciones. Evidencia: `outputs/qa-cc-sales-service-20261114.json`.
+Veinte escenarios con el modelo real configurado pasaron comprobaciones sobre precio, presupuesto, confianza, negativa, despedida con pedido pendiente, daño con evidencia ya enviada, doble cobro, garantía general, devolución, persona, cancelación, seguimiento, foto, compra COD confirmada, cambio de resumen, solicitud de baja, recomendación por uso/espacio, popularidad/escasez no verificadas, no entrega sin foto y reembolso sin plazo falso. Solo se generaron respuestas y propuestas con datos ficticios: no se ejecutaron acciones. Evidencia: `outputs/qa-cc-sales-service-20261114.json` y `outputs/qa-cc-sales-service-extra-20261114.json`.
 
 La baja guardada, el fallo de guardado, la exclusión comercial y la cancelación combinada se cubren además con pruebas de integración simuladas; el ensayo del modelo por sí solo no demuestra que esas operaciones se ejecutaron.
 
 El prompt se aplicará únicamente a Casa Ceiba mediante `scripts/apply-casa-ceiba-conversation-prompt.mjs`, después de publicar los controles acompañantes. El script por defecto muestra un plan de solo lectura; `--apply` respalda el prompt anterior, rechaza una edición concurrente mediante hash y comparación exacta, modifica solo `system_prompt` de esa cuenta y verifica la lectura posterior. No cambia modelo, precios, horarios, claves ni configuración de otra empresa.
 
-Al crear este informe, estos nuevos cambios están preparados en rama; no se han fusionado ni aplicado al prompt vivo. Los resultados finales y el PR se anotan abajo cuando termine la validación del commit.
+Al crear este informe, estos nuevos cambios están preparados en rama; no se han fusionado ni aplicado al prompt vivo. La copia limpia del commit de código `d1ef601a` aprobó TypeScript, ESLint, **255 archivos / 3,068 pruebas** y el build normal de Next.js/Turbopack. El typecheck del directorio de trabajo original incluía scripts antiguos de `tmp` con errores; se verificó el snapshot limpio sin modificar esos archivos del usuario. El primer build no pudo descargar Inter por la restricción de red; al repetir con acceso de red terminó correctamente, sin cambiar fuentes ni configuración. `package-lock.json` permanece sin cambios. El script de aplicación del prompt se probó en modo plan: detecta correctamente el prompt actual y no hizo escrituras. Los cambios posteriores al commit validado son solo documentación.
 
 ## Hallazgos operativos todavía pendientes
 
