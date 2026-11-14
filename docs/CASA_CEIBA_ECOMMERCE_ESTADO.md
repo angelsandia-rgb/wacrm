@@ -14,7 +14,7 @@ Fuente de la lectura: `outputs/cc-estado-actual-2026-11-13b.json` (script `tmp/c
 | Recurrente | Clave **live** y secreto de webhook presentes | Nuevo dato: los enlaces cobran dinero real |
 | Plantillas | **13/13 APPROVED** en `message_templates` | Antes 3 aprobadas |
 | Catálogo | 32 productos, 32 activos y enlazados; última sincronización 12/11 04:24 UTC | Sin sincronizar desde hace ~1 día |
-| #1004 | PENDING / UNFULFILLED, sin cancelar; etiquetas `por-confirmar` + `Dropi Sync Error`; ciudad «Guantemala» | Igual. No se tocó |
+| #1004 | **Cancelado** el 14/11 05:29 UTC a solicitud del propietario (sin reembolso: COD sin pago; reposición de inventario; sin aviso al cliente). El negocio del CRM pasó a «perdido» por el webhook a los 2 s; no se envió ningún mensaje | Evidencia: `outputs/cancelacion-pedido-1004-2026-11-14.json` |
 | Borradores | #D1 (Q169, tarjeta), #D2 (Q500), #D3 (Q199, tarjeta), #D4 (Q300, tarjeta), abiertos | Igual. No se tocaron |
 | Cola de avisos / intentos | Vacías | Igual |
 | Webhooks de app | Ninguno (los de Shopify vienen de Ajustes → Notificaciones) | — |
@@ -36,6 +36,35 @@ Fuente de la lectura: `outputs/cc-estado-actual-2026-11-13b.json` (script `tmp/c
 Mientras siga el bloqueo, la liberación de pedidos contra entrega confirmados es un **paso manual del operador**: «Enviar a Dropi» en Dropify para ese pedido. No se presenta como autonomía.
 
 Si se reactiva «Sincronizar órdenes automáticamente», Dropify importará pedidos web contra entrega **sin confirmar**. Eso ya ocurrió con #1004: la importación solo falló por la ciudad inválida. No reactivarla sin una barrera real.
+
+### 2.1 Validación 14/11: ¿pedidos autónomos sin API?
+
+El propietario decidió atender él las excepciones y pidió que la IA le avise. Con esa decisión, **sí es posible operar sin API**, con este diseño («modo autónomo»):
+
+| Canal | Qué pasa | ¿Requiere a alguien? |
+| --- | --- | --- |
+| Chat, contra entrega | La IA solo crea el pedido después de que el cliente confirma el resumen. Con `orders_live` activo es un pedido real, que Dropify importa solo | No |
+| Chat, tarjeta | Borrador → pago verificado en Recurrente (importe y moneda) → pedido PAGADO, que Dropify importa solo | No |
+| Web, contra entrega | Dropify lo importa **al crearse**, antes de confirmar. En paralelo se pide la confirmación por WhatsApp | Solo si el cliente cancela o no responde |
+
+**Compromiso aceptado:** en web, la confirmación deja de ser una barrera previa y pasa a ser un control posterior. Un pedido que el cliente rechaza ya está en Dropi y el propietario debe cancelarlo allí antes del despacho.
+
+**Avisos al propietario (excepciones):**
+
+| Excepción | Aviso | Estado |
+| --- | --- | --- |
+| Cliente cancela por WhatsApp | Notificación + chat asignado: «cancélelo en Dropi y en Shopify antes de que se despache» | Existente (migración 179) |
+| 24 h sin confirmar | Notificación: «llame al cliente o cancélelo en Dropi» | Existente |
+| Dropi rechaza el pedido («Dropi Sync Error»: ciudad, teléfono, etc.) | Notificación con el motivo de Dropify | **Nuevo (PR 2)** |
+| Pago cobrado sin pedido liberado / importe distinto | Alerta crítica | PR #372 (en producción) |
+| Sin stock, total distinto, error al crear | El chat pasa a una persona + notificación | Existente / PR #372 |
+
+**Antes de activarlo** (no se activa todavía: el propietario pidió no hacer pruebas reales aún):
+
+1. El propietario verifica en su panel de Dropi **qué tan rápido despacha Dropi un pedido importado**. Si sale en minutos, no hay tiempo para cancelar los rechazados y el modo autónomo en web generaría devoluciones.
+2. La plantilla aprobada `recordatorio_confirmacion` promete «no lo enviaremos hasta que lo confirme», lo cual es falso en este modo. El PR 2 deja de usarla con `orders_live` activo: el recordatorio solo sale como texto dentro de la ventana de 24 h, sin esa promesa. Para recordar fuera de 24 h hace falta una plantilla nueva sin promesa.
+3. Prueba simulada completa con el número de QA del propietario conectado al CRM, aún sin pedidos reales a Dropi.
+4. Activación: `orders_live` encendido + las dos casillas de Dropify marcadas. Esto genera despachos reales y requiere autorización explícita.
 
 ## 3. Cambios de código (PR #372, sin migración)
 
@@ -70,7 +99,7 @@ Tipos de evidencia: **S** = simulado (prueba automática con mocks: prueba nuest
 | Dos pedidos del mismo contacto / tras 30 min | Bloqueo compartido 30 min (migración 179). Una compra nueva después sigue siendo posible | S (`chat-order.test.ts`) |
 | Timeout del proveedor | **No aplica todavía:** no hay adaptador de Dropi | — |
 | Doble worker / evento duplicado | Reserva persistente de intentos y cola con clave única | S (migración 179, pruebas previas) |
-| Cancelación antes / después de importar | Shopify → negocio perdido. Dropi no se consulta (sin API) | S |
+| Cancelación antes / después de importar | Shopify → negocio perdido, sin mensaje. Dropi no se consulta (sin API) | **L**: #1004 cancelado en producción, negocio «perdido» a los 2 s, cero mensajes |
 | Dos paquetes, uno entregado | Queda «Enviado» | S |
 | Plantilla pendiente / fuera de 24 h / excluido | Cola sin texto libre fuera de ventana; respeta «Sin IA» | S (pruebas previas). Plantillas: L (13 aprobadas) |
 | Guía y entrega final | Avisos deduplicados por clave de evento | S. Real: sin envíos todavía |
@@ -97,7 +126,7 @@ Tipos de evidencia: **S** = simulado (prueba automática con mocks: prueba nuest
 | Liberación de COD confirmado a Dropi | **Bloqueada por dependencia** (API oficial de Dropi) |
 | Validación de municipio y departamento | Pendiente (catálogo de ciudades de Dropi) |
 | Enviado / entregado / parcial / cancelado | Implementada (simulada). Pendiente de evidencia real |
-| Retención de pagos anómalos | Implementada (PR #372, pendiente de merge) |
+| Retención de pagos anómalos | Implementada, en producción (#372, `28f9776f`) |
 | Panel de conciliación (§B4) | Pendiente |
 | Reconciliación programada | Pendiente |
 
@@ -105,8 +134,7 @@ Tipos de evidencia: **S** = simulado (prueba automática con mocks: prueba nuest
 
 ## 7. Lo que necesita el propietario
 
-1. **Dropi Guatemala:** pedir acceso oficial a la API de órdenes. Hace falta documentación, credencial de integración, entorno de pruebas, creación con referencia externa, consulta por referencia y catálogo de ciudades y departamentos. Sin esto, la liberación contra entrega no puede ser automática.
-2. **Políticas** (no se inventan): costo o gratuidad del envío y cobertura, municipios excluidos, plazos, mínimo para contra entrega, devoluciones y reembolsos, y responsable de excepciones. FEL: con su responsable fiscal.
-3. **Prueba externa controlada de prepago** (requiere autorización específica, ver §2 del plan): con un producto barato y su propio número, cobro real con Recurrente. Antes hay que activar «sincronizar órdenes pagadas» y `orders_live`. Efecto: cargo real y pedido real importado a Dropi.
-4. **#1004:** decidir qué hacer con la prueba: cancelarla en Shopify, o corregir la ciudad y confirmar. No se tocó.
-5. Número de WhatsApp de QA que el propietario identifique, para probar confirmación y avisos.
+1. **Dropi (lo único que bloquea activar el modo autónomo):** comprobar en su panel cuánto tarda en despacharse un pedido importado, y si espera alguna acción suya antes de generar la guía. Eso define si el modo autónomo de §2.1 es viable para la web.
+2. **Políticas** (no se inventan): costo o gratuidad del envío y cobertura, municipios excluidos, plazos, mínimo para contra entrega, devoluciones y reembolsos. FEL: con su responsable fiscal.
+3. **Pruebas:** primero simuladas con el número de QA ya conectado al CRM. Las pruebas reales (cobro con Recurrente, importación a Dropi) solo con autorización explícita, cuando el propietario lo decida.
+4. Opcional, a futuro: acceso oficial a la API de órdenes de Dropi y su catálogo de ciudades. Permitiría devolver la confirmación a una barrera previa y validar municipios.

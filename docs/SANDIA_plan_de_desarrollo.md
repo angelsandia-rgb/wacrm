@@ -5634,3 +5634,23 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   archivos tocados sin errores, TypeScript de `src/` limpio, build de
   producción aprobado en worktree limpio con `npm ci`, `package-lock.json` sin
   cambios. Consultas GraphQL nuevas validadas en solo lectura contra la tienda.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, merge #372, cancelación de #1004 y avisos de excepción
+
+- #372 fusionado con el «sí» del propietario (`28f9776f`) y desplegado: el
+  contenedor reporta `GIT_SHA=28f9776f`, healthy; `/api/health` 200.
+- #1004 cancelado en Shopify a solicitud explícita del propietario (prueba
+  suya): sin reembolso (COD sin pago), reposición de inventario, sin aviso al
+  cliente. **Evidencia real del código de #372:** el webhook cerró el negocio
+  como «perdido» a los 2 s, sin mensajes ni avisos en cola
+  (`outputs/cancelacion-pedido-1004-2026-11-14.json`).
+- Validación «¿autónomo sin API?»: sí, con la confirmación web como control
+  posterior y el propietario atendiendo excepciones (diseño en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §2.1). No se activa: el propietario
+  pidió no hacer pruebas reales aún. Falta confirmar en Dropi el tiempo de
+  despacho.
+- PR nuevo: aviso al dueño cuando Dropi rechaza un pedido («Dropi Sync
+  Error», con el motivo de la nota de Dropify), y el recordatorio de
+  confirmación deja de prometer «no lo enviaremos» cuando el proveedor importa
+  solo. Suite 253 archivos / 3,018 pruebas, ESLint sin errores, build en
+  worktree limpio aprobado, lockfile sin cambios.
