@@ -5735,3 +5735,13 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Código preparado en rama para nombres relevantes fuera del corte inicial de 50, conservando el producto tras «sí/lo quiero» mediante contexto reciente. Búsqueda y prompt limitados, cuenta/activos obligatorios, descripción dropshipping hasta 300 caracteres y límites/reglas del hotel conservados.
 - Pruebas enfocadas: 352 aprobadas. Validación completa de código `11011199`: TypeScript, ESLint, 255 archivos / 3,078 pruebas y build Next/Turbopack de 143 páginas aprobados en copia limpia, lockfile sin cambios. Búsqueda validada además contra la base real en solo lectura. Graphify mantiene el error conocido de uv; fuentes revisadas directamente.
 - El prompt está activo. El código requiere PR y sí explícito para su merge; la autorización del #376 no cubre este nuevo PR. No se cambió el diseño de proveedor Effi ni el enrutamiento de compras.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, pagos tardíos y avisos operativos (#379)
+
+- Fusionado con el «sí» del propietario (`73682aba`); contenedor `GIT_SHA=73682aba`, healthy, `/api/health` 200. Sin migración.
+- Cierra los puntos 1–3 de «Hallazgos operativos todavía pendientes» de `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md`:
+  - Pago con tarjeta: antes de completar el borrador se exige compra abierta en el CRM y existencias al momento del pago; si no, se retiene sin liberar nada a Dropi.
+  - Pago retenido: aviso guardado al dueño/admins (con push) antes de responder 200; si no se guarda, 500 y Recurrente reintenta. Un borrador sin contacto solo genera la alerta de plataforma.
+  - Avisos al equipo (rechazo de Dropi, 24 h sin confirmar) a cualquier hora; el horario 08–20 queda para mensajes comerciales. Un rechazo con otro motivo, o el mismo tras limpiarse la etiqueta, vuelve a avisar.
+- Sin evidencia real: no ha habido cobros ni pedidos desde la activación.
+- Abierto: el prompt vivo de Casa Ceiba cambió el 14/11 a las 12:18 UTC fuera de esta sesión y aún dice «sin riesgo» y obliga a cerrar con pregunta; pendiente de confirmar con el propietario.
