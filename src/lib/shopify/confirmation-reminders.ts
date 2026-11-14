@@ -22,10 +22,14 @@ export function confirmationStep(args: {
   return null
 }
 
-/** Pure: the reminder text (inside the 24 h window). */
-export function reminderText(firstName: string, orderName: string, total: string): string {
-  return `Hola${firstName ? ` ${firstName}` : ''}, su pedido *${orderName}* (${total}) aún está pendiente de confirmación ` +
-    `y no lo enviaremos hasta que nos confirme. ¿Lo confirmamos? Responda *SÍ*, o díganos si desea cambiar o cancelar algo.`
+/** Pure: the reminder text (inside the 24 h window). `holdsShipment` is
+ *  false when the provider imports orders on its own ("Crear pedidos
+ *  reales" on, Dropify syncing): then nothing guarantees the order waits,
+ *  so the text must not promise it. */
+export function reminderText(firstName: string, orderName: string, total: string, holdsShipment = true): string {
+  return `Hola${firstName ? ` ${firstName}` : ''}, su pedido *${orderName}* (${total}) aún está pendiente de confirmación` +
+    (holdsShipment ? ' y no lo enviaremos hasta que nos confirme' : '') +
+    `. ¿Lo confirmamos? Responda *SÍ*, o díganos si desea cambiar o cancelar algo.`
 }
 
 /**
@@ -88,8 +92,10 @@ export async function runConfirmationReminderSweep(admin: SupabaseClient, now: D
       const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || ''
       const total = formatCurrency(Number(deal.value) || 0, (deal.currency as string) || 'GTQ')
       await enqueueOrderNotification(admin, accountId, `${deal.shopify_order_id}:reminder`, {
-        conversationId, text: reminderText(firstName, order.name, total),
-        template: { names: REMINDER_TEMPLATE, params: [firstName || 'cliente', order.name] },
+        conversationId, text: reminderText(firstName, order.name, total, !cfg.ordersLive),
+        // The approved template promises the order is held: only true while sales are paused.
+        // ponytail: in-window text only when live; submit a promise-free template to remind outside 24 h.
+        template: cfg.ordersLive ? null : { names: REMINDER_TEMPLATE, params: [firstName || 'cliente', order.name] },
         confirmation: { orderId: deal.shopify_order_id as string, contactId: deal.contact_id as string, since, reminder: true },
       })
       res.reminded++

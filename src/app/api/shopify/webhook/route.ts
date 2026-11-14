@@ -4,9 +4,10 @@ import { supabaseAdmin } from '@/lib/webhooks/admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { formatCurrency } from '@/lib/currency'
+import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import {
   attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, isCashOnDelivery, loadShopifyConfig, normalizeGtPhone, ORDER_TAG,
-  orderFullyDelivered, pickForwardStage, SHIPPED_STAGE_NAME, shopifyGraphql, TO_CONFIRM_TAG, trackingSentence, updateOrderTags,
+  orderFullyDelivered, pickForwardStage, hasDropiSyncError, dropiSyncReason, SHIPPED_STAGE_NAME, shopifyGraphql, TO_CONFIRM_TAG, trackingSentence, updateOrderTags,
   verifyShopifyHmac,
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
@@ -27,6 +28,7 @@ interface ShopifyOrderPayload {
   fulfillment_status?: string | null
   payment_gateway_names?: string[] | null
   cancelled_at?: string | null
+  note?: string | null
   line_items?: { title?: string | null; quantity?: number | null }[] | null
   phone?: string | null
   customer?: { first_name?: string | null; phone?: string | null } | null
@@ -95,6 +97,8 @@ export async function POST(request: Request) {
     if (order.cancelled_at) return handleCancelled(db, accountId, order.admin_graphql_api_id)
     const fs = order.fulfillments ?? []
     const live = fs.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
+    // A stale tag on an order that is already shipping is no longer an exception.
+    if (!live.length && hasDropiSyncError(order.tags)) return handleDropiSyncError(db, accountId, order)
     if (!live.length) return NextResponse.json({ ok: true, skipped: 'not shipped' })
     return handleShipping(db, accountId, {
       orderGid: order.admin_graphql_api_id, orderName: order.name,
@@ -135,6 +139,52 @@ async function orderVerifiedDelivered(db: SupabaseClient, accountId: string, ord
     console.error(`[shopify webhook] cannot verify delivery of ${orderGid}:`, err instanceof Error ? err.message : err)
     return false
   }
+}
+
+/** The order did NOT reach Dropi: tell the owner/admins once, with Dropify's
+ *  reason and the safe next step. The customer is not told anything: the
+ *  fix (address data) and the re-send are a person's call. */
+// ponytail: one alert per order (event key); a second, different rejection of the same order after a fix is not re-alerted.
+async function handleDropiSyncError(db: SupabaseClient, accountId: string, order: ShopifyOrderPayload) {
+  try {
+    const { data: deal, error: dealError } = await db.from('deals').select('contact_id')
+      .eq('account_id', accountId).eq('shopify_order_id', order.admin_graphql_api_id).maybeSingle()
+    if (dealError) throw dealError
+    const { data: contact, error: contactError } = deal?.contact_id
+      ? await db.from('contacts').select('phone, name').eq('id', deal.contact_id).eq('account_id', accountId).maybeSingle()
+      : { data: null, error: null }
+    if (contactError) throw contactError
+    const rawPhone = (contact?.phone as string | undefined) || order.phone || order.shipping_address?.phone || ''
+    const { data: recipients, error } = await db.from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin'])
+    if (error) throw error
+    if (!rawPhone || !recipients?.length) {
+      // No conversation to attach the in-app notice to: platform alert instead.
+      await dispatchSystemAlert({
+        severity: 'warning', source: 'dropi_sync_error', accountId,
+        title: `Pedido ${order.name} no llegó a Dropi`, dedupKey: `dropi_sync_error:${accountId}:${order.admin_graphql_api_id}`,
+        detail: { order: order.name, reason: dropiSyncReason(order.note) },
+      })
+      return NextResponse.json({ ok: true, alerted: 'system' })
+    }
+    const { conversationId } = await resolveConversationByPhone(
+      db, accountId, normalizeGtPhone(rawPhone), (contact?.name as string | null) ?? order.shipping_address?.name ?? null,
+    )
+    const reason = dropiSyncReason(order.note) || 'Dropify no indicó el motivo'
+    const eventKey = `${order.admin_graphql_api_id}:dropi-sync-error`
+    await enqueueOrderNotification(db, accountId, eventKey, {
+      conversationId, text: '', template: null,
+      staff: {
+        userIds: recipients.map((r) => r.user_id as string),
+        title: `Pedido ${order.name} no llegó a Dropi`,
+        body: `⚠️ Dropi rechazó el pedido ${order.name}: ${reason}. Corrija los datos en Shopify y reenvíelo desde Dropify, o cancélelo si ya no procede.`,
+      },
+    })
+    await runOrderNotificationSweep(db, accountId, eventKey)
+  } catch (err) {
+    console.error(`[shopify webhook] dropi sync error notice for ${order.name} (account ${accountId}) failed:`, err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
+  }
+  return NextResponse.json({ ok: true })
 }
 
 /** Cancelled in Shopify: the open deal closes as lost, which also stops the
