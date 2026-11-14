@@ -86,6 +86,17 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — web order form request', () => {
+  it('teaches confirm, card and cancel markers, and says no order exists yet', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderRequest: '1 x Lámpara; total Q199' })
+    expect(p).toContain('ORDER REQUEST AWAITING CONFIRMATION')
+    expect(p).toContain('NO order exists yet')
+    for (const m of ['[[ACTION:confirm_shopify_order]]', '[[ACTION:confirm_shopify_order_card]]', '[[ACTION:cancel_shopify_order]]']) expect(p).toContain(m)
+    // A real pending order takes precedence over a request.
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderRequest: 'x', pendingOrderConfirmation: '#1002' })).not.toContain('ORDER REQUEST AWAITING')
+  })
+})
+
 describe('buildSystemPrompt — web COD order confirmation', () => {
   it('teaches the confirm/cancel markers only while an order awaits confirmation', () => {
     const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderConfirmation: '#1002' })

@@ -186,6 +186,8 @@ export const CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX = ']]'
  *  src/lib/shopify/order-confirmation.ts). */
 export const CONFIRM_SHOPIFY_ORDER_SENTINEL = '[[ACTION:confirm_shopify_order]]'
 export const CANCEL_SHOPIFY_ORDER_SENTINEL = '[[ACTION:cancel_shopify_order]]'
+/** Confirms a pending web order REQUEST but pays by card (Recurrente link). */
+export const CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL = '[[ACTION:confirm_shopify_order_card]]'
 
 /**
  * Sentinel prefix/suffix the model is instructed to wrap a quick
@@ -421,6 +423,9 @@ export function buildSystemPrompt(args: {
   /** A web cash-on-delivery order (e.g. "#1002") waiting for this
    *  customer's WhatsApp confirmation — teaches the confirm/cancel markers. */
   pendingOrderConfirmation?: string | null
+  /** A web order REQUEST from the store's own form (no Shopify order yet)
+   *  waiting for this customer's WhatsApp answer: its summary line. */
+  pendingOrderRequest?: string | null
   /** The account has a restaurant menu PDF on file
    *  (`accounts.restaurant_menu_url`, migration 114) — auto-reply mode
    *  only. Turns on `SEND_RESTAURANT_MENU_SENTINEL` so the bot can send
@@ -507,7 +512,7 @@ export function buildSystemPrompt(args: {
   /** The account's AI skill rules (auto-reply mode, ./skills.ts). */
   skills?: AiSkillsConfig | null
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, shopifyOrders, shopifyOrderStatus, pendingOrderConfirmation, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, shopifyOrders, shopifyOrderStatus, pendingOrderConfirmation, pendingOrderRequest, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -668,6 +673,17 @@ export function buildSystemPrompt(args: {
           `If they clearly say they no longer want it or cancel, accept it kindly, tell them an advisor will take care of the cancellation, and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
           `If they want to change something (address, phone, product, quantity), collect the correction and hand off (an advisor updates the order) — no confirm marker. If their message is about something else, answer that intent first; mention a pending confirmation only when it is relevant and welcome, never during a complaint, cancellation, human request, refusal, opt-out, thanks or goodbye. ` +
           `Use each marker at most once, only for ${pendingOrderConfirmation}, and never mention it to the customer.`,
+      )
+    }
+
+    if (pendingOrderRequest && !pendingOrderConfirmation) {
+      parts.push(
+        `ORDER REQUEST AWAITING CONFIRMATION: this customer filled the web store's order form (${pendingOrderRequest}) and the system asked them by WhatsApp to confirm it. NO order exists yet and nothing has been sent to the supplier: the order and its number are created only when they confirm. ` +
+          `If they clearly confirm it paying cash on delivery ("sí", "confirmo", "está bien"), thank them warmly, say you are registering it and that the order number arrives in a moment, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. ` +
+          `If they confirm but want to pay by card, say you are preparing the secure payment link, and append ${CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL} at the very end. ` +
+          `If they clearly say they no longer want it, accept it kindly (nothing was charged or shipped, no advisor is needed) and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
+          `If they want to change something (product, quantity, address, phone), collect the change, send a new full summary and, once they confirm that new summary, use the create_shopify_order marker instead of these markers. If their message is about something else, answer that first. ` +
+          `Never invent an order number. Use one of these markers at most once and never mention them to the customer.`,
       )
     }
 

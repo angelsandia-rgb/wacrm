@@ -49,6 +49,12 @@ describe('parseGeneration', () => {
     expect(parseGeneration('Entendido. [[ACTION:confirm_shopify_order]] [[ACTION:cancel_shopify_order]]').orderConfirmation).toBe('cancel')
     expect(parseGeneration('Hola').orderConfirmation).toBeUndefined()
   })
+  it('reads the card confirmation of a web order request and strips it', () => {
+    const card = parseGeneration('Le preparo el link de pago seguro. [[ACTION:confirm_shopify_order_card]]')
+    expect(card.orderConfirmation).toBe('confirm_card')
+    expect(card.text).toBe('Le preparo el link de pago seguro.')
+    expect(parseGeneration('Ok [[ACTION:confirm_shopify_order_card]] [[ACTION:cancel_shopify_order]]').orderConfirmation).toBe('cancel')
+  })
 
   it('returns text with no handoff', () => {
     expect(parseGeneration('Hello there')).toEqual({

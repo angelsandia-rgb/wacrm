@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   createShopifyOrderFromChat: vi.fn(),
   loadPendingOrderConfirmation: vi.fn(),
   resolveOrderConfirmation: vi.fn(),
+  loadPendingOrderRequest: vi.fn(),
+  settleOrderRequest: vi.fn(),
   persistCommercialOptOut: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
@@ -174,6 +176,10 @@ vi.mock('@/lib/shopify/chat-order', () => ({ createShopifyOrderFromChat: h.creat
 vi.mock('@/lib/shopify/order-confirmation', () => ({
   loadPendingOrderConfirmation: h.loadPendingOrderConfirmation,
   resolveOrderConfirmation: h.resolveOrderConfirmation,
+}))
+vi.mock('@/lib/shopify/order-requests', () => ({
+  loadPendingOrderRequest: h.loadPendingOrderRequest,
+  settleOrderRequest: h.settleOrderRequest,
 }))
 vi.mock('@/lib/observability/alerts', () => ({
   dispatchSystemAlert: h.dispatchSystemAlert,
@@ -664,6 +670,8 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 beforeEach(() => {
   h.persistCommercialOptOut.mockReset().mockResolvedValue(undefined)
   h.loadPendingOrderConfirmation.mockReset().mockResolvedValue(null)
+  h.loadPendingOrderRequest.mockReset().mockResolvedValue(null)
+  h.settleOrderRequest.mockReset().mockResolvedValue(true)
   h.resolveOrderConfirmation.mockReset().mockResolvedValue('Pedido guardado')
   h.state.conv = {
     assigned_agent_id: null,
@@ -2427,6 +2435,34 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.resolveOrderConfirmation).toHaveBeenCalledWith(expect.objectContaining({ pending, decision }))
     expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+  })
+
+  describe('web order form request (no Shopify order yet)', () => {
+    const stored = { items: [{ name: 'Freidora de Aire', qty: 2 }], fullName: 'Ana López', phone: '+50254852732', address: '4a calle', departamento: 'Guatemala', municipio: 'Mixco', payment: 'cod' as const }
+    const modelGuess = { items: [{ name: 'Freidora de Aire', qty: 9 }], fullName: 'Otra', phone: '55555555', address: 'X', departamento: 'Guatemala', payment: 'cod' as const }
+    beforeEach(() => {
+      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire' })
+    })
+    it.each([['confirm', 'cod'], ['confirm_card', 'card']] as const)('a %s answer places the STORED request once, never the model proposal', async (decision, payment) => {
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: decision, shopifyOrderProposal: modelGuess })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'confirmed')
+      expect(h.createShopifyOrderFromChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ proposal: { ...stored, payment } }))
+      expect(h.resolveOrderConfirmation).not.toHaveBeenCalled()
+    })
+    it('a duplicate answer (request already settled) places nothing', async () => {
+      h.settleOrderRequest.mockResolvedValue(false)
+      h.generateReply.mockResolvedValue({ text: 'Gracias.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+    })
+    it('a refusal closes the request without an order or an advisor', async () => {
+      h.generateReply.mockResolvedValue({ text: 'Entendido, no hay problema.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'cancel' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'cancelled')
+      expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+      expect(h.state.updatePayload ?? {}).not.toHaveProperty('ai_autoreply_disabled')
+    })
   })
 
   it.each(['confirm', 'cancel'] as const)('connected store: a failed %s decision alerts the team without recreating the order or sending another success message', async (decision) => {
