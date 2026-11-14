@@ -33,6 +33,8 @@ Fuente de la lectura: `outputs/cc-estado-actual-2026-11-13b.json` (script `tmp/c
 
 ## 2. Decisión de integración con el proveedor (fase A3)
 
+**Historial:** la decisión inicial y la tabla siguientes corresponden a la fase con sincronización pausada. Fueron sustituidas operativamente por el modo aceptado en §2.1 y activado en §0. No interpretar «bloqueada/manual» de este historial como el estado actual del envío COD. El riesgo que permanece es que web COD importa antes de confirmar. Revisión posterior de ventas y SAC: `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md`; sus mejoras nuevas todavía están en rama y no se han aplicado al prompt vivo.
+
 **Capacidades confirmadas:**
 
 - Dropify (pantalla Configuración General, 13/11): solo 4 casillas. Son «sincronizar órdenes», «sincronizar órdenes pagadas», «crear producto en Dropi» y «limpiar nota». **No hay filtro por etiqueta ni regla por estado de confirmación.**
@@ -99,7 +101,7 @@ Tipos de evidencia: **S** = simulado (prueba automática con mocks: prueba nuest
 | Caso | Resultado | Evidencia |
 | --- | --- | --- |
 | COD web sin confirmar / COD chat incompleto | Cero importaciones mientras la sincronización esté pausada. El chat no crea pedido sin confirmación explícita del resumen | L (Dropify desmarcado y recargado), S (`chat-order`, prompt) |
-| COD confirmado válido | **Bloqueado** (dependencia Dropi). Hoy el pedido se confirma en CRM y Shopify, y la liberación es manual | — |
+| COD confirmado válido | Chat: activado con importación automática tras crear el pedido; web: se importa antes de confirmar, según el compromiso de §2.1. La vía con barrera previa para web sigue sin resolverse | S del código; sin prueba externa completa |
 | Prepago pendiente / fallido / expirado | Sin liberación: el webhook solo actúa si Recurrente informa `paid` | S |
 | Prepago verificado | Borrador → PAGADO con importe y moneda leídos de Recurrente | S. **Pendiente de prueba externa autorizada** |
 | Pago duplicado / reintento | Un borrador completado se reutiliza, no se completa dos veces | S (`api.test.ts` «recovers the paid order on a retry») |

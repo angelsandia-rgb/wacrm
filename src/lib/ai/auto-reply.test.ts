@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   createShopifyOrderFromChat: vi.fn(),
   loadPendingOrderConfirmation: vi.fn(),
   resolveOrderConfirmation: vi.fn(),
+  persistCommercialOptOut: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
   createEvent: vi.fn(),
@@ -38,6 +39,7 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     claim: true as boolean,
+    shopifyConnected: true,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
     openDeal: null as { id: string; pipeline_id: string; stage_id: string } | null,
@@ -279,6 +281,14 @@ vi.mock('./admin-client', () => ({
     from: (table: string) => {
       if (table === 'ai_configs') {
         const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { handoff_agent_id: null }, error: null }) }
+        return chain
+      }
+      if (table === 'shopify_config') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: async () => ({ data: h.state.shopifyConnected ? { id: 'shopify-1' } : null, error: null }),
+        }
         return chain
       }
       if (table === 'deals') {
@@ -615,6 +625,11 @@ vi.mock('./admin-client', () => ({
   }),
 }))
 
+vi.mock('./commercial-preferences', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./commercial-preferences')>(),
+  persistCommercialOptOut: h.persistCommercialOptOut,
+}))
+
 import { CATALOG_ONLY_REPLY_TEXT, dispatchInboundToAiReply, parseChildAges } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
 import { CLOSE_AVAILABILITY_AND_TOTAL_LINE } from './hotel-stay-estimate'
@@ -644,6 +659,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 beforeEach(() => {
+  h.persistCommercialOptOut.mockReset().mockResolvedValue(undefined)
   h.loadPendingOrderConfirmation.mockReset().mockResolvedValue(null)
   h.resolveOrderConfirmation.mockReset().mockResolvedValue('Pedido guardado')
   h.state.conv = {
@@ -658,6 +674,7 @@ beforeEach(() => {
   h.state.convFullSelectError = false
   h.state.recoveryUpdateRows = [{ id: 'conv-1' }]
   h.state.claim = true
+  h.state.shopifyConnected = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
   h.state.openDeal = null
@@ -727,6 +744,35 @@ beforeEach(() => {
   h.dispatchWebhookEvent.mockResolvedValue(undefined)
   h.sendCatalogToConversation.mockResolvedValue({ catalogUrl: 'https://example.com/catalog/acct-1' })
   h.sendRestaurantMenuToConversation.mockReset().mockResolvedValue(undefined)
+})
+
+describe('dispatchInboundToAiReply — persisted commercial opt-out', () => {
+  it('saves a clear opt-out before acknowledging it without generating or creating an order', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'No me escriban más ni me manden promociones.' }])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.persistCommercialOptOut).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'contact-1')
+    expect(h.persistCommercialOptOut.mock.invocationCallOrder[0]).toBeLessThan(h.sendMessageToConversation.mock.invocationCallOrder[0])
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({ contentText: expect.stringContaining('Registré su preferencia') }))
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+  })
+
+  it('does not claim the preference was saved on a database failure and routes the unresolved request', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'No quiero promociones.' }])
+    h.persistCommercialOptOut.mockRejectedValue(new Error('Database unavailable'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({ contentText: expect.stringContaining('todavía no pude guardarla') }))
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+  })
+
+  it('keeps a simple refusal to buy in the normal conversation', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'No quiero comprar ahora, gracias.' }])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.persistCommercialOptOut).not.toHaveBeenCalled()
+    expect(h.generateReply).toHaveBeenCalled()
+  })
 })
 
 describe('dispatchInboundToAiReply — debounce', () => {
@@ -999,6 +1045,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
   })
 
   it('acknowledges the transfer to the customer instead of leaving them with silence — real gap found 2026-09-20', async () => {
+    h.state.shopifyConnected = false
     // The model is told to emit ONLY [[HANDOFF]] on this turn (no other
     // text), so `outboundText` is empty here, same as every other test
     // in this block — before this fix, the guest who just confirmed
@@ -1015,6 +1062,36 @@ describe('dispatchInboundToAiReply — handoff', () => {
         contentText: expect.stringContaining('en un momento'),
       }),
     )
+  })
+
+  it('connected store: directly routes a clear human request even if the model asks permission again', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Quiero hablar con una persona por favor' }])
+    h.generateReply.mockResolvedValue({ text: '¿Le gustaría que le conecte con alguien del equipo?', handoff: false, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({
+      contentText: 'Un asesor revisará su solicitud y continuará por este chat.',
+    }))
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: null })
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'create_shopify_order')).toHaveLength(0)
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+  })
+
+  it('connected store: an empty handoff acknowledgment does not promise an immediate reply', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({
+      contentText: 'Un asesor revisará su solicitud y continuará por este chat.',
+    }))
+    expect(h.state.notificationInserts).toHaveLength(2)
+  })
+
+  it('connected store: a negated human request remains eligible for an ordinary answer', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'No quiero hablar con una persona, solo quiero ver el precio' }])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello!' }))
+    expect(h.state.updatePayload ?? {}).not.toHaveProperty('ai_autoreply_disabled', true)
+    expect(h.state.notificationInserts).toHaveLength(0)
   })
 
   it('sends whatever text the model left alongside the sentinel instead of the default, if any', async () => {
@@ -2349,6 +2426,90 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
   })
 
+  it.each(['confirm', 'cancel'] as const)('connected store: a failed %s decision alerts the team without recreating the order or sending another success message', async (decision) => {
+    const pending = { dealId: 'd', orderId: 'gid://shopify/Order/1002', orderName: '#1002', pipelineId: 'p' }
+    h.loadPendingOrderConfirmation.mockResolvedValue(pending)
+    h.resolveOrderConfirmation.mockRejectedValue(new Error('Decision transaction unavailable'))
+    h.generateReply.mockResolvedValue({
+      text: 'Tomé nota de su respuesta para el pedido #1002.', handoff: false, markDealWon: false, moveToStageName: null,
+      orderConfirmation: decision,
+      shopifyOrderProposal: { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.resolveOrderConfirmation).toHaveBeenCalledTimes(1)
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Tomé nota de su respuesta para el pedido #1002.' }))
+    expect(h.sendMessageToConversation).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: decision === 'cancel' ? null : true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('#1002')
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('Decision transaction unavailable')
+    expect(h.state.notificationInserts).toHaveLength(2)
+    expect(h.state.messageInserts).toContainEqual(expect.objectContaining({
+      content_type: 'internal_note', content_text: expect.stringContaining('No recree el pedido'),
+    }))
+  })
+
+  it('connected store: handoff plus cancellation records the pending decision once and skips a second handoff and every sales action', async () => {
+    const pending = { dealId: 'd', orderId: 'gid://shopify/Order/1002', orderName: '#1002', pipelineId: 'p' }
+    h.loadPendingOrderConfirmation.mockResolvedValue(pending)
+    h.generateReply.mockResolvedValue({
+      text: 'Su pedido ya está cancelado.', handoff: true, markDealWon: true, moveToStageName: 'Pedido creado',
+      orderConfirmation: 'cancel', sendCatalog: true,
+      shopifyOrderProposal: { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.resolveOrderConfirmation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pending, decision: 'cancel' }))
+    expect(h.sendMessageToConversation).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', expect.objectContaining({
+      contentText: 'Recibimos su solicitud de cancelación. Un asesor revisará el pedido y continuará por este chat.',
+    }))
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+    expect(h.sendCatalogToConversation).not.toHaveBeenCalled()
+    expect(h.moveDeal).not.toHaveBeenCalled()
+    // resolveOrderConfirmation owns routing and staff notifications; do not
+    // run the generic handoff and duplicate its effects after a known success.
+    expect(h.state.notificationInserts).toHaveLength(0)
+    expect(h.state.messageInserts).toHaveLength(0)
+    expect(h.state.updatePayload ?? {}).not.toHaveProperty('ai_handoff_transient')
+  })
+
+  it('connected store: a failed cancellation with handoff stays paused for review without a new purchase', async () => {
+    const pending = { dealId: 'd', orderId: 'gid://shopify/Order/1002', orderName: '#1002', pipelineId: 'p' }
+    h.loadPendingOrderConfirmation.mockResolvedValue(pending)
+    h.resolveOrderConfirmation.mockRejectedValue(new Error('Remote tag recovery unavailable'))
+    h.generateReply.mockResolvedValue({
+      text: 'Su pedido ya está cancelado.', handoff: true, markDealWon: true, moveToStageName: null,
+      orderConfirmation: 'cancel',
+      shopifyOrderProposal: { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.resolveOrderConfirmation).toHaveBeenCalledTimes(1)
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({
+      contentText: 'Recibimos su solicitud de cancelación. Un asesor revisará el pedido y continuará por este chat.',
+    }))
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: null })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('La decisión puede haberse guardado antes del error')
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('Remote tag recovery unavailable')
+    expect(h.state.notificationInserts).toHaveLength(2)
+  })
+
+  it('connected store: confirmation plus handoff never confirms or creates a purchase from a service turn', async () => {
+    h.loadPendingOrderConfirmation.mockResolvedValue({ dealId: 'd', orderId: 'gid://shopify/Order/1002', orderName: '#1002', pipelineId: 'p' })
+    h.generateReply.mockResolvedValue({
+      text: 'Un asesor revisará el pedido.', handoff: true, markDealWon: true, moveToStageName: 'Pedido creado',
+      orderConfirmation: 'confirm',
+      shopifyOrderProposal: { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.resolveOrderConfirmation).not.toHaveBeenCalled()
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+    expect(h.moveDeal).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, ai_handoff_transient: null })
+  })
+
   it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
     h.buildConversationContext.mockResolvedValue([
       { role: 'user', content: 'Buenas noches' },
@@ -3421,7 +3582,8 @@ describe('dispatchInboundToAiReply — hotel findings, 20-chat test run 2026-09-
     expect(h.state.updatePayload?.ai_handoff_summary).toEqual(expect.any(String))
   })
 
-  it('a non-hotel account keeps the two-step protocol', async () => {
+  it('a non-hotel account without a connected store keeps the two-step protocol', async () => {
+    h.state.shopifyConnected = false
     h.state.account = { default_currency: 'GTQ', industry_vertical: 'generic' }
     h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'quiero hablar con una persona por favor' }])
     h.generateReply.mockResolvedValue({

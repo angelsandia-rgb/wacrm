@@ -34,6 +34,8 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-14 — Casa Ceiba: revisión de #372–375 y refuerzo de ventas/SAC preparado (Codex).** #371 y migración 179 ya están publicados; #372–374 corrigen pagos, estados y municipio, y #375 documenta el modo autónomo activado. La lectura actual confirmó `orders_live=true`; falta el recorrido externo completo hasta entrega. Nueva rama `fix/casa-ceiba-sales-and-service`: venta consultiva sin presión, prioridad SAC, traspaso directo, confirmación sin promesa de retención, cancelación compatible con handoff y baja persistente para seguimientos/carritos. Prompt propio de Casa Ceiba preparado con política comercial vigente, sin modificar aún la configuración viva. Publicación pendiente de pruebas finales, PR y sí explícito de merge. Ver `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md` para riesgos pendientes de pagos tardíos, alertas, conciliación y SAC operativo. Las entradas antiguas de estado siguientes son históricas.
+
 **2026-11-13 — Continuación del PR #371 (Codex), código pendiente de publicación.** Los pedidos consecutivos de un contacto ya no sobrescriben su trato anterior ni heredan su confirmación/cancelación. Los carritos utilizan la cola de reintentos, recuperan fallos anteriores dentro de su vigencia y se verifican de nuevo en Shopify antes de enviar. Ajuste operativo ya aplicado: se sincronizó `pedido_enviado` a APPROVED según Zernio; la cuenta tiene `pedido_enviado` y `pedido_recibido` aprobadas y 11 plantillas pendientes, sin forzar aprobaciones. Sigue siendo necesario aplicar la migración 179 antes de desplegar el PR.
 
 **2026-11-12 — Correcciones de seguridad operativa de Shopify preparadas por Codex, pendientes de publicación.** El formulario de pedidos reinicia los datos de entrega por cliente; un error de inventario impide crear pedidos o enlaces de pago. Los avisos de pedido usan una cola persistente con reintentos y reservas entre workers. Las decisiones de confirmar/cancelar se guardan localmente y excluyen recordatorios pendientes. Antes de publicar este cambio, aplicar la migración 179; ver `docs/SHOPIFY_NOTIFICATION_RECOVERY.md`. Esta entrada no afirma que los cambios estén desplegados.
@@ -5697,3 +5699,14 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Sin evidencia real todavía: el primer pedido real se revisa de punta a punta.
   Pendiente del propietario: tiempo de despacho de Dropi. Estado completo en
   `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §0.
+
+### 2026-11-14 — Codex: auditoría del modo autónomo y mejoras de venta y SAC
+
+- Verificado #375 fusionado, main `213edcfd`, CI aprobado y salud de producción HTTP 200; configuración de Casa Ceiba con IA y `orders_live` activos. No se certificó una compra real completa ni la versión exacta del contenedor con salud HTTP.
+- Prompt vivo: cierre forzado en cada turno y «sin riesgo». Se preparó una versión de venta consultiva, objeciones con hechos, negativas respetadas y SAC prioritario, conservando cobertura/precios/política de siete días.
+- Código preparado: prioridad de ecommerce sin alterar hotel/clínica, petición clara de humano directa, acuse sin plazo inventado, no prometer retención web, cancelación con handoff sin perder decisión y recuperación de errores de confirmación.
+- Baja comercial real: etiqueta por cuenta/contacto, sin borrar otras; detener seguimientos y carritos, revalidando antes del envío. No cubre todavía broadcasts/flows personalizados; los avisos de compra siguen disponibles.
+- Veinte casos con el modelo real pasaron sin enviar mensajes ni ejecutar propuestas. Pruebas de operaciones guardadas y fallos son simuladas. Snapshot limpio de código `d1ef601a`: TypeScript, ESLint, 255 archivos / 3,068 pruebas y build normal Next/Turbopack aprobados, sin cambio del lockfile. El informe documenta los límites y la preparación de publicación.
+- No se modificó en producción el prompt, los pedidos, el proveedor ni los cobros. El script de aplicación del prompt tiene plan por defecto, respaldo y compare-and-set; usar después del despliegue y su aprobación.
+- Graphify sigue fallando con `uv trampoline failed to canonicalize script path`; se revisaron fuentes directamente.
+- Próximos riesgos: pago tardío sobre compra cancelada/revisión, tarea durable de pago retenido y aviso al dueño, alertas Dropi nocturnas/reabiertas, resumen aceptado versionado, conciliación y seguimiento de casos SAC.

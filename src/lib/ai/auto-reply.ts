@@ -38,6 +38,7 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
 import { contactMutesAi } from './muted-contact'
+import { detectCommercialOptOut, persistCommercialOptOut } from './commercial-preferences'
 import { hotelAvailabilityCommitment, withAvailabilityConfirmationTiming, conciseAvailabilityNotice, hasAvailabilityTiming, isAfterHours, withAttentionHours } from './attention-hours'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
@@ -323,6 +324,8 @@ const TEAMMATE_PRESENT_NOTE =
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
+const ECOMMERCE_HANDOFF_ACK_TEXT =
+  'Un asesor revisará su solicitud y continuará por este chat.'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -1145,6 +1148,30 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // A marketing preference is a real saved operation, not a model promise.
+    // Keep ordinary support and transactional order notices available.
+    if (shopifyOrders && detectCommercialOptOut(latestUserMessage(messages))) {
+      try {
+        await persistCommercialOptOut(db, accountId, contactId)
+      } catch (err) {
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: false,
+          summary: `El cliente solicitó dejar de recibir mensajes comerciales, pero no se pudo guardar la preferencia. Registre su baja antes de enviar promociones. Error: ${describeError(err).slice(0, 300)}`,
+        })
+        await sendMessageToConversation(db, accountId, {
+          conversationId, messageType: 'text', senderType: 'bot',
+          contentText: 'Recibí su solicitud. Un asesor revisará el registro de su preferencia; todavía no pude guardarla.',
+        })
+        return
+      }
+      await sendMessageToConversation(db, accountId, {
+        conversationId, messageType: 'text', senderType: 'bot',
+        contentText: 'Registré su preferencia para detener los seguimientos comerciales y recordatorios de carrito. Si tiene una compra en curso, puede seguir recibiendo los avisos necesarios de ese pedido.',
+      })
+      return
+    }
+
     const baseSystemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -1413,10 +1440,12 @@ For airport transport, record the guest's request in nota on the relevant existi
     // didn't already send it, send it anyway.
     if (!withinAiAttentionHours(config.autoReplySchedule)) return
     const latestInbound = latestUserMessage(messages)
-    // Hotel: a guest who plainly asks for a person is transferred now, not
-    // asked "¿le gustaría que le conecte…?" (owner's rule; live test
-    // 2026-09-25 — the model asked instead of transferring).
-    const explicitHumanAsk = isHotel && !handoff && (isExplicitHumanRequest(latestInbound) || isGiftVoucherAsk(latestInbound))
+    // Hotel and connected stores: a clear request for a person already
+    // authorizes the handoff. Gift-voucher routing remains hotel-only.
+    const explicitHumanAsk = !handoff && (
+      ((isHotel || shopifyOrders) && isExplicitHumanRequest(latestInbound)) ||
+      (isHotel && isGiftVoucherAsk(latestInbound))
+    )
     const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
     const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
     const catalogRequested = customerRequestedCatalog(messages)
@@ -1693,22 +1722,45 @@ For airport transport, record the guest's request in nota on the relevant existi
         })
         return
       }
+      // A cancellation may legitimately carry both its decision marker and
+      // HANDOFF. Persist the decision before leaving this branch: otherwise
+      // the generic handoff would pause the chat but lose the cancellation.
+      // The decision transaction already routes the case and notifies staff,
+      // so a success must not perform the same handoff a second time. Never
+      // accept a confirmation or create another purchase from a service turn.
+      let cancellationRecorded = false
+      let cancellationFailure: string | null = null
+      const cancellingPendingOrder = shopifyOrders && orderConfirmation === 'cancel' && pendingOrder
+      if (cancellingPendingOrder) {
+        try {
+          await resolveOrderConfirmation({ db, accountId, conversationId, pending: cancellingPendingOrder, decision: 'cancel', handoffAgentId: config.handoffAgentId })
+          cancellationRecorded = true
+        } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
+          console.error('[ai auto-reply] cancellation during handoff failed:', err)
+          cancellationFailure = `🤖 No se pudo completar la gestión de cancelación del pedido ${cancellingPendingOrder.orderName} (${cancellingPendingOrder.orderId}). La decisión puede haberse guardado antes del error; revise el estado y los avisos existentes en Shopify y CRM antes de continuar. No recree el pedido ni repita efectos ya realizados. Error: ${describeError(err).slice(0, 300)}`
+        }
+      }
       // Other verticals keep their existing customer acknowledgment, sticky
       // pause, routing and internal note. A failed acknowledgment must not
       // skip the handoff itself.
+      const handoffAckText = shopifyOrders ? ECOMMERCE_HANDOFF_ACK_TEXT : HUMAN_HANDOFF_ACK_TEXT
       try {
         await sendMessageToConversation(db, accountId, {
           conversationId,
           messageType: 'text',
           // An explicit ask skips the model's own (usually "¿le conecto?") text.
-          contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
+          contentText: cancellingPendingOrder
+            ? 'Recibimos su solicitud de cancelación. Un asesor revisará el pedido y continuará por este chat.'
+            : explicitHumanAsk ? handoffAckText : outboundText || handoffAckText,
         })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
       }
+      if (cancellationRecorded) return
 
-      const summary = buildHandoffSummary({
+      const summary = cancellationFailure ?? buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
       })
@@ -2480,6 +2532,11 @@ For airport transport, record the guest's request in nota on the relevant existi
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] order confirmation failed:', err)
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: orderConfirmation !== 'cancel',
+          summary: `🤖 No se pudo completar la gestión de ${orderConfirmation === 'confirm' ? 'confirmación' : 'cancelación'} del pedido ${pendingOrder.orderName} (${pendingOrder.orderId}). La decisión puede haberse guardado antes del error; revise el estado y los avisos existentes en Shopify y CRM antes de continuar. No recree el pedido ni repita efectos ya realizados. Error: ${describeError(err).slice(0, 300)}`,
+        })
       }
     }
 

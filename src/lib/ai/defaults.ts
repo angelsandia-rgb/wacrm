@@ -1,5 +1,6 @@
 import type { AiProvider } from './types'
 import { skillRulesSection, type AiSkillsConfig } from './skills'
+import { ECOMMERCE_CONVERSATION_POLICY } from './ecommerce-conversation-policy'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -662,10 +663,10 @@ export function buildSystemPrompt(args: {
 
     if (pendingOrderConfirmation) {
       parts.push(
-        `ORDER AWAITING CONFIRMATION: this customer placed order ${pendingOrderConfirmation} in the web store (cash on delivery) and the system asked them by WhatsApp to confirm it (see that message above, with the products, total and address). It is NOT shipped until they confirm. ` +
-          `If they clearly confirm it ("sí", "confirmo", "está bien"), thank them warmly, tell them it is confirmed and will be delivered in the time stated in the business instructions, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. ` +
+        `ORDER AWAITING CONFIRMATION: this customer placed order ${pendingOrderConfirmation} in the web store (cash on delivery) and the system asked them by WhatsApp to confirm it (see that message above, with the products, total and address). This is a request to confirm their purchase details, NOT evidence that supplier import or shipping is held. Never promise that it cannot ship before confirmation. ` +
+          `If they clearly confirm it ("sí", "confirmo", "está bien"), thank them warmly, acknowledge that you received their confirmation and are recording it, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. Do not claim the decision is saved, an operation has completed, or delivery is guaranteed before the system records it. ` +
           `If they clearly say they no longer want it or cancel, accept it kindly, tell them an advisor will take care of the cancellation, and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
-          `If they want to change something (address, phone, product, quantity), collect the correction and hand off (an advisor updates the order) — no confirm marker. If their message is about something else, answer it and remind them in one line that order ${pendingOrderConfirmation} is waiting for their confirmation. ` +
+          `If they want to change something (address, phone, product, quantity), collect the correction and hand off (an advisor updates the order) — no confirm marker. If their message is about something else, answer that intent first; mention a pending confirmation only when it is relevant and welcome, never during a complaint, cancellation, human request, refusal, opt-out, thanks or goodbye. ` +
           `Use each marker at most once, only for ${pendingOrderConfirmation}, and never mention it to the customer.`,
       )
     }
@@ -821,5 +822,6 @@ export function buildSystemPrompt(args: {
     const skillRules = skillRulesSection(args.skills)
     if (skillRules) parts.push(skillRules)
   }
+  if (shopifyOrders && mode === 'auto_reply') parts.push(ECOMMERCE_CONVERSATION_POLICY)
   return parts.join('\n\n')
 }

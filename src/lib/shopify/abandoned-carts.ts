@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { withinBusinessHours } from '@/lib/ai/followups'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
+import { contactMutesCommercial } from '@/lib/ai/commercial-preferences'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { loadShopifyConfig, shopifyGraphql } from './api'
 import { CART_FIELDS, CART_MAX_AGE_MS, cartReminderText, cartTemplate, dueCarts, type AbandonedCheckout } from './abandoned-cart-data'
@@ -53,6 +54,7 @@ export async function runAbandonedCartSweep(admin: SupabaseClient, now: Date = n
           const firstName = cart.shippingAddress?.firstName || cart.customer?.firstName || ''
           const { contactId, conversationId } = await resolveConversationByPhone(admin, accountId, cart.phone, firstName || null)
           if (await contactMutesAi(admin, contactId)) continue
+          if (await contactMutesCommercial(admin, accountId, contactId)) continue
           const eventKey = `${cart.id}:cart`
           await enqueueOrderNotification(admin, accountId, eventKey, {
             conversationId, text: cartReminderText(cart, account?.name || 'la tienda'), template: cartTemplate(cart),
