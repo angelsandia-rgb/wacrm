@@ -5719,3 +5719,10 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   - Webhooks firmados de cambios de estado y novedades de guía.
 - Decisión: **no** usar el conector Shopify de Effi, porque importaría todos los pedidos y los mezclaría con Dropify. El CRM enrutará cada pedido según el proveedor de sus productos.
 - Sin código todavía. Pendientes del propietario y técnicos en `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §8.
+- Segunda investigación (solo lectura) en la cuenta de Effi:
+  - Los convenios confirman que despacha el proveedor, la guía la crea el distribuidor y liquida Efficommerce. Las entregas fracasadas las paga el distribuidor.
+  - En Guatemala la única transportadora es CAEX, y está habilitada.
+  - Plan desde Q330/mes.
+  - Firma de webhooks no documentada: se resuelve con cabecera propia más relectura por API.
+  - Dropify rechaza los productos que no son de Dropi (según foros).
+  - Pendientes del propietario en §8.3.

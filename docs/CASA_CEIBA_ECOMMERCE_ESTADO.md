@@ -167,7 +167,16 @@ Investigado el 14/11/2026 en la cuenta de Effi del propietario (empresa «CASA C
 ### 8.1 Lo comprobado
 
 - **Catálogo:** 9,366 artículos de dropshipping con existencias, en quetzales, con costo, precio sugerido y ganancia. Ejemplo: plancha Sokany, costo Q68 y sugerido Q190.
-- **Proveedores en Guatemala:** 97 convenios, casi todos con «bodega propia» en Guatemala. Entre ellos Unmerco Guatemala, Grupo Ecodrops, Importadora El Mayorista GTM, Capeli, Vitalcom, Línea Verde GT y Corporación G&C (Mazatenango). Cada proveedor tiene una bodega principal y otra de garantías.
+- **Proveedores en Guatemala:** 44 proveedores con 97 convenios modelo, casi todos con «bodega propia» en Guatemala. Cada proveedor tiene una bodega principal y otra de garantías.
+  - Volumen real (contador de ventas de cada proveedor): DistriGuatemala ~253,000, Grupo Luna ~171,000, Sicommer ~174,000, Grupo Blue ~134,000, 60 Segundos ~121,000 (3,544 artículos) y AS Clic ~112,000.
+- **Condiciones de los convenios** (iguales en los 5 revisados: Unmerco, Importadora El Mayorista GTM, Grupo Ecodrops, Capeli y Bella Dama):
+  - Despacha el **proveedor**.
+  - La guía la crea el **distribuidor** (nosotros).
+  - Liquida el dinero la **transportadora (Efficommerce)**.
+  - Las **entregas fracasadas corren por cuenta del distribuidor**.
+  - Las devoluciones las paga quien causó la falla.
+  - Garantías por defecto de fábrica: reporte en ~24 h con foto y video.
+  - Para vender hay que aprobar un convenio como distribuidor («Aprobar convenio único como distribuidor»).
 - **API oficial** (Integraciones → Documentación API):
   - Autenticación con `Bearer <API key del usuario>`. La clave vence a los 360 días y se renueva en Administración → Usuarios.
   - Límite de 600 peticiones por minuto; al pasarlo responde 429 con `Retry-After`.
@@ -178,15 +187,28 @@ Investigado el 14/11/2026 en la cuenta de Effi del propietario (empresa «CASA C
   - `Crear remisión de venta`: el campo `convenio_dropshipping` indica el convenio con el que se vende (1 = sin dropshipping). La dirección va como datos: país, provincia, ciudad, dirección y referencia.
   - `Crear orden de venta`: no tiene campo de dropshipping, así que la venta de dropshipping va por remisión.
   - `Crear guía de transporte`:
-    - Transportadoras con API, entre ellas **CAEX**, **Gintracom** y Logística Efficommerce. El número de guía, el flete y el estado los define la transportadora.
+    - En Guatemala la única transportadora integrada es **Cargo Expreso (CAEX)**, en GTQ, y es la que la cuenta tiene habilitada en el formulario de guías. Gintracom opera en Ecuador y República Dominicana. El número de guía, el flete y el estado los define la transportadora.
+    - La tabla de cobertura de Effi no tiene filas para CAEX, así que no publica cobertura ni plazos; el flete se conoce al cotizar o crear la guía.
     - Si se cobra al entregar, hay que enviar `valor_recaudo`.
     - Si falla la API de la transportadora, la guía queda creada y anulada automáticamente.
-    - En las guías de dropshipping, el destinatario pertenece al distribuidor (nosotros).
+    - En las guías de dropshipping, el destinatario pertenece al distribuidor (nosotros). Coincide con los convenios: la guía la crea el distribuidor.
   - Consultas de guías, cambios de estado, novedades y soluciones de novedades. Movimientos de EffiWallet: allí entra el dinero cobrado.
 - **Ciudades:** Guatemala está desglosada por zona (por ejemplo «Guatemala (Zona 1)»). Sirve para validar el municipio antes de crear el envío.
 - **Webhooks** (Integraciones → Webhooks):
   - Eventos útiles: creación de remisión de venta, creación de guía de transporte, cambio de estado de guía de transporte, y creación y solución de novedad de guía.
   - Configuración: URL destino y cabeceras propias opcionales. Al crearlo se genera un secreto para firmar los avisos, y se muestra una sola vez.
+  - El formato de la firma (cabecera y algoritmo) no está documentado ni en la API ni en la web.
+  - **Solución de diseño:**
+    - Autenticar con una cabecera propia que contenga un secreto generado por el CRM; Effi la envía en cada aviso.
+    - Tratar el contenido del aviso solo como señal y volver a leer la guía por la API antes de actuar, igual que con Recurrente.
+    - Si Effi documenta la firma, se agrega como segunda verificación.
+- **Plan de Effi:** precio público en Guatemala desde **Q330/mes** (START: 1 sucursal y 2 usuarios), PRO Q420 y BUSINESS 1 Q590; 20 % menos con pago anual. No se publica si el dropshipping exige plan pagado ni las comisiones por envío.
+- **EffiWallet:** la cuenta ya tiene una wallet con «Efficommerce Guatemala» como responsable del saldo, hoy en Q0. Los plazos de liquidación no están publicados.
+- **Verificación de la empresa:** pide foto del documento de identidad y video del usuario principal (con cámara web) y documentos adjuntos. Solo la puede hacer el propietario.
+- **Dropify con productos que no son de Dropi:**
+  - Según los foros de Shopify, Dropify no ignora esas líneas: el pedido falla con una nota de Dropi del tipo «el producto no existe o no se puede crear».
+  - En Casa Ceiba «Crear producto en Dropi» está desmarcada, así que Dropify no los creará.
+  - Conclusión práctica: un pedido solo de Effi dejará en Shopify un «Dropi Sync Error» esperado, y uno mixto probablemente no entrará a Dropi completo.
 - **Conector Shopify de Effi:**
   - Funciona con el Client ID y el secreto de una app de Shopify, la bodega (location) y los días de entrega.
   - Opción «Permitir solo pedidos confirmados».
@@ -203,15 +225,17 @@ Dropify ya importa todos los pedidos a Dropi. Si además se conecta Effi a Shopi
      - El CRM crea la remisión con `convenio_dropshipping` y la guía con `valor_recaudo` si se cobra contra entrega.
      - `idempotency_key` = id del pedido en Shopify.
      - Se registra en `shopify_order_attempts`, igual que hoy, para no duplicar entre webhooks y reintentos.
-   - **Carrito mixto:** por chat, la IA lo separa en dos pedidos. Por la web, se crean dos envíos y se avisa al propietario de que habrá dos guías y dos cobros.
+   - **Carrito mixto:** como Dropify probablemente rechaza el pedido completo, no se puede dejar pasar tal cual.
+     - Por chat, la IA lo separa en dos pedidos de Shopify, uno por proveedor.
+     - Por la web, el CRM avisa al propietario para dividirlo. Alternativa simple: no publicar el mismo tipo de producto con los dos proveedores y mostrar los de Effi en una colección aparte.
 3. **Seguimiento:**
-   - El webhook de Effi «Cambio de estado de guía» llega a una ruta nueva del CRM, que verifica la firma.
+   - El webhook de Effi «Cambio de estado de guía» llega a una ruta nueva del CRM. La ruta comprueba la cabecera secreta propia y luego vuelve a leer la guía por la API.
    - Con el número de guía, el CRM crea el *fulfillment* en Shopify con tracking. Así funcionan sin cambios el correo de envío de Shopify y los avisos de WhatsApp que ya existen (`fulfillments/*` → `trackingSentence`, entregado → `orderFullyDelivered`).
 4. **Excepciones con aviso al propietario,** como hoy con Dropi (§2.1):
-   - Novedad de guía.
+   - Novedad de guía. Importa más que con Dropi: las entregas fracasadas las paga el distribuidor.
    - Remisión o guía rechazada por Effi: sin existencias, precio mínimo o dirección.
    - Guía anulada por fallo de la transportadora.
-5. **Ajuste obligatorio en lo ya desplegado:** la alerta «Dropi rechazó el pedido» (`src/app/api/shopify/webhook/route.ts`, `hasDropiSyncError`) no debe saltar en pedidos que solo traen productos de Effi.
+5. **Ajuste obligatorio en lo ya desplegado:** la alerta «Dropi rechazó el pedido» (`src/app/api/shopify/webhook/route.ts`, `hasDropiSyncError`) no debe saltar en pedidos que solo traen productos de Effi. Esos pedidos dejarán el «Dropi Sync Error» de forma esperada.
 
 Piezas nuevas estimadas:
 - Configuración de Effi por cuenta (API key cifrada, sucursal, bodega, transportadora y tipo de servicio) en Ajustes → Shopify.
@@ -223,15 +247,24 @@ Piezas nuevas estimadas:
 
 ### 8.3 Pendiente antes de construir
 
-Del propietario (soporte Effi Guatemala, +502 3996 2821):
-1. Completar la «verificación de la empresa en 3 pasos» que muestra el panel de Effi. Probablemente se exige para la API y los convenios.
-2. Formato exacto de la firma de los webhooks: cabecera y algoritmo. La documentación solo dice que se genera un secreto.
-3. Transportadoras habilitadas en Guatemala para la cuenta, el costo del flete y quién lo paga.
-4. Cuándo se libera el dinero cobrado en EffiWallet, más el costo del plan y las comisiones.
+Segunda investigación (14/11), ya resuelto:
+- Quién crea la guía: el distribuidor (convenios y API).
+- Transportadora en Guatemala: solo CAEX, y está habilitada en la cuenta.
+- Firma de webhooks: se resuelve con cabecera propia más relectura por API.
+- Comportamiento de Dropify: según foros, rechaza el pedido; falta confirmarlo en Casa Ceiba.
+- Precio del plan: desde Q330/mes.
 
-Por comprobar técnicamente:
-- Qué hace Dropify con un pedido que trae productos que no están en Dropi: si lo rechaza completo o ignora esas líneas. Define cómo se manejan los carritos mixtos de la web.
-- En dropshipping, si el proveedor o el distribuidor crea la guía. La documentación sugiere el distribuidor; confirmarlo con la primera prueba.
-- El manual «Shopify Temporal 2026» de Effi (PDF de más de 10 MB) no se pudo leer automáticamente; no es necesario si no se usa el conector.
+Sigue pendiente del propietario, porque no se puede resolver sin él:
+1. **Verificación de la empresa:** foto del documento, video con cámara web y documentos. Probablemente se exige para la API y los convenios.
+2. **Preguntas a soporte Effi Guatemala (+502 3996 2821):**
+   - Tarifa de flete de CAEX y quién la paga.
+   - Plazo de liquidación del recaudo a EffiWallet y su costo de retiro.
+   - Si el dropshipping exige plan pagado y si hay comisión por envío.
+3. **Decisión comercial:** aceptar que las entregas fracasadas corren por cuenta del distribuidor y elegir proveedores y productos concretos para la prueba.
+
+Por comprobar en la primera prueba autorizada:
+- Que Dropify marque «Dropi Sync Error» en un pedido solo de Effi y no lo importe.
+- El flujo completo: remisión, guía CAEX, aviso de Effi, *fulfillment* en Shopify y WhatsApp.
+- El manual «Shopify Temporal 2026» de Effi (PDF de más de 10 MB) no se leyó; no hace falta si no se usa el conector.
 
 Reglas: la API key de Effi va solo a Ajustes del CRM, cifrada; nunca al chat ni al repo. La primera remisión o guía real requiere el «sí» explícito del propietario, porque genera un despacho y un cobro reales.
