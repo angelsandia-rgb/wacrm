@@ -138,7 +138,10 @@ async function createShopifyOrderLocked(args: {
     : `Pago contra entrega: ${totalText}. Número de pedido: *${order.name}* (para darle seguimiento).`
   let paymentLink: string | null = null
   if (proposal.payment === 'card') {
-    if (cfg.recurrenteSecretKey) {
+    // "Crear pedidos reales" off is the stop switch for new charges too: the
+    // Recurrente key may be live, and with the switch off a paid link is
+    // never completed automatically. A person sends the link if appropriate.
+    if (cfg.recurrenteSecretKey && cfg.ordersLive) {
       try {
         paymentLink = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
           // The customer sees this on Recurrente's page — the items, not a draft "#D3".

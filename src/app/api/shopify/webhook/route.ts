@@ -5,8 +5,9 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, ORDER_TAG, pickForwardStage,
-  SHIPPED_STAGE_NAME, TO_CONFIRM_TAG, trackingSentence, updateOrderTags, verifyShopifyHmac,
+  attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, isCashOnDelivery, loadShopifyConfig, normalizeGtPhone, ORDER_TAG,
+  orderFullyDelivered, pickForwardStage, SHIPPED_STAGE_NAME, shopifyGraphql, TO_CONFIRM_TAG, trackingSentence, updateOrderTags,
+  verifyShopifyHmac,
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
 import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
@@ -23,6 +24,9 @@ interface ShopifyOrderPayload {
   currency: string
   tags?: string
   financial_status?: string | null
+  fulfillment_status?: string | null
+  payment_gateway_names?: string[] | null
+  cancelled_at?: string | null
   line_items?: { title?: string | null; quantity?: number | null }[] | null
   phone?: string | null
   customer?: { first_name?: string | null; phone?: string | null } | null
@@ -86,29 +90,63 @@ export async function POST(request: Request) {
   if (topic === 'orders/create') {
     return handleOrderCreated(db, accountId, cfg, body as ShopifyOrderPayload)
   }
-  if (topic === 'orders/updated' || topic === 'orders/fulfilled') {
+  if (topic === 'orders/updated' || topic === 'orders/fulfilled' || topic === 'orders/cancelled') {
     const order = body as ShopifyOrderPayload
+    if (order.cancelled_at) return handleCancelled(db, accountId, order.admin_graphql_api_id)
     const fs = order.fulfillments ?? []
     const live = fs.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
     if (!live.length) return NextResponse.json({ ok: true, skipped: 'not shipped' })
     return handleShipping(db, accountId, {
       orderGid: order.admin_graphql_api_id, orderName: order.name,
-      delivered: live.some((f) => f.shipment_status === 'delivered'),
+      delivered: orderFullyDelivered(fs, order.fulfillment_status),
       tracking: live.find((f) => f.tracking_number) ?? live[0],
     })
   }
   const f = body as ShopifyFulfillmentPayload
-  const delivered = f.shipment_status === 'delivered'
+  const orderGid = `gid://shopify/Order/${f.order_id}`
+  // One package's delivery says nothing about its siblings: the order itself
+  // must be fully delivered. Unverifiable → keep it at "Enviado".
+  const delivered = f.shipment_status === 'delivered' && await orderVerifiedDelivered(db, accountId, orderGid)
   // A fulfillments/update only matters once the carrier marks it delivered.
   if (!f.order_id || (!delivered && topic !== 'fulfillments/create')) return NextResponse.json({ ok: true, skipped: 'no stage change' })
   return handleShipping(db, accountId, {
     // "#1001.1" is the fulfillment; the customer knows the order as "#1001".
-    orderGid: `gid://shopify/Order/${f.order_id}`, orderName: (f.name ?? '').split('.')[0] || 'tu pedido',
+    orderGid, orderName: (f.name ?? '').split('.')[0] || 'tu pedido',
     delivered, tracking: f,
   })
 }
 
-const HANDLED_TOPICS = new Set(['orders/create', 'orders/updated', 'orders/fulfilled', 'fulfillments/create', 'fulfillments/update'])
+const HANDLED_TOPICS = new Set(['orders/create', 'orders/updated', 'orders/fulfilled', 'orders/cancelled', 'fulfillments/create', 'fulfillments/update'])
+
+/** Live read: every non-cancelled package delivered and nothing left to ship. */
+async function orderVerifiedDelivered(db: SupabaseClient, accountId: string, orderGid: string): Promise<boolean> {
+  try {
+    const cfg = await loadShopifyConfig(db, accountId)
+    if (!cfg) return false
+    const { order } = await shopifyGraphql<{ order: { displayFulfillmentStatus: string; fulfillments: { status: string; displayStatus: string | null }[] } | null }>(
+      cfg, 'query($id: ID!) { order(id: $id) { displayFulfillmentStatus fulfillments(first: 20) { status displayStatus } } }', { id: orderGid },
+    )
+    if (!order) return false
+    return orderFullyDelivered(
+      order.fulfillments.map((x) => ({ status: x.status.toLowerCase(), shipment_status: x.displayStatus?.toLowerCase() })),
+      order.displayFulfillmentStatus,
+    )
+  } catch (err) {
+    console.error(`[shopify webhook] cannot verify delivery of ${orderGid}:`, err instanceof Error ? err.message : err)
+    return false
+  }
+}
+
+/** Cancelled in Shopify: the open deal closes as lost, which also stops the
+ *  confirmation reminders. No customer message — whether Dropi already
+ *  shipped is unknown here, and a cancellation is not a refund. */
+async function handleCancelled(db: SupabaseClient, accountId: string, orderGid: string) {
+  const { error } = await db.from('deals')
+    .update({ status: 'lost', lost_reason: 'Pedido cancelado en Shopify', lost_at: new Date().toISOString() })
+    .eq('account_id', accountId).eq('shopify_order_id', orderGid).eq('status', 'open')
+  if (error) return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}
 
 async function handleOrderCreated(
   db: SupabaseClient, accountId: string,
@@ -142,10 +180,11 @@ async function handleOrderCreated(
     })
     const totalText = formatCurrency(total, order.currency)
     const templateName = cfg.confirmation_template_name as string | null
-    // Web orders are cash on delivery (card goes through WhatsApp): the
-    // customer confirms before it ships — most COD returns are orders
-    // nobody confirmed. Cesi reads their answer (order-confirmation.ts).
-    const cod = order.financial_status !== 'paid'
+    // Cash-on-delivery web orders: the customer confirms before it ships —
+    // most COD returns are orders nobody confirmed. Cesi reads their answer
+    // (order-confirmation.ts). Decided by the payment gateway, not by
+    // "not paid yet": a pending card/transfer order is no COD order.
+    const cod = order.financial_status !== 'paid' && isCashOnDelivery(order.payment_gateway_names)
     // Never move an existing order backwards when Shopify redelivers creation.
     let awaiting = false
     if (cod && dealId && !seen) awaiting = await markAwaitingConfirmation(db, accountId, dealId, order.admin_graphql_api_id)

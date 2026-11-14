@@ -3,17 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   enqueue: vi.fn(), deliver: vi.fn(), muted: false, legacy: null as { checkout_id: string; error: string | null } | null,
   legacyLookupFailed: false,
+  graphql: vi.fn(),
 }))
+const cart = (id: string, updatedAt: string) => ({
+  id, createdAt: updatedAt, updatedAt, completedAt: null,
+  abandonedCheckoutUrl: 'https://shop/checkouts/recover', customer: null,
+  shippingAddress: { firstName: 'Ana', phone: '54852732' },
+  totalPriceSet: { shopMoney: { amount: '300.00', currencyCode: 'GTQ' } },
+  lineItems: { nodes: [{ title: 'Producto', quantity: 1 }] },
+})
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   loadShopifyConfig: async () => ({}),
-  shopifyGraphql: async () => ({ abandonedCheckouts: { nodes: [{
-    id: 'cart1', updatedAt: '2026-11-13T16:00:00Z', completedAt: null,
-    abandonedCheckoutUrl: 'https://shop/checkouts/recover', customer: null,
-    shippingAddress: { firstName: 'Ana', phone: '54852732' },
-    totalPriceSet: { shopMoney: { amount: '300.00', currencyCode: 'GTQ' } },
-    lineItems: { nodes: [{ title: 'Producto', quantity: 1 }] },
-  }] } }),
+  shopifyGraphql: (_cfg: unknown, _q: string, vars?: { after?: string | null }) => m.graphql(vars?.after ?? null),
 }))
 vi.mock('./notification-jobs', () => ({ enqueueOrderNotification: m.enqueue, runOrderNotificationSweep: m.deliver }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
@@ -36,6 +38,24 @@ beforeEach(() => {
   vi.clearAllMocks(); filters.length = 0
   m.legacy = null; m.muted = false; m.legacyLookupFailed = false
   m.deliver.mockResolvedValue({ sent: 0, pending: 1, skipped: 0 })
+  m.graphql.mockReset().mockResolvedValue({ abandonedCheckouts: { nodes: [cart('cart1', '2026-11-13T16:00:00Z')] } })
+})
+
+describe('abandoned cart pagination', () => {
+  it('reaches an eligible cart behind more than one page of newer carts', async () => {
+    const fresh = Array.from({ length: 50 }, (_, i) => cart(`new${i}`, '2026-11-13T17:50:00Z'))
+    m.graphql
+      .mockResolvedValueOnce({ abandonedCheckouts: { nodes: fresh, pageInfo: { hasNextPage: true, endCursor: 'p2' } } })
+      .mockResolvedValueOnce({ abandonedCheckouts: { nodes: [cart('old', '2026-11-13T15:00:00Z')], pageInfo: { hasNextPage: false, endCursor: null } } })
+    await runAbandonedCartSweep(db as never, now)
+    expect(m.graphql).toHaveBeenNthCalledWith(2, 'p2')
+    expect(m.enqueue).toHaveBeenCalledWith(expect.anything(), 'a', 'old:cart', expect.anything())
+  })
+  it('stops paging once it reaches carts older than the reminder window', async () => {
+    m.graphql.mockResolvedValueOnce({ abandonedCheckouts: { nodes: [cart('stale', '2026-11-10T15:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'p2' } } })
+    await runAbandonedCartSweep(db as never, now)
+    expect(m.graphql).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('migrating abandoned-cart attempts to durable delivery', () => {

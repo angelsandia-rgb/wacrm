@@ -3,10 +3,33 @@ import { withinBusinessHours } from '@/lib/ai/followups'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { loadShopifyConfig, shopifyGraphql } from './api'
-import { CART_FIELDS, cartReminderText, cartTemplate, dueCarts, type AbandonedCheckout } from './abandoned-cart-data'
+import { CART_FIELDS, CART_MAX_AGE_MS, cartReminderText, cartTemplate, dueCarts, type AbandonedCheckout } from './abandoned-cart-data'
 import { enqueueOrderNotification, runOrderNotificationSweep } from './notification-jobs'
 
 export { CART_TEMPLATE_NAME, cartReminderText, dueCarts, type AbandonedCheckout } from './abandoned-cart-data'
+
+const PAGE = 50
+const MAX_PAGES = 6
+/** Newest-first pages until they reach carts created before the reminder
+ *  window: one page of 25 left older eligible carts unprocessed whenever more
+ *  than 25 recent carts existed. */
+// ponytail: 300-cart cap per sweep, a raised alert + query filter if a store ever exceeds it in 24 h.
+async function recentCheckouts(cfg: Parameters<typeof shopifyGraphql>[0], now: Date): Promise<AbandonedCheckout[]> {
+  const all: AbandonedCheckout[] = []
+  let after: string | null = null
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const data: { abandonedCheckouts: { nodes: (AbandonedCheckout & { createdAt?: string })[]; pageInfo?: { hasNextPage: boolean; endCursor: string | null } } } =
+      await shopifyGraphql(cfg, `query($after: String) { abandonedCheckouts(first: ${PAGE}, after: $after, reverse: true) {
+        nodes { createdAt ${CART_FIELDS} } pageInfo { hasNextPage endCursor } } }`, { after })
+    const nodes = data.abandonedCheckouts.nodes
+    all.push(...nodes)
+    const oldest = nodes.at(-1)?.createdAt
+    const pastWindow = oldest !== undefined && now.getTime() - Date.parse(oldest) > CART_MAX_AGE_MS
+    if (pastWindow || !data.abandonedCheckouts.pageInfo?.hasNextPage) break
+    after = data.abandonedCheckouts.pageInfo.endCursor
+  }
+  return all
+}
 
 /** New reminders use the durable queue. Legacy successes stay excluded;
  * failed legacy claims are eligible for recovery while the cart is recent. */
@@ -21,9 +44,7 @@ export async function runAbandonedCartSweep(admin: SupabaseClient, now: Date = n
     try {
       const cfg = await loadShopifyConfig(admin, accountId)
       if (!cfg) continue
-      const data = await shopifyGraphql<{ abandonedCheckouts: { nodes: AbandonedCheckout[] } }>(cfg,
-        `{ abandonedCheckouts(first: 25, reverse: true) { nodes { ${CART_FIELDS} } } }`)
-      for (const cart of dueCarts(data.abandonedCheckouts.nodes, now)) {
+      for (const cart of dueCarts(await recentCheckouts(cfg, now), now)) {
         try {
           const { data: legacy, error } = await admin.from('shopify_cart_reminders').select('checkout_id,error')
             .eq('account_id', accountId).eq('checkout_id', cart.id).maybeSingle()

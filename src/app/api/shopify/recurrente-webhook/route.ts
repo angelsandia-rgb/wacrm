@@ -4,6 +4,7 @@ import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
 import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 import { formatCurrency } from '@/lib/currency'
+import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import {
   completePaidDraftOrder, getRecurrenteCheckout, loadShopifyConfig, normalizeGtPhone, pickPaidStage, verifySvixSignature,
 } from '@/lib/shopify/api'
@@ -20,7 +21,8 @@ const PAID_EVENTS = new Set(['intent.succeeded', 'payment_intent.succeeded', 'ba
  * order — it then reaches Dropify/Dropi with nothing to collect — moves the
  * deal to the real order and tells the customer. Svix-signed; the payment
  * state and the draft id are read back from Recurrente, never from the body.
- * Only with "Crear pedidos reales" on: in test mode drafts stay drafts.
+ * Only with "Crear pedidos reales" on: otherwise the draft stays a draft and
+ * the payment is held with a critical alert (it is real money either way).
  * Always 200 once authenticated, so Recurrente doesn't retry handled events.
  */
 export async function POST(request: Request) {
@@ -52,7 +54,6 @@ export async function POST(request: Request) {
   }
   const checkoutId = event.checkout?.id
   if (!PAID_EVENTS.has(event.event_type ?? '') || !checkoutId) return NextResponse.json({ ok: true, skipped: 'event' })
-  if (!cfg.ordersLive) return NextResponse.json({ ok: true, skipped: 'test mode' })
 
   try {
     const checkout = await getRecurrenteCheckout(cfg.recurrenteSecretKey!, checkoutId)
@@ -61,8 +62,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, skipped: 'not a paid chat order' })
     }
     const total = checkout.total_in_cents / 100
-    const order = await completePaidDraftOrder(cfg, draftId, total)
-    if (!order) return NextResponse.json({ ok: true, skipped: 'already completed or amount mismatch' })
+    // Real money arrived but nothing is released: the sale is paused (a link
+    // issued before the pause, paid late) or the draft no longer matches.
+    // Hold it for a person — never drop it silently.
+    const hold = (reason: string) => dispatchSystemAlert({
+      severity: 'critical', source: 'shopify_payment_held', accountId,
+      title: `Pago recibido y retenido sin pedido: ${reason}`,
+      dedupKey: `shopify_payment_held:${accountId}:${checkoutId}`, throttleMinutes: 240,
+      detail: { checkout_id: checkoutId, draft_id: draftId, amount: total, currency: checkout.currency,
+        action: 'Revise el borrador en Shopify y el cobro en Recurrente. Complete el borrador como PAGADO o resuelva con el cliente según la política; no se liberó nada a Dropi.' },
+    }).then(() => NextResponse.json({ ok: true, held: reason }))
+    if (!cfg.ordersLive) return hold('la venta está pausada (Crear pedidos reales apagado)')
+    const order = await completePaidDraftOrder(cfg, draftId, total, checkout.currency)
+    if (!order) return hold('el borrador no existe o su importe/moneda no coincide con lo cobrado')
 
     const { data: deal, error: lookupError } = await db.from('deals')
       .select('id, contact_id, pipeline_id, stage_id').eq('account_id', accountId)

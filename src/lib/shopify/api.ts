@@ -482,6 +482,24 @@ export async function attachOrderToDeal(args: {
 
 // ---------------------------------------------------------------- webhooks
 
+/** Pure: a web order is cash on delivery only when its payment gateway says
+ *  so. A pending card/transfer order is NOT COD — asking that buyer to
+ *  "confirm and pay on delivery" would promise a collection that won't happen. */
+export function isCashOnDelivery(gatewayNames: string[] | null | undefined): boolean {
+  return (gatewayNames ?? []).some((g) => /cash on delivery|contra ?entrega|\bcod\b/i.test(g))
+}
+
+/** Pure: every live package of the order delivered AND nothing left to
+ *  ship. One delivered package of a split order is not a delivered order. */
+export function orderFullyDelivered(
+  fulfillments: { status?: string | null; shipment_status?: string | null }[],
+  fulfillmentStatus: string | null | undefined,
+): boolean {
+  const live = fulfillments.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
+  return live.length > 0 && String(fulfillmentStatus ?? '').toLowerCase() === 'fulfilled'
+    && live.every((f) => f.shipment_status === 'delivered')
+}
+
 /** Shopify signs webhooks with base64 HMAC-SHA256 of the raw body. */
 export function verifyShopifyHmac(rawBody: string, header: string | null, secret: string): boolean {
   if (!header) return false
@@ -681,19 +699,23 @@ export async function getRecurrenteCheckout(secretKey: string, checkoutId: strin
   return json
 }
 
-/** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Returns
- *  Reuses the paid order on webhook retries. Null on an amount mismatch. */
+/** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Reuses
+ *  the paid order on webhook retries. Null on a missing draft or an amount
+ *  or currency mismatch — the same number in another currency is not a
+ *  match. */
 export async function completePaidDraftOrder(
   cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   draftId: string,
   expectedTotal: number,
+  expectedCurrency: string,
 ): Promise<{ id: string; name: string } | null> {
   const { draftOrder } = await shopifyGraphql<{
-    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } }; order?: { id: string; name: string; displayFinancialStatus: string } | null } | null
-  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } order { id name displayFinancialStatus } } }`, { id: draftId })
+    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; order?: { id: string; name: string; displayFinancialStatus: string } | null } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount currencyCode } } order { id name displayFinancialStatus } } }`, { id: draftId })
   if (!draftOrder) return null
-  if (Math.abs(Number(draftOrder.totalPriceSet.shopMoney.amount) - expectedTotal) > 0.009) {
-    console.warn(`[recurrente] ${draftId} total ${draftOrder.totalPriceSet.shopMoney.amount} != paid ${expectedTotal}, not completed`)
+  const money = draftOrder.totalPriceSet.shopMoney
+  if (money.currencyCode.toUpperCase() !== expectedCurrency.toUpperCase() || Math.abs(Number(money.amount) - expectedTotal) > 0.009) {
+    console.warn(`[recurrente] ${draftId} total ${money.amount} ${money.currencyCode} != paid ${expectedTotal} ${expectedCurrency}, not completed`)
     return null
   }
   if (draftOrder.status === 'COMPLETED') {
