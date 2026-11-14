@@ -142,3 +142,15 @@ describe('card payment links follow the sales switch', () => {
     expect(m.send).toHaveBeenCalledWith(expect.stringContaining('https://pay.example/c1'))
   })
 })
+
+describe('the charged total is the one the customer accepted', () => {
+  it('neither confirms nor charges when Shopify prices the order differently from the accepted summary', async () => {
+    m.cfg = { shop: 'store', token: 't', ordersLive: true, recurrenteSecretKey: 'sk_live_x', recurrenteWebhookSecret: 'whsec_x' }
+    m.create.mockResolvedValue({ id: 'gid://shopify/DraftOrder/1', name: '#D1', draft: true, total: 350, catalogTotal: 300 })
+    await run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'card' } })
+    expect(m.checkout).not.toHaveBeenCalled()
+    expect(m.send).toHaveBeenCalledWith(expect.stringContaining('verificando el total'))
+    expect(m.send).not.toHaveBeenCalledWith(expect.stringContaining('Q'))
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringMatching(/Q350[\s\S]*Q300/))
+  })
+})

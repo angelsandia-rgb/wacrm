@@ -322,7 +322,7 @@ const ORDER_CREATE = `mutation($order: OrderCreateOrderInput!) {
 
 const DRAFT_ORDER_CREATE = `mutation($input: DraftOrderInput!) {
   draftOrderCreate(input: $input) {
-    draftOrder { id name }
+    draftOrder { id name totalPriceSet { shopMoney { amount currencyCode } } }
     userErrors { field message }
   }
 }`
@@ -342,9 +342,9 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
     )
     const r = data.orderCreate
     if (!r.order) throw new ShopifyError(r.userErrors.map((e) => e.message).join('; ') || 'orderCreate failed', 422)
-    return { id: r.order.id, name: r.order.name, draft: false, total }
+    return { id: r.order.id, name: r.order.name, draft: false, total, catalogTotal: total }
   }
-  const data = await shopifyGraphql<{ draftOrderCreate: { draftOrder: { id: string; name: string } | null; userErrors: { message: string }[] } }>(
+  const data = await shopifyGraphql<{ draftOrderCreate: { draftOrder: { id: string; name: string; totalPriceSet?: { shopMoney: { amount: string } } } | null; userErrors: { message: string }[] } }>(
     cfg, DRAFT_ORDER_CREATE, {
       input: {
         phone: input.phone,
@@ -359,7 +359,10 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
   )
   const r = data.draftOrderCreate
   if (!r.draftOrder) throw new ShopifyError(r.userErrors.map((e) => e.message).join('; ') || 'draftOrderCreate failed', 422)
-  return { id: r.draftOrder.id, name: r.draftOrder.name, draft: true, total }
+  // The draft prices each variant itself (Shopify's current price, discounts):
+  // that total — not the catalog sum — is what a payment link may charge.
+  const shopifyTotal = Number(r.draftOrder.totalPriceSet?.shopMoney.amount)
+  return { id: r.draftOrder.id, name: r.draftOrder.name, draft: true, total: Number.isFinite(shopifyTotal) ? shopifyTotal : total, catalogTotal: total }
 }
 
 // ------------------------------------------------------------------- deals

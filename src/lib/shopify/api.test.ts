@@ -90,11 +90,12 @@ describe('card orders', () => {
 
   it('stay drafts tagged pago-tarjeta even with real orders on (Dropi must not ship or collect cash)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9' }, userErrors: [] } },
+      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9', totalPriceSet: { shopMoney: { amount: '249.00' } } }, userErrors: [] } },
     })))
     vi.stubGlobal('fetch', fetchMock)
     const order = await createShopifyOrder(cfg, req)
-    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 229 })
+    // Shopify's own draft total is what may be charged; the catalog sum is kept to compare.
+    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 249, catalogTotal: 229 })
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(body.query).toContain('draftOrderCreate')
     expect(body.variables.input.tags).toEqual(['chat-sandia', 'pago-tarjeta'])
