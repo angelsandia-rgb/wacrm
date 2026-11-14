@@ -157,4 +157,81 @@ Tipos de evidencia: **S** = simulado (prueba automática con mocks: prueba nuest
 1. **Dropi:** comprobar en su panel cuánto tarda en despacharse un pedido importado. Si es cuestión de minutos, no hay tiempo de cancelar los pedidos web que el cliente rechace.
 2. **Políticas** (no se inventan): costo o gratuidad del envío y cobertura, municipios excluidos, plazos, mínimo para contra entrega, devoluciones y reembolsos. FEL: con su responsable fiscal.
 3. **Primer pedido real:** avisar a Claude para revisarlo de punta a punta: WhatsApp, correo de envío, importación, guía y entrega.
-4. Opcional, a futuro: acceso oficial a la API de órdenes de Dropi y su catálogo de ciudades. Permitiría devolver la confirmación a una barrera previa y validar municipios.
+4. **Effi (segundo proveedor):** ver §8.3 — verificación de la empresa en Effi y respuestas de soporte antes de construir.
+5. Opcional, a futuro: acceso oficial a la API de órdenes de Dropi y su catálogo de ciudades. Permitiría devolver la confirmación a una barrera previa y validar municipios.
+
+## 8. Segundo proveedor: Effi (diseño, sin implementar)
+
+Investigado el 14/11/2026 en la cuenta de Effi del propietario (empresa «CASA CEIBA», ID Effi 61216), en modo solo lectura. No se creó ni guardó nada en Effi ni en Shopify. Objetivo: tener más productos sin que se mezcle con el canal de Dropi.
+
+### 8.1 Lo comprobado
+
+- **Catálogo:** 9,366 artículos de dropshipping con existencias, en quetzales, con costo, precio sugerido y ganancia. Ejemplo: plancha Sokany, costo Q68 y sugerido Q190.
+- **Proveedores en Guatemala:** 97 convenios, casi todos con «bodega propia» en Guatemala. Entre ellos Unmerco Guatemala, Grupo Ecodrops, Importadora El Mayorista GTM, Capeli, Vitalcom, Línea Verde GT y Corporación G&C (Mazatenango). Cada proveedor tiene una bodega principal y otra de garantías.
+- **API oficial** (Integraciones → Documentación API):
+  - Autenticación con `Bearer <API key del usuario>`. La clave vence a los 360 días y se renueva en Administración → Usuarios.
+  - Límite de 600 peticiones por minuto; al pasarlo responde 429 con `Retry-After`.
+  - Los `POST` aplican las mismas validaciones que el formulario web.
+  - `idempotency_key` es obligatorio: un reintento con el mismo valor responde 409 y no duplica.
+- **Endpoints que necesitaría el flujo:**
+  - `Consultar artículos`: filtros `dropshipping_distribuidor` (artículos vinculados a un proveedor), `existe_vinculacion` y `articulo_ecommerce`.
+  - `Crear remisión de venta`: el campo `convenio_dropshipping` indica el convenio con el que se vende (1 = sin dropshipping). La dirección va como datos: país, provincia, ciudad, dirección y referencia.
+  - `Crear orden de venta`: no tiene campo de dropshipping, así que la venta de dropshipping va por remisión.
+  - `Crear guía de transporte`:
+    - Transportadoras con API, entre ellas **CAEX**, **Gintracom** y Logística Efficommerce. El número de guía, el flete y el estado los define la transportadora.
+    - Si se cobra al entregar, hay que enviar `valor_recaudo`.
+    - Si falla la API de la transportadora, la guía queda creada y anulada automáticamente.
+    - En las guías de dropshipping, el destinatario pertenece al distribuidor (nosotros).
+  - Consultas de guías, cambios de estado, novedades y soluciones de novedades. Movimientos de EffiWallet: allí entra el dinero cobrado.
+- **Ciudades:** Guatemala está desglosada por zona (por ejemplo «Guatemala (Zona 1)»). Sirve para validar el municipio antes de crear el envío.
+- **Webhooks** (Integraciones → Webhooks):
+  - Eventos útiles: creación de remisión de venta, creación de guía de transporte, cambio de estado de guía de transporte, y creación y solución de novedad de guía.
+  - Configuración: URL destino y cabeceras propias opcionales. Al crearlo se genera un secreto para firmar los avisos, y se muestra una sola vez.
+- **Conector Shopify de Effi:**
+  - Funciona con el Client ID y el secreto de una app de Shopify, la bodega (location) y los días de entrega.
+  - Opción «Permitir solo pedidos confirmados».
+  - **No filtra por producto:** importaría todos los pedidos de la tienda.
+
+### 8.2 Decisión de diseño: no usar el conector Shopify de Effi
+
+Dropify ya importa todos los pedidos a Dropi. Si además se conecta Effi a Shopify, cada pedido iría a los dos proveedores. Por eso Effi se integra **desde el CRM**, pedido por pedido:
+
+1. **Marcar el proveedor de cada producto en Shopify.** Una etiqueta o el campo «vendor» del producto indica `dropi` o `effi`. Los de Effi además guardan su id de artículo vinculado y el código de convenio.
+2. **Al entrar un pedido**, el CRM lo enruta según sus productos. Los momentos son los mismos de hoy: un pedido web al crearse, uno de chat al confirmarlo el cliente y uno con tarjeta al quedar pagado.
+   - **Solo productos de Dropi:** sin cambios; Dropify lo importa.
+   - **Solo productos de Effi:**
+     - El CRM crea la remisión con `convenio_dropshipping` y la guía con `valor_recaudo` si se cobra contra entrega.
+     - `idempotency_key` = id del pedido en Shopify.
+     - Se registra en `shopify_order_attempts`, igual que hoy, para no duplicar entre webhooks y reintentos.
+   - **Carrito mixto:** por chat, la IA lo separa en dos pedidos. Por la web, se crean dos envíos y se avisa al propietario de que habrá dos guías y dos cobros.
+3. **Seguimiento:**
+   - El webhook de Effi «Cambio de estado de guía» llega a una ruta nueva del CRM, que verifica la firma.
+   - Con el número de guía, el CRM crea el *fulfillment* en Shopify con tracking. Así funcionan sin cambios el correo de envío de Shopify y los avisos de WhatsApp que ya existen (`fulfillments/*` → `trackingSentence`, entregado → `orderFullyDelivered`).
+4. **Excepciones con aviso al propietario,** como hoy con Dropi (§2.1):
+   - Novedad de guía.
+   - Remisión o guía rechazada por Effi: sin existencias, precio mínimo o dirección.
+   - Guía anulada por fallo de la transportadora.
+5. **Ajuste obligatorio en lo ya desplegado:** la alerta «Dropi rechazó el pedido» (`src/app/api/shopify/webhook/route.ts`, `hasDropiSyncError`) no debe saltar en pedidos que solo traen productos de Effi.
+
+Piezas nuevas estimadas:
+- Configuración de Effi por cuenta (API key cifrada, sucursal, bodega, transportadora y tipo de servicio) en Ajustes → Shopify.
+- Mapa producto → proveedor.
+- Cliente de la API de Effi.
+- Ruta del webhook de Effi.
+- Pruebas.
+- Migración solo si el mapa de productos no cabe en metacampos o etiquetas de Shopify.
+
+### 8.3 Pendiente antes de construir
+
+Del propietario (soporte Effi Guatemala, +502 3996 2821):
+1. Completar la «verificación de la empresa en 3 pasos» que muestra el panel de Effi. Probablemente se exige para la API y los convenios.
+2. Formato exacto de la firma de los webhooks: cabecera y algoritmo. La documentación solo dice que se genera un secreto.
+3. Transportadoras habilitadas en Guatemala para la cuenta, el costo del flete y quién lo paga.
+4. Cuándo se libera el dinero cobrado en EffiWallet, más el costo del plan y las comisiones.
+
+Por comprobar técnicamente:
+- Qué hace Dropify con un pedido que trae productos que no están en Dropi: si lo rechaza completo o ignora esas líneas. Define cómo se manejan los carritos mixtos de la web.
+- En dropshipping, si el proveedor o el distribuidor crea la guía. La documentación sugiere el distribuidor; confirmarlo con la primera prueba.
+- El manual «Shopify Temporal 2026» de Effi (PDF de más de 10 MB) no se pudo leer automáticamente; no es necesario si no se usa el conector.
+
+Reglas: la API key de Effi va solo a Ajustes del CRM, cifrada; nunca al chat ni al repo. La primera remisión o guía real requiere el «sí» explícito del propietario, porque genera un despacho y un cobro reales.

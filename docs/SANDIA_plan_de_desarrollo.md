@@ -5710,3 +5710,12 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - No se modificó en producción el prompt, los pedidos, el proveedor ni los cobros. El script de aplicación del prompt tiene plan por defecto, respaldo y compare-and-set; usar después del despliegue y su aprobación.
 - Graphify sigue fallando con `uv trampoline failed to canonicalize script path`; se revisaron fuentes directamente.
 - Próximos riesgos: pago tardío sobre compra cancelada/revisión, tarea durable de pago retenido y aviso al dueño, alertas Dropi nocturnas/reabiertas, resumen aceptado versionado, conciliación y seguimiento de casos SAC.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, Effi como segundo proveedor (diseño)
+
+- Revisión de solo lectura de la cuenta de Effi del propietario. Hallazgos:
+  - 9,366 artículos de dropshipping en quetzales y 97 convenios con bodegas en Guatemala.
+  - API oficial con `idempotency_key`: crea remisiones de venta con `convenio_dropshipping` y guías con recaudo (CAEX, Gintracom).
+  - Webhooks firmados de cambios de estado y novedades de guía.
+- Decisión: **no** usar el conector Shopify de Effi, porque importaría todos los pedidos y los mezclaría con Dropify. El CRM enrutará cada pedido según el proveedor de sus productos.
+- Sin código todavía. Pendientes del propietario y técnicos en `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §8.
