@@ -291,7 +291,7 @@ const MISSING_RECORD_MARKER_NOTE =
 /** Appended for the one retry when a store reply said "lo estoy registrando"
  *  without the order marker (Casa Ceiba 2026-11-07, gpt-5.4-mini, 3 times). */
 const MISSING_ORDER_MARKER_NOTE =
-  `SYSTEM CHECK (this turn only): the customer confirmed the order summary and your draft says you are registering it, but it did not include the ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}…]] marker, so NO order was created and no payment link will be sent. Write the reply again (one short line) and append that marker with every value from the confirmed summary: exact product name(s) from the catalog with quantity, full name, phone, address, departamento (use the municipio if that is all you have) and cod or tarjeta. Never ask again for anything already given.`
+  `SYSTEM CHECK (this turn only): the customer confirmed the order summary and your draft says you are registering it, but it did not include the ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}…]] marker, so NO order was created and no payment link will be sent. Write the reply again (one short line) and append that marker with every value from the confirmed summary: exact product name(s) from the catalog with quantity, full name, phone, address, departamento (use the municipio if that is all you have), cod or tarjeta, and the municipio last. Never ask again for anything already given.`
 
 const AI_PROVIDER_FALLBACK_TEXT =
   'Estoy teniendo una dificultad temporal para procesar su mensaje. Ya avisé al equipo para que le dé seguimiento por este chat.'

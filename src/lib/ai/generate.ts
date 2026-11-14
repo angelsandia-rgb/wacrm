@@ -429,11 +429,11 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>`
+/** `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>|<municipio>` (municipio optional)
  *  → proposal, or null when any field is missing (a half-filled order is
  *  never created; the unparsed marker is still stripped from the reply). */
 export function parseShopifyOrderPayload(payload: string): GenerateResult['shopifyOrderProposal'] {
-  const [itemsStr, fullName, phone, address, departamento, paymentRaw] = payload.split('|').map((s) => s.trim())
+  const [itemsStr, fullName, phone, address, departamento, paymentRaw, municipio] = payload.split('|').map((s) => s.trim())
   const items = (itemsStr ?? '')
     .split(',')
     .map((entry) => {
@@ -446,5 +446,5 @@ export function parseShopifyOrderPayload(payload: string): GenerateResult['shopi
   const pay = (paymentRaw ?? '').toLowerCase()
   const payment = /cod|contra|efectivo/.test(pay) ? 'cod' : /tarjeta|card|link/.test(pay) ? 'card' : null
   if (!items.length || !fullName || !phone || !address || !departamento || !payment) return null
-  return { items, fullName, phone, address, departamento, payment }
+  return { items, fullName, phone, address, departamento, payment, ...(municipio ? { municipio } : {}) }
 }

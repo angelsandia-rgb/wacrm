@@ -154,3 +154,17 @@ describe('the charged total is the one the customer accepted', () => {
     expect(m.handoff).toHaveBeenCalledWith(expect.stringMatching(/Q350[\s\S]*Q300/))
   })
 })
+
+describe('delivery municipio', () => {
+  const order = (departamento: string, municipio: string) => run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: 'Zona 1', departamento, municipio, payment: 'cod' } })
+  it('passes the municipio to Shopify and shows it in the confirmation', async () => {
+    await order('Guatemala', 'Mixco')
+    expect(m.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ departamento: 'Guatemala', municipio: 'Mixco' }))
+    expect(m.send).toHaveBeenCalledWith(expect.stringContaining('Envío a Zona 1, Mixco, Guatemala.'))
+  })
+  it('creates nothing when the municipio belongs to another departamento', async () => {
+    await order('Escuintla', 'Villa Nueva')
+    expect(m.create).not.toHaveBeenCalled()
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('no corresponde al departamento'))
+  })
+})

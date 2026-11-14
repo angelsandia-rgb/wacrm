@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles,
+  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento,
+  normalizeGtPhone, outOfStockTitles,
   PAYMENT_GATEWAYS,
 } from './api'
 
@@ -68,6 +69,9 @@ async function createShopifyOrderLocked(args: {
 
   if (normalizeGtPhone(proposal.phone).replace(/\D/g, '').length < 11) return fail(`teléfono inválido "${proposal.phone}"`)
   if (!departamentoCode(proposal.departamento)) return fail(`departamento desconocido "${proposal.departamento}"`)
+  if (proposal.municipio && !municipioMatchesDepartamento(proposal.municipio, proposal.departamento)) {
+    return fail(`el municipio "${proposal.municipio}" no corresponde al departamento "${proposal.departamento}"`)
+  }
 
   const { data: products } = await db
     .from('products')
@@ -111,7 +115,7 @@ async function createShopifyOrderLocked(args: {
   const order = await createShopifyOrder(cfg, {
       lines, currency,
       fullName: proposal.fullName, phone: proposal.phone, address: proposal.address,
-      departamento: proposal.departamento, payment: proposal.payment,
+      departamento: proposal.departamento, municipio: proposal.municipio, payment: proposal.payment,
       note: 'Pedido tomado por WhatsApp (Chat Sandía)',
   })
   await lifecycle.created(order)
@@ -175,8 +179,9 @@ async function createShopifyOrderLocked(args: {
     // A draft's "#D3" isn't the order number the customer tracks; the real
     // one comes with the payment confirmation (recurrente-webhook).
     const heading = order.draft ? '✅ Pedido registrado' : `✅ Pedido ${order.name} confirmado`
-    const where = proposal.address.toLowerCase().includes(proposal.departamento.toLowerCase())
-      ? proposal.address : `${proposal.address}, ${proposal.departamento}`
+    const extra = [...new Set([proposal.municipio, proposal.departamento].filter((p): p is string => Boolean(p)))]
+      .filter((p) => !proposal.address.toLowerCase().includes(p.toLowerCase()))
+    const where = [proposal.address, ...extra].join(', ')
     await sendText(`${heading}: ${label}. Envío a ${where}. ${payLine} Para saber cómo va el pedido, basta con escribir por aquí.`)
   } catch (err) {
     console.error('[shopify] order confirmation send failed:', err)
