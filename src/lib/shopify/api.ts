@@ -727,28 +727,43 @@ export async function getRecurrenteCheckout(secretKey: string, checkoutId: strin
 }
 
 /** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Reuses
- *  the paid order on webhook retries. Null on a missing draft or an amount
- *  or currency mismatch — the same number in another currency is not a
- *  match. */
+ *  the paid order on webhook retries. Anything else returns `held` with the
+ *  reason, and nothing is released: a missing draft, an amount or currency
+ *  mismatch (the same number in another currency is not a match), a draft no
+ *  longer tied to an open purchase in the CRM, or stock that ran out after
+ *  the payment link went out. */
 export async function completePaidDraftOrder(
   cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   draftId: string,
   expectedTotal: number,
   expectedCurrency: string,
-): Promise<{ id: string; name: string } | null> {
+  openPurchase: boolean,
+): Promise<{ order: { id: string; name: string } } | { held: string }> {
   const { draftOrder } = await shopifyGraphql<{
-    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; order?: { id: string; name: string; displayFinancialStatus: string } | null } | null
-  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount currencyCode } } order { id name displayFinancialStatus } } }`, { id: draftId })
-  if (!draftOrder) return null
+    draftOrder: {
+      status: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }
+      order?: { id: string; name: string; displayFinancialStatus: string } | null
+      lineItems?: { nodes: { title: string; quantity: number; variant: { id: string } | null }[] }
+    } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount currencyCode } } order { id name displayFinancialStatus }
+      lineItems(first: 50) { nodes { title quantity variant { id } } } } }`, { id: draftId })
+  const mismatch = { held: 'el borrador no existe o su importe/moneda no coincide con lo cobrado' }
+  if (!draftOrder) return mismatch
   const money = draftOrder.totalPriceSet.shopMoney
   if (money.currencyCode.toUpperCase() !== expectedCurrency.toUpperCase() || Math.abs(Number(money.amount) - expectedTotal) > 0.009) {
     console.warn(`[recurrente] ${draftId} total ${money.amount} ${money.currencyCode} != paid ${expectedTotal} ${expectedCurrency}, not completed`)
-    return null
+    return mismatch
   }
   if (draftOrder.status === 'COMPLETED') {
-    if (!draftOrder.order || draftOrder.order.displayFinancialStatus !== 'PAID') return null
-    return { id: draftOrder.order.id, name: draftOrder.order.name }
+    if (!draftOrder.order || draftOrder.order.displayFinancialStatus !== 'PAID') return mismatch
+    return { order: { id: draftOrder.order.id, name: draftOrder.order.name } }
   }
+  // Eligibility is checked now, at payment time, not when the link went out.
+  if (!openPurchase) return { held: 'la compra ya no está abierta en el CRM (cancelada, cerrada o desvinculada)' }
+  const lines = (draftOrder.lineItems?.nodes ?? []).filter((l) => l.variant)
+    .map((l) => ({ variantId: l.variant!.id, quantity: l.quantity, title: l.title }))
+  const missing = lines.length ? await outOfStockTitles(cfg, lines) : []
+  if (missing.length) return { held: `sin existencias al momento del pago: ${missing.join(', ')}` }
   // No paymentPending → Shopify records the order as paid.
   const data = await shopifyGraphql<{
     draftOrderComplete: { draftOrder: { order: { id: string; name: string } | null } | null; userErrors: { message: string }[] }
@@ -756,7 +771,7 @@ export async function completePaidDraftOrder(
       draftOrder { order { id name } } userErrors { message } } }`, { id: draftId })
   const order = data.draftOrderComplete.draftOrder?.order
   if (!order) throw new ShopifyError(data.draftOrderComplete.userErrors.map((e) => e.message).join('; ') || 'draftOrderComplete failed')
-  return order
+  return { order }
 }
 
 /** Lines the store can't cover right now. Shopify's inventory is Dropi's

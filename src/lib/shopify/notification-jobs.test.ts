@@ -210,6 +210,15 @@ describe('durable Shopify notification delivery', () => {
     expect(notifications.size).toBe(2)
     expect(m.notify).not.toHaveBeenCalled()
   })
+  it('delivers an operational staff notice at night instead of waiting for business hours', async () => {
+    const { db, notifications } = database()
+    vi.setSystemTime(new Date('2026-11-13T07:00:00Z')) // 01:00 in Guatemala
+    await enqueueOrderNotification(db, 'a', 'order:dropi-sync-error:x', {
+      ...payload, text: '', template: null, staff: { userIds: ['u1'], title: 'No llegó a Dropi', body: 'Corrija' },
+    })
+    expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+    expect(notifications.size).toBe(1)
+  })
 })
 
 describe('abandoned cart recovery in the same durable queue', () => {

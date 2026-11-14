@@ -21,8 +21,9 @@ const PAID_EVENTS = new Set(['intent.succeeded', 'payment_intent.succeeded', 'ba
  * order — it then reaches Dropify/Dropi with nothing to collect — moves the
  * deal to the real order and tells the customer. Svix-signed; the payment
  * state and the draft id are read back from Recurrente, never from the body.
- * Only with "Crear pedidos reales" on: otherwise the draft stays a draft and
- * the payment is held with a critical alert (it is real money either way).
+ * Only with "Crear pedidos reales" on, for a purchase still open in the CRM
+ * and with stock at payment time: otherwise the draft stays a draft and the
+ * payment is held with an owner notice + critical alert (real money either way).
  * Always 200 once authenticated, so Recurrente doesn't retry handled events.
  */
 export async function POST(request: Request) {
@@ -62,19 +63,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, skipped: 'not a paid chat order' })
     }
     const total = checkout.total_in_cents / 100
-    // Real money arrived but nothing is released: the sale is paused (a link
-    // issued before the pause, paid late) or the draft no longer matches.
-    // Hold it for a person — never drop it silently.
-    const hold = (reason: string) => dispatchSystemAlert({
-      severity: 'critical', source: 'shopify_payment_held', accountId,
-      title: `Pago recibido y retenido sin pedido: ${reason}`,
-      dedupKey: `shopify_payment_held:${accountId}:${checkoutId}`, throttleMinutes: 240,
-      detail: { checkout_id: checkoutId, draft_id: draftId, amount: total, currency: checkout.currency,
-        action: 'Revise el borrador en Shopify y el cobro en Recurrente. Complete el borrador como PAGADO o resuelva con el cliente según la política; no se liberó nada a Dropi.' },
-    }).then(() => NextResponse.json({ ok: true, held: reason }))
-    if (!cfg.ordersLive) return hold('la venta está pausada (Crear pedidos reales apagado)')
-    const order = await completePaidDraftOrder(cfg, draftId, total, checkout.currency)
-    if (!order) return hold('el borrador no existe o su importe/moneda no coincide con lo cobrado')
+    // The purchase the draft belongs to, read before anything is released.
+    // After a completion it points at the real order instead (retry path).
+    const { data: draftDeal, error: draftDealError } = await db.from('deals')
+      .select('id, status, contact_id').eq('account_id', accountId).eq('shopify_order_id', draftId).maybeSingle()
+    if (draftDealError) throw draftDealError
+    // Real money arrived but nothing is released: hold it for a person —
+    // never drop it silently. The owner's notice is stored before the 200
+    // (a failure here → 500 → Recurrente retries); the platform alert is extra.
+    const hold = async (reason: string) => {
+      const amount = formatCurrency(total, checkout.currency)
+      await dispatchSystemAlert({
+        severity: 'critical', source: 'shopify_payment_held', accountId,
+        title: `Pago recibido y retenido sin pedido: ${reason}`,
+        dedupKey: `shopify_payment_held:${accountId}:${checkoutId}`, throttleMinutes: 240,
+        detail: { checkout_id: checkoutId, draft_id: draftId, amount: total, currency: checkout.currency,
+          action: 'Revise el borrador en Shopify y el cobro en Recurrente. Complete el borrador como PAGADO o resuelva con el cliente según la política; no se liberó nada a Dropi.' },
+      })
+      const { data: contact, error: contactError } = draftDeal?.contact_id
+        ? await db.from('contacts').select('phone, name').eq('id', draftDeal.contact_id).eq('account_id', accountId).maybeSingle()
+        : { data: null, error: null }
+      if (contactError) throw contactError
+      const { data: recipients, error: recipientsError } = await db.from('profiles').select('user_id')
+        .eq('account_id', accountId).in('account_role', ['owner', 'admin'])
+      if (recipientsError) throw recipientsError
+      // ponytail: no contact (unlinked draft) → only the platform alert above; add a conversation-less owner notice if that ever happens.
+      if (contact?.phone && recipients?.length) {
+        const { conversationId } = await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)
+        const eventKey = `${checkoutId}:payment-held`
+        await enqueueOrderNotification(db, accountId, eventKey, {
+          conversationId, text: '', template: null,
+          staff: {
+            userIds: recipients.map((r) => r.user_id as string),
+            title: `Pago de ${amount} retenido`,
+            body: `💳 Se cobraron ${amount} con tarjeta pero no se creó el pedido: ${reason}. Revise el cobro en Recurrente y el borrador en Shopify, y resuelva con el cliente (completar el pedido o reembolsar según su política).`,
+          },
+        })
+        await runOrderNotificationSweep(db, accountId, eventKey)
+      }
+      return NextResponse.json({ ok: true, held: reason })
+    }
+    if (!cfg.ordersLive) return await hold('la venta está pausada (Crear pedidos reales apagado)')
+    const result = await completePaidDraftOrder(cfg, draftId, total, checkout.currency, draftDeal?.status === 'open')
+    if ('held' in result) return await hold(result.held)
+    const { order } = result
 
     const { data: deal, error: lookupError } = await db.from('deals')
       .select('id, contact_id, pipeline_id, stage_id').eq('account_id', accountId)

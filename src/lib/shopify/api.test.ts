@@ -248,31 +248,48 @@ describe('Recurrente paid → Shopify order', () => {
 
   const cfg = { shop: 'x.myshopify.com', token: 't' }
   const draft = (status: string, amount: string, currencyCode = 'GTQ') =>
-    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount, currencyCode } } } } }))
+    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount, currencyCode } },
+      lineItems: { nodes: [{ title: 'Lámpara', quantity: 2, variant: { id: 'gid://shopify/ProductVariant/1' } }] } } } }))
+  const stock = (inventoryQuantity: number) => new Response(JSON.stringify({ data: { nodes: [
+    { id: 'gid://shopify/ProductVariant/1', inventoryQuantity, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } }] } }))
+  const MISMATCH = { held: expect.stringContaining('importe/moneda') }
 
-  it('completes an open draft as paid when the total matches', async () => {
+  it('completes an open draft as paid when the total matches and stock still covers it', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(draft('OPEN', '458.00'))
+      .mockResolvedValueOnce(stock(2))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         data: { draftOrderComplete: { draftOrder: { order: { id: 'gid://shopify/Order/5', name: '#1005' } }, userErrors: [] } },
       })))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
-    const mutation = JSON.parse(fetchMock.mock.calls[1][1].body).query as string
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual({ order: { id: 'gid://shopify/Order/5', name: '#1005' } })
+    const mutation = JSON.parse(fetchMock.mock.calls[2][1].body).query as string
     expect(mutation).toContain('draftOrderComplete')
     expect(mutation).not.toContain('paymentPending')
   })
 
   it('skips completed drafts and amount mismatches', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(draft('COMPLETED', '458.00')).mockResolvedValueOnce(draft('OPEN', '500.00')))
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
   })
   it('never completes a draft paid in another currency, even when the number matches', async () => {
     const fetchMock = vi.fn().mockResolvedValue(draft('OPEN', '458.00', 'USD'))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('holds a late payment for a purchase no longer open in the CRM, without completing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(draft('OPEN', '458.00'))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', false)).toEqual({ held: expect.stringContaining('ya no está abierta') })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('holds a payment when stock ran out after the link went out, without completing', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(draft('OPEN', '458.00')).mockResolvedValueOnce(stock(1))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual({ held: 'sin existencias al momento del pago: Lámpara' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
   it('recovers the paid order on a retry after completion without completing it again', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { draftOrder: {
@@ -280,7 +297,8 @@ describe('Recurrente paid → Shopify order', () => {
       order: { id: 'gid://shopify/Order/5', name: '#1005', displayFinancialStatus: 'PAID' },
     } } })))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
+    // A retry finds the draft completed and its deal already moved: not "open" any more, still recovered.
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', false)).toEqual({ order: { id: 'gid://shopify/Order/5', name: '#1005' } })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
