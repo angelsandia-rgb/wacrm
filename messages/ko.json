@@ -3168,6 +3168,7 @@
     "phone": "전화번호",
     "address": "배송 주소",
     "departamento": "지역",
+    "municipio": "시/군 (배송용)",
     "paymentMethod": "결제 방법",
     "cod": "착불",
     "card": "카드 (Recurrente 링크)",

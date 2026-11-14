@@ -5654,3 +5654,25 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   confirmación deja de prometer «no lo enviaremos» cuando el proveedor importa
   solo. Suite 253 archivos / 3,018 pruebas, ESLint sin errores, build en
   worktree limpio aprobado, lockfile sin cambios.
+
+### 2026-11-14 (cont.) — Claude Code: #373 en producción, por qué #1004 no avisó, municipio en pedidos por WhatsApp
+
+- #373 fusionado con el «sí» del propietario (`8a38eff6`); contenedor
+  `GIT_SHA=8a38eff6`, healthy, `/api/health` 200.
+- **Por qué #1004 no mandó WhatsApp** (lectura de Shopify, CRM y plantillas):
+  el pedido entró el 14/11 00:00 UTC. A esa hora el CRM todavía tenía
+  `confirmar_pedido` como no aprobada (se sincronizó como APPROVED a las 01:32
+  UTC). El cliente no tenía la ventana de 24 h abierta y la versión en
+  producción era anterior a #371, sin cola de reintentos, así que el aviso se
+  descartó. El negocio y la conversación sí se crearon (00:00:05–07). Hoy las
+  13 plantillas están aprobadas y la cola (#371) reintenta cada 15 min hasta
+  poder enviar. El **correo** de confirmación de Shopify sí salió (historial
+  del pedido, 00:00:01). Los correos de envío de Shopify dependen de que
+  Dropify cree el envío con aviso al cliente: verificable en el primer envío
+  real.
+- PR nuevo: el pedido por WhatsApp lleva el **municipio real** a Shopify y
+  Dropi (antes la ciudad era el departamento). La IA lo pide, va como 7º campo
+  opcional del marcador, el formulario manual del inbox lo incluye, y un
+  municipio de la capital con otro departamento se detiene antes de crear el
+  pedido. Suite 253 / 3,022, ESLint sin errores, build en worktree limpio
+  aprobado, lockfile sin cambios.

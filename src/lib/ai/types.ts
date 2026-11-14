@@ -176,6 +176,8 @@ export interface GenerateResult {
     address: string
     departamento: string
     payment: 'cod' | 'card'
+    /** Municipio (Dropi needs city ≠ departamento). Optional: older markers omit it. */
+    municipio?: string
   } | null
   /** The customer's answer to a pending web COD order confirmation
    *  (see `CONFIRM_SHOPIFY_ORDER_SENTINEL`), or undefined. */

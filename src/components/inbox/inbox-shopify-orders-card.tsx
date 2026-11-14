@@ -65,6 +65,7 @@ export function InboxShopifyOrdersCard({
   const [phone, setPhone] = useState('')
   const [address, setAddress] = useState('')
   const [departamento, setDepartamento] = useState('Guatemala')
+  const [municipio, setMunicipio] = useState('')
   const [payment, setPayment] = useState<'cod' | 'card'>('cod')
   const [saving, setSaving] = useState(false)
 
@@ -80,6 +81,7 @@ export function InboxShopifyOrdersCard({
     setPhone(contactPhone ?? '')
     setAddress('')
     setDepartamento('Guatemala')
+    setMunicipio('')
     setPayment('cod')
     setLines([{ name: '', qty: 1 }])
     setOpen(true)
@@ -100,7 +102,7 @@ export function InboxShopifyOrdersCard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversation_id: conversationId, items: lines.filter((l) => l.name), full_name: fullName,
-          phone, address, departamento, payment,
+          phone, address, departamento, municipio, payment,
         }),
       })
       const body = await readResponseJson<{ error?: string; order?: { name: string; draft: boolean } }>(res)
@@ -220,6 +222,10 @@ export function InboxShopifyOrdersCard({
             <div className="space-y-1">
               <Label htmlFor="so-address">{t('address')}</Label>
               <Input id="so-address" value={address} onChange={(e) => setAddress(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="so-muni">{t('municipio')}</Label>
+              <Input id="so-muni" value={municipio} onChange={(e) => setMunicipio(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="so-depto">{t('departamento')}</Label>

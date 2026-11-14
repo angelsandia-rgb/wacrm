@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
+  buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
   completePaidDraftOrder, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
@@ -55,6 +55,13 @@ describe('buildOrderInput', () => {
       amountSet: { shopMoney: { amount: '338.00', currencyCode: 'GTQ' } },
     }])
   })
+  it('sends Dropi the real municipio as the city, not the departamento', () => {
+    const base = { lines: [{ variantId: 'gid://v/1', quantity: 1, price: 100, title: 'X' }], fullName: 'Ana', phone: '55551234', address: 'Zona 1', payment: 'cod' as const, currency: 'GTQ' }
+    expect(buildOrderInput({ ...base, departamento: 'Guatemala', municipio: 'Mixco' }).shippingAddress).toMatchObject({ city: 'Mixco', provinceCode: 'GUA' })
+    expect(buildOrderInput({ ...base, departamento: 'Alta Verapaz', municipio: 'Cobán' }).shippingAddress).toMatchObject({ city: 'Cobán', provinceCode: 'AVE' })
+    // Older markers without municipio keep the previous behaviour.
+    expect(buildOrderInput({ ...base, departamento: 'Mixco' }).shippingAddress).toMatchObject({ city: 'Mixco', provinceCode: 'GUA' })
+  })
 })
 
 describe('helpers', () => {
@@ -66,6 +73,12 @@ describe('helpers', () => {
     expect(departamentoCode('Villa Canales')).toBe('GUA')
     expect(departamentoCode('Mixco')).toBe('GUA')
     expect(departamentoCode('Quetzaltenango')).toBe('QUE')
+  })
+  it('rejects only a municipio known to belong to another departamento', () => {
+    expect(municipioMatchesDepartamento('Mixco', 'Guatemala')).toBe(true)
+    expect(municipioMatchesDepartamento('Villa Nueva', 'Escuintla')).toBe(false)
+    expect(municipioMatchesDepartamento('Cobán', 'Alta Verapaz')).toBe(true)
+    expect(municipioMatchesDepartamento('Guantemala', 'Guatemala')).toBe(true) // unknown: Dropi decides, owner is alerted
   })
   it('verifies the webhook HMAC', () => {
     const body = '{"id":1}'
@@ -136,6 +149,8 @@ describe('parseShopifyOrderPayload', () => {
       fullName: 'Ana López', phone: '55551234', address: 'Zona 1, 6a calle', departamento: 'Guatemala', payment: 'cod',
     })
     expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta')?.payment).toBe('card')
+    expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta|Mixco')?.municipio).toBe('Mixco')
+    expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta')).not.toHaveProperty('municipio')
   })
   it('rejects a marker with a missing field', () => {
     expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|')).toBeNull()

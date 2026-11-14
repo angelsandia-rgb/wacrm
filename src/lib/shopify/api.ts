@@ -243,6 +243,8 @@ export interface OrderRequest {
   phone: string
   address: string
   departamento: string
+  /** The real municipio: Dropi rejects a city that does not exist in the departamento. */
+  municipio?: string
   payment: PaymentMethod
   currency: string
   note?: string
@@ -278,6 +280,17 @@ const GUATEMALA_MUNICIPIOS = new Set([
   'san raymundo', 'chuarrancho', 'fraijanes', 'amatitlan', 'villa nueva', 'villa canales', 'san miguel petapa', 'petapa',
 ])
 
+/** Pure: false only when we KNOW the municipio is in another departamento
+ *  (a capital-area municipio given with a different departamento). Unknown
+ *  names pass: Dropi's own check reports them (Dropi Sync Error → owner). */
+// ponytail: only the Guatemala-departamento municipios are known; add the full 340-municipio table if rejections show up elsewhere.
+export function municipioMatchesDepartamento(municipio: string, departamento: string): boolean {
+  const key = municipio.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
+  if (!GUATEMALA_MUNICIPIOS.has(key)) return true
+  const code = departamentoCode(departamento)
+  return code === undefined || code === 'GUA'
+}
+
 export function departamentoCode(name: string): string | undefined {
   const key = name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
   return GT_DEPARTAMENTOS[key] ?? (GUATEMALA_MUNICIPIOS.has(key) ? 'GUA' : undefined)
@@ -291,8 +304,8 @@ export function buildOrderInput(req: OrderRequest) {
   const address = {
     ...splitName(req.fullName),
     address1: req.address,
-    city: req.departamento,
-    provinceCode: departamentoCode(req.departamento),
+    city: req.municipio?.trim() || req.departamento,
+    provinceCode: departamentoCode(req.departamento) ?? (req.municipio ? departamentoCode(req.municipio) : undefined),
     countryCode: 'GT',
     phone,
   }

@@ -43,6 +43,7 @@ interface CreateBody {
   phone?: unknown
   address?: unknown
   departamento?: unknown
+  municipio?: unknown
   payment?: unknown
 }
 
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
     const proposal = {
       items, payment: payment ?? ('cod' as const),
       fullName: str(body.full_name), phone: str(body.phone), address: str(body.address), departamento: str(body.departamento),
+      ...(str(body.municipio) ? { municipio: str(body.municipio) } : {}),
     }
     if (!conversationId || !items.length || !payment || !proposal.fullName || !proposal.phone || !proposal.address || !proposal.departamento) {
       return NextResponse.json({ error: 'Faltan datos del pedido' }, { status: 400 })
