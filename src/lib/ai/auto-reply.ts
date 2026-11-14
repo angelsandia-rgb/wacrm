@@ -54,6 +54,7 @@ import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
 import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
+import { loadPendingOrderRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
 import { describeOrderStatuses, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
@@ -961,6 +962,7 @@ export async function dispatchInboundToAiReply(
     let shopifyOrders = false
     let shopifyOrderStatus: string | null = null
     let pendingOrder: PendingOrder | null = null
+    let pendingRequest: PendingOrderRequest | null = null
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
@@ -1001,6 +1003,14 @@ export async function dispatchInboundToAiReply(
           pendingOrder = await loadPendingOrderConfirmation(db, accountId, contactId)
         } catch (err) {
           console.error('[ai auto-reply] pending order confirmation lookup failed:', err)
+        }
+        // A web-form request (no Shopify order yet) waits only when no real order does.
+        if (!pendingOrder) {
+          try {
+            pendingRequest = await loadPendingOrderRequest(db, accountId, contactId)
+          } catch (err) {
+            console.error('[ai auto-reply] pending order request lookup failed:', err)
+          }
         }
       }
       // Order-status questions only: one live Shopify read, never on ordinary turns.
@@ -1187,6 +1197,7 @@ export async function dispatchInboundToAiReply(
       shopifyOrders,
       shopifyOrderStatus,
       pendingOrderConfirmation: pendingOrder?.orderName ?? null,
+      pendingOrderRequest: pendingRequest?.summary ?? null,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -1739,6 +1750,14 @@ For airport transport, record the guest's request in nota on the relevant existi
           if (err instanceof OutsideAiAttentionHours) throw err
           console.error('[ai auto-reply] cancellation during handoff failed:', err)
           cancellationFailure = `🤖 No se pudo completar la gestión de cancelación del pedido ${cancellingPendingOrder.orderName} (${cancellingPendingOrder.orderId}). La decisión puede haberse guardado antes del error; revise el estado y los avisos existentes en Shopify y CRM antes de continuar. No recree el pedido ni repita efectos ya realizados. Error: ${describeError(err).slice(0, 300)}`
+        }
+      }
+      // A refused form request has nothing to undo (no order exists): just close it.
+      if (shopifyOrders && orderConfirmation === 'cancel' && pendingRequest && !pendingOrder) {
+        try {
+          await settleOrderRequest(db, accountId, pendingRequest.id, 'cancelled')
+        } catch (err) {
+          console.error('[ai auto-reply] order request cancellation failed:', err)
         }
       }
       // Other verticals keep their existing customer acknowledgment, sticky
@@ -2528,7 +2547,8 @@ For airport transport, record the guest's request in nota on the relevant existi
     // Only taught while a web COD order waits for this customer's answer.
     if (orderConfirmation && pendingOrder) {
       try {
-        await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation, handoffAgentId: config.handoffAgentId })
+        // A real web order is already COD: a card answer still confirms it.
+        await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation === 'cancel' ? 'cancel' : 'confirm', handoffAgentId: config.handoffAgentId })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] order confirmation failed:', err)
@@ -2542,7 +2562,39 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     // Same defense in depth: only an account with a connected store was
     // taught the marker; createShopifyOrderFromChat re-checks the config.
-    if (shopifyOrderProposal && shopifyOrders && !(orderConfirmation && pendingOrder)) {
+    // A form request is placed exactly as validated when it was submitted —
+    // never from the model's own reading of the chat.
+    let requestPlaced = false
+    if (orderConfirmation && pendingRequest && shopifyOrders) {
+      requestPlaced = true
+      const request = pendingRequest
+      try {
+        const settled = await settleOrderRequest(db, accountId, request.id, orderConfirmation === 'cancel' ? 'cancelled' : 'confirmed')
+        if (settled && orderConfirmation !== 'cancel') {
+          await createShopifyOrderFromChat({
+            db, accountId, contactId, conversationId, configOwnerUserId,
+            proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' ? 'card' : 'cod' },
+            handoff: (summary) => handOffToHuman({
+              db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+              alreadyAssigned: Boolean(conv.assigned_agent_id), summary, transient: true,
+            }),
+            sendText: async (contentText) => {
+              await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
+            },
+          })
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] order request confirmation failed:', err)
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: true,
+          summary: `🤖 El cliente respondió a su solicitud de pedido del formulario web (${request.summary}) pero no se pudo completar. Revise en Shopify si el pedido existe antes de crearlo. Error: ${describeError(err).slice(0, 300)}`,
+        })
+      }
+    }
+
+    if (shopifyOrderProposal && shopifyOrders && !(orderConfirmation && pendingOrder) && !requestPlaced) {
       try {
         await createShopifyOrderFromChat({
           db, accountId, contactId, conversationId, configOwnerUserId, proposal: shopifyOrderProposal,
