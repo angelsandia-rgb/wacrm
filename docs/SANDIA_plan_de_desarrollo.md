@@ -5609,3 +5609,28 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Validación del conjunto: 252 archivos y 2,996 pruebas aprobadas, TypeScript y ESLint sin errores, build normal de producción con Turbopack aprobado, package-lock.json sin cambios. La prueba PostgreSQL embebida pasó con doble aplicación, atomicidad, rollback, aislamiento, permisos, concurrencia ordinaria y resultados inciertos. Cinco pruebas secas con modelos reales pasaron sin ejecutar acciones.
 - Pendiente antes del despliegue: aplicar/verificar la migración 179 y obtener el sí explícito para el merge del PR #371. El acceso administrativo local de Supabase devolvió 401; se solicitó iniciar sesión. Meta se revisará después por decisión del dueño.
 - Casa Ceiba conserva pedidos reales desactivados: faltan plantillas aprobadas, adaptar el seguimiento fuera de ventana y verificar el proceso de Dropify para pedidos aún sin confirmar. El pedido web revisado tenía un municipio inválido, sin evidencia de despacho; su dirección necesita validación. No se declara autonomía completa ni se alteraron pedidos existentes.
+
+### 2026-11-13 (noche) — Claude Code: Casa Ceiba, dinero y estados de pedido (plan ecommerce, fase A/B)
+
+- Estado comprobado antes de cambiar nada (lectura, 14/11 04:30 UTC): main =
+  `2dbf4758` (#371), salud 200; tienda `x0rkkg-b4` = Casa Ceiba (primario
+  `casaceibagt.myshopify.com`, GTQ); `orders_live=false`; **13 plantillas
+  aprobadas** (antes 3); **la clave de Recurrente es live**; #1004 sin cambios
+  (PENDING/UNFULFILLED, `Dropi Sync Error`, ciudad «Guantemala»); cola de
+  avisos vacía; 4 borradores abiertos. Dropify: ambas sincronizaciones
+  desmarcadas, guardado y verificado tras recargar.
+- Proveedor (fase A3): Dropify solo ofrece 4 casillas, sin filtro por
+  etiqueta; Dropi no publica una API oficial de órdenes. Prepago puede usar la
+  regla nativa «sincronizar pagadas» (pendiente de prueba externa); contra
+  entrega confirmada **no tiene vía automática documentada**: bloqueado hasta
+  que Dropi entregue acceso oficial. Detalle en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md`.
+- Código (este PR): pago real con venta pausada o importe/moneda distintos →
+  retenido con alerta crítica; sin enlaces de cobro mientras `orders_live` está
+  apagado; COD solo si la pasarela lo dice; «Entregado» solo con todos los
+  paquetes; cancelación en Shopify cierra el negocio sin prometer reembolso;
+  carritos paginados.
+- Validación: suite completa 253 archivos / 3,011 pruebas, ESLint de los
+  archivos tocados sin errores, TypeScript de `src/` limpio, build de
+  producción aprobado en worktree limpio con `npm ci`, `package-lock.json` sin
+  cambios. Consultas GraphQL nuevas validadas en solo lectura contra la tienda.
