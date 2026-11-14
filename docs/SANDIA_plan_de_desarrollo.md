@@ -5676,3 +5676,24 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   municipio de la capital con otro departamento se detiene antes de crear el
   pedido. Suite 253 / 3,022, ESLint sin errores, build en worktree limpio
   aprobado, lockfile sin cambios.
+
+### 2026-11-14 (06:00–06:10 UTC) — Claude Code: Casa Ceiba, #374 en producción y modo autónomo activado
+
+- #374 (municipio en pedidos por WhatsApp) fusionado con el «sí» del
+  propietario (`f6424518`); contenedor `GIT_SHA=f6424518`, healthy,
+  `/api/health` 200.
+- **Activación por decisión explícita del propietario** («después del merge
+  del PR nuevo»):
+  - `orders_live=true` para Casa Ceiba, con cambio mínimo y lectura antes y
+    después (`outputs/activacion-orders-live-2026-11-14.json`).
+  - Dropify con ambas sincronizaciones marcadas, guardado y verificado tras
+    recargar.
+  - Comprobación previa: cero pedidos abiertos sin despachar, cero avisos
+    pendientes y cero intentos bloqueados.
+- Efecto: pedidos web y de WhatsApp a Shopify y Dropi sin intervención.
+  Excepciones con aviso al propietario. Enlaces de pago reales habilitados.
+- **Pausa:** desmarcar las dos casillas en Dropify y apagar «Crear pedidos
+  reales».
+- Sin evidencia real todavía: el primer pedido real se revisa de punta a punta.
+  Pendiente del propietario: tiempo de despacho de Dropi. Estado completo en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §0.
