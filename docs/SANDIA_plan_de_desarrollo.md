@@ -5745,3 +5745,12 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   - Avisos al equipo (rechazo de Dropi, 24 h sin confirmar) a cualquier hora; el horario 08–20 queda para mensajes comerciales. Un rechazo con otro motivo, o el mismo tras limpiarse la etiqueta, vuelve a avisar.
 - Sin evidencia real: no ha habido cobros ni pedidos desde la activación.
 - Abierto: el prompt vivo de Casa Ceiba cambió el 14/11 a las 12:18 UTC fuera de esta sesión y aún dice «sin riesgo» y obliga a cerrar con pregunta; pendiente de confirmar con el propietario.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, formulario de pedido propio (#381)
+
+- Fusionado con el «sí» del propietario (`a579c3ab`). Migración `180_shopify_order_requests.sql` aplicada a producción vía Supabase MCP (RLS + lectura de miembros + GRANT verificados).
+- El pedido web nace al confirmar por WhatsApp, sin app de terceros:
+  - `public/shopify-order-form.js` (botón `data-sandia-order` + script con `data-account`) envía a `POST /api/shopify/order-form`. Se valida producto, existencias, teléfono y municipio↔departamento, y se guarda una **solicitud** en `shopify_order_requests`. No se crea nada en Shopify, así que nada llega a Dropify/Dropi.
+  - Se pregunta al cliente con la plantilla `confirmar_pedido`. «Sí» crea el pedido COD con la propuesta guardada por el servidor (no la que lea el modelo); «con tarjeta» envía el link de Recurrente; «no» cierra sin handoff. Liquidación atómica: un doble «sí» crea un solo pedido. Vigencia 72 h; una solicitud nueva reemplaza a la anterior del contacto.
+  - Antiabuso: honeypot y límites por IP (8/h), teléfono (3/día) y tienda (200/día).
+- Prompt vivo sin tocar (el propietario pidió dejarlo así). Pasos pendientes, cada uno con su «sí»: instalar botón y script en el tema vivo, prueba controlada con el número de QA (confirmar que Dropi recibe COD), y luego quitar COD del checkout nativo de Shopify.
