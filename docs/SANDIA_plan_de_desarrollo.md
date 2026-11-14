@@ -5599,3 +5599,13 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Validación: regresiones reproducidas antes del cambio, 451 pruebas
   focalizadas, suite completa de 247 archivos y 2,940 pruebas, TypeScript y
   ESLint. Build registrado en el PR antes de solicitar su merge explícito.
+
+### 2026-11-13 — Codex: auditoría conjunta y preparación de autonomía
+
+- Se auditó producción de Villa San Ricardo y Casa Ceiba, sin enviar mensajes a clientes ni crear pedidos o cobros de prueba. La salud HTTP y los 14 heartbeats estaban correctos. El estado operativo no equivale a una prueba completa de venta y despacho.
+- Cambios operativos aplicados con respaldo y control de concurrencia: teléfono público de Casa Ceiba alineado con Zernio y el escaparate, comprobado en el widget; política de niños y mascotas de VSR alineada con el prompt vigente e indexada con búsqueda semántica y por texto. Se preservaron las exclusiones Sin IA, horarios y pausas manuales.
+- La migración 179 ahora incluye dos tablas y tres RPC: cola de avisos, registro de intentos de pedido, decisiones con todos sus efectos locales en una transacción y bloqueo compartido entre IA y agentes. Un resultado remoto indeterminado exige reconciliación; no se vuelve a crear el pedido a ciegas. Los recordatorios revalidan el estado actual y los workers renuevan su reserva antes de procesar cada trabajo.
+- Se propagan fallos al crear/enlazar un trato para recuperar el webhook; se conserva un trato por pedido. El contexto de productos admite hasta 50 entradas para cubrir los 32 productos activos observados. Se integraron las correcciones del hotel de fechas, triage y precio por ocupación.
+- Validación del conjunto: 252 archivos y 2,996 pruebas aprobadas, TypeScript y ESLint sin errores, build normal de producción con Turbopack aprobado, package-lock.json sin cambios. La prueba PostgreSQL embebida pasó con doble aplicación, atomicidad, rollback, aislamiento, permisos, concurrencia ordinaria y resultados inciertos. Cinco pruebas secas con modelos reales pasaron sin ejecutar acciones.
+- Pendiente antes del despliegue: aplicar/verificar la migración 179 y obtener el sí explícito para el merge del PR #371. El acceso administrativo local de Supabase devolvió 401; se solicitó iniciar sesión. Meta se revisará después por decisión del dueño.
+- Casa Ceiba conserva pedidos reales desactivados: faltan plantillas aprobadas, adaptar el seguimiento fuera de ventana y verificar el proceso de Dropify para pedidos aún sin confirmar. El pedido web revisado tenía un municipio inválido, sin evidencia de despacho; su dirección necesita validación. No se declara autonomía completa ni se alteraron pedidos existentes.
