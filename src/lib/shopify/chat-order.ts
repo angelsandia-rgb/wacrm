@@ -133,12 +133,31 @@ async function createShopifyOrderLocked(args: {
   await attachOrderToDeal({ db, accountId, userId: configOwnerUserId, contactId, order, currency })
 
   const totalText = formatCurrency(order.total, currency)
+  // The customer accepted the catalog total. When Shopify prices the order
+  // differently (price changed, discount, tax), neither confirm nor charge
+  // the new amount on their behalf: a person re-quotes it.
+  const catalogTotal = 'catalogTotal' in order && typeof order.catalogTotal === 'number' ? order.catalogTotal : order.total
+  if (Math.abs(order.total - catalogTotal) > 0.009) {
+    if (!byAgent) {
+      try {
+        await sendText('Gracias 🙏 Estamos verificando el total final de su pedido antes de confirmarlo. Un asesor le escribe por aquí en breve.')
+      } catch (err) {
+        console.error('[shopify] total-mismatch notice failed:', err)
+      }
+    }
+    await handoff(`🛒 ${order.draft ? 'Borrador' : 'Pedido'} ${order.name} (${label}): Shopify calcula ${totalText} y el cliente aceptó ${formatCurrency(catalogTotal, currency)}. ` +
+      'No se envió confirmación ni link de pago: confirme el total con el cliente antes de cobrar o despachar.')
+    return { id: order.id, name: order.name, draft: order.draft, paymentLink: null }
+  }
   let payLine = order.draft
     ? `Pago contra entrega: ${totalText}.`
     : `Pago contra entrega: ${totalText}. Número de pedido: *${order.name}* (para darle seguimiento).`
   let paymentLink: string | null = null
   if (proposal.payment === 'card') {
-    if (cfg.recurrenteSecretKey) {
+    // "Crear pedidos reales" off is the stop switch for new charges too: the
+    // Recurrente key may be live, and with the switch off a paid link is
+    // never completed automatically. A person sends the link if appropriate.
+    if (cfg.recurrenteSecretKey && cfg.ordersLive) {
       try {
         paymentLink = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
           // The customer sees this on Recurrente's page — the items, not a draft "#D3".

@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const m = vi.hoisted(() => ({ stock: vi.fn(), create: vi.fn(), attach: vi.fn(), handoff: vi.fn(), send: vi.fn(), failSave: false }))
+const m = vi.hoisted(() => ({
+  stock: vi.fn(), create: vi.fn(), attach: vi.fn(), handoff: vi.fn(), send: vi.fn(), checkout: vi.fn(), failSave: false,
+  cfg: { shop: 'store', token: 't' } as Record<string, unknown>,
+}))
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
-  loadShopifyConfig: async () => ({ shop: 'store', token: 't' }),
-  outOfStockTitles: m.stock, createShopifyOrder: m.create, attachOrderToDeal: m.attach,
+  loadShopifyConfig: async () => m.cfg,
+  outOfStockTitles: m.stock, createShopifyOrder: m.create, attachOrderToDeal: m.attach, createRecurrenteCheckout: m.checkout,
 }))
 import { createShopifyOrderFromChat } from './chat-order'
 
@@ -45,6 +48,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   fixture = database()
   m.failSave = false
+  m.cfg = { shop: 'store', token: 't' }
+  m.checkout.mockResolvedValue('https://pay.example/c1')
   m.stock.mockResolvedValue([])
   m.create.mockResolvedValue({ id: 'gid://shopify/Order/1', name: '#1001', draft: false, total: 300 })
 })
@@ -116,5 +121,36 @@ describe('shared order creation guard', () => {
     await run()
     expect(m.create).toHaveBeenCalledTimes(1)
     expect(fixture.attempts.get('a:conv')?.status).toBe('succeeded')
+  })
+})
+
+describe('card payment links follow the sales switch', () => {
+  const card = (ordersLive: boolean) => {
+    m.cfg = { shop: 'store', token: 't', ordersLive, recurrenteSecretKey: 'sk_live_x', recurrenteWebhookSecret: 'whsec_x' }
+    m.create.mockResolvedValue({ id: 'gid://shopify/DraftOrder/1', name: '#D1', draft: true, total: 300 })
+    return run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'card' } })
+  }
+  it('emits no real payment link while "Crear pedidos reales" is off, and hands it to a person', async () => {
+    await card(false)
+    expect(m.checkout).not.toHaveBeenCalled()
+    expect(m.send).toHaveBeenCalledWith(expect.not.stringContaining('https://'))
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('Borrador #D1'))
+  })
+  it('emits the link for the exact total once sales are live', async () => {
+    await card(true)
+    expect(m.checkout).toHaveBeenCalledWith('sk_live_x', expect.objectContaining({ total: 300, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/1' }))
+    expect(m.send).toHaveBeenCalledWith(expect.stringContaining('https://pay.example/c1'))
+  })
+})
+
+describe('the charged total is the one the customer accepted', () => {
+  it('neither confirms nor charges when Shopify prices the order differently from the accepted summary', async () => {
+    m.cfg = { shop: 'store', token: 't', ordersLive: true, recurrenteSecretKey: 'sk_live_x', recurrenteWebhookSecret: 'whsec_x' }
+    m.create.mockResolvedValue({ id: 'gid://shopify/DraftOrder/1', name: '#D1', draft: true, total: 350, catalogTotal: 300 })
+    await run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'card' } })
+    expect(m.checkout).not.toHaveBeenCalled()
+    expect(m.send).toHaveBeenCalledWith(expect.stringContaining('verificando el total'))
+    expect(m.send).not.toHaveBeenCalledWith(expect.stringContaining('Q'))
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringMatching(/Q350[\s\S]*Q300/))
   })
 })

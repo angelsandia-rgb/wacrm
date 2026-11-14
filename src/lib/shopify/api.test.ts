@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, fetchClientCredentialsToken, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -90,11 +90,12 @@ describe('card orders', () => {
 
   it('stay drafts tagged pago-tarjeta even with real orders on (Dropi must not ship or collect cash)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9' }, userErrors: [] } },
+      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9', totalPriceSet: { shopMoney: { amount: '249.00' } } }, userErrors: [] } },
     })))
     vi.stubGlobal('fetch', fetchMock)
     const order = await createShopifyOrder(cfg, req)
-    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 229 })
+    // Shopify's own draft total is what may be charged; the catalog sum is kept to compare.
+    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 249, catalogTotal: 229 })
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(body.query).toContain('draftOrderCreate')
     expect(body.variables.input.tags).toEqual(['chat-sandia', 'pago-tarjeta'])
@@ -231,8 +232,8 @@ describe('Recurrente paid → Shopify order', () => {
   })
 
   const cfg = { shop: 'x.myshopify.com', token: 't' }
-  const draft = (status: string, amount: string) =>
-    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount } } } } }))
+  const draft = (status: string, amount: string, currencyCode = 'GTQ') =>
+    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount, currencyCode } } } } }))
 
   it('completes an open draft as paid when the total matches', async () => {
     const fetchMock = vi.fn()
@@ -241,7 +242,7 @@ describe('Recurrente paid → Shopify order', () => {
         data: { draftOrderComplete: { draftOrder: { order: { id: 'gid://shopify/Order/5', name: '#1005' } }, userErrors: [] } },
       })))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
     const mutation = JSON.parse(fetchMock.mock.calls[1][1].body).query as string
     expect(mutation).toContain('draftOrderComplete')
     expect(mutation).not.toContain('paymentPending')
@@ -249,17 +250,41 @@ describe('Recurrente paid → Shopify order', () => {
 
   it('skips completed drafts and amount mismatches', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(draft('COMPLETED', '458.00')).mockResolvedValueOnce(draft('OPEN', '500.00')))
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
+  })
+  it('never completes a draft paid in another currency, even when the number matches', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(draft('OPEN', '458.00', 'USD'))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
   it('recovers the paid order on a retry after completion without completing it again', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { draftOrder: {
-      status: 'COMPLETED', totalPriceSet: { shopMoney: { amount: '458.00' } },
+      status: 'COMPLETED', totalPriceSet: { shopMoney: { amount: '458.00', currencyCode: 'GTQ' } },
       order: { id: 'gid://shopify/Order/5', name: '#1005', displayFinancialStatus: 'PAID' },
     } } })))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('payment method and delivery state', () => {
+  it('treats only a cash-on-delivery gateway as COD', () => {
+    expect(isCashOnDelivery(['Cash on Delivery (COD)'])).toBe(true)
+    expect(isCashOnDelivery(['Pago contra entrega (COD)'])).toBe(true)
+    expect(isCashOnDelivery(['Depósito bancario'])).toBe(false)
+    expect(isCashOnDelivery(['Recurrente'])).toBe(false)
+    expect(isCashOnDelivery(null)).toBe(false)
+  })
+  it('calls an order delivered only when every live package is and nothing is left to ship', () => {
+    const delivered = { status: 'success', shipment_status: 'delivered' }
+    expect(orderFullyDelivered([delivered], 'fulfilled')).toBe(true)
+    expect(orderFullyDelivered([delivered], 'partial')).toBe(false)
+    expect(orderFullyDelivered([delivered, { status: 'success', shipment_status: 'in_transit' }], 'fulfilled')).toBe(false)
+    expect(orderFullyDelivered([delivered, { status: 'cancelled', shipment_status: null }], 'fulfilled')).toBe(true)
+    expect(orderFullyDelivered([], 'fulfilled')).toBe(false)
   })
 })
 

@@ -15,6 +15,8 @@ const m = vi.hoisted(() => ({
   attach: vi.fn(async () => 'd1'),
   jobs: new Map<string, { payload: import('@/lib/shopify/notification-jobs').OrderNotification; sent: boolean }>(),
   queueError: false,
+  /** Live order read back by the fulfillments/* delivery check. */
+  liveOrder: null as Record<string, unknown> | null,
 }))
 
 const STAGES = [
@@ -62,7 +64,9 @@ vi.mock('@/lib/shopify/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/shopify/api')>()),
   verifyShopifyHmac: () => true,
   attachOrderToDeal: m.attach,
-  loadShopifyConfig: async () => null,
+  loadShopifyConfig: async () => ({ shop: 's', token: 't' }),
+  shopifyGraphql: async () => ({ order: m.liveOrder }),
+  updateOrderTags: async () => {},
 }))
 
 import { POST } from './route'
@@ -83,6 +87,7 @@ beforeEach(() => {
   m.attach.mockClear()
   m.jobs.clear()
   m.queueError = false
+  m.liveOrder = null
 })
 
 describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)', () => {
@@ -139,6 +144,7 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
   it('marks it delivered only when the carrier says so', async () => {
     m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's4' }
     m.inWindow = true
+    m.liveOrder = { displayFulfillmentStatus: 'FULFILLED', fulfillments: [{ status: 'SUCCESS', displayStatus: 'DELIVERED' }] }
     await hook('fulfillments/update', { order_id: 77, name: '#1001.1', shipment_status: 'in_transit' })
     expect(m.updates).toEqual([])
     await hook('fulfillments/update', { order_id: 77, name: '#1001.1', shipment_status: 'delivered' })
@@ -174,7 +180,7 @@ describe('Shopify webhook — web-store orders', () => {
     m.deal = { pipeline_id: 'p1' }
     m.stages = [{ id: 's1', name: 'Por confirmar', position: 1 }, ...STAGES]
     await hook('orders/create', {
-      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending', payment_gateway_names: ['Cash on Delivery (COD)'],
       line_items: [{ title: 'Retrovisor', quantity: 1 }],
       shipping_address: { first_name: 'Ana', phone: '42883689', address1: '4a calle 8-20', city: 'Mixco' },
     })
@@ -190,7 +196,7 @@ describe('Shopify webhook — web-store orders', () => {
     m.stages = [{ id: 's1', name: 'Por confirmar', position: 1 }, ...STAGES]
     m.approved = [{ name: 'confirmar_pedido', language: 'es' }]
     await hook('orders/create', {
-      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending', payment_gateway_names: ['Cash on Delivery (COD)'],
       shipping_address: { first_name: 'Ana', phone: '42883689' },
     })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
@@ -202,7 +208,7 @@ describe('Shopify webhook — web-store orders', () => {
     m.inWindow = true
     m.deal = { pipeline_id: 'p1' }
     await hook('orders/create', {
-      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending',
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ', financial_status: 'pending', payment_gateway_names: ['Cash on Delivery (COD)'],
       shipping_address: { first_name: 'Ana', phone: '42883689' },
     })
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
@@ -240,8 +246,53 @@ describe('Shopify webhook — orders/updated (the admin "Actualización de pedid
     m.inWindow = true
     await hook('orders/updated', {
       admin_graphql_api_id: 'gid://shopify/Order/77', name: '#1001',
+      fulfillment_status: 'fulfilled',
       fulfillments: [{ status: 'success', tracking_number: 'GT9', shipment_status: 'delivered' }],
     })
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's5' } })
+  })
+
+  it('keeps a split order at Enviado while only one of its packages is delivered', async () => {
+    m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's2' }
+    await hook('orders/updated', {
+      admin_graphql_api_id: 'gid://shopify/Order/77', name: '#1001', fulfillment_status: 'partial',
+      fulfillments: [{ status: 'success', tracking_number: 'GT9', shipment_status: 'delivered' }],
+    })
+    expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
+    expect(m.updates).not.toContainEqual({ table: 'deals', row: { stage_id: 's5' } })
+  })
+
+  it('closes the open deal as lost when the order is cancelled, without messaging the customer', async () => {
+    await hook('orders/cancelled', { admin_graphql_api_id: 'gid://shopify/Order/77', name: '#1001', cancelled_at: '2026-11-13T10:00:00Z' })
+    expect(m.updates).toContainEqual({ table: 'deals', row: expect.objectContaining({ status: 'lost', lost_reason: 'Pedido cancelado en Shopify' }) })
+    expect(m.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('Shopify webhook — one delivered package of a split order', () => {
+  it('does not mark the order delivered while another package is still on its way', async () => {
+    m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's4' }
+    m.liveOrder = { displayFulfillmentStatus: 'FULFILLED', fulfillments: [
+      { status: 'SUCCESS', displayStatus: 'DELIVERED' }, { status: 'SUCCESS', displayStatus: 'IN_TRANSIT' }] }
+    await hook('fulfillments/update', { order_id: 77, name: '#1001.1', shipment_status: 'delivered' })
+    expect(m.updates).toEqual([])
+    expect(m.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('Shopify webhook — payment method of web orders', () => {
+  it('does not ask a pending card/transfer buyer to confirm a cash-on-delivery order', async () => {
+    m.inWindow = true
+    m.deal = { pipeline_id: 'p1' }
+    m.stages = [{ id: 's1', name: 'Por confirmar', position: 1 }, ...STAGES]
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ',
+      financial_status: 'pending', payment_gateway_names: ['Depósito bancario'],
+      shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(m.updates).not.toContainEqual({ table: 'deals', row: { stage_id: 's1' } })
+    expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      contentText: expect.not.stringContaining('contra entrega'),
+    }))
   })
 })
