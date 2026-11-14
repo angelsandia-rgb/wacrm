@@ -35,6 +35,11 @@ function chain(table: string) {
     select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c,
     maybeSingle: async () => ({ data: table === 'deals' && cols === 'id, stage_id, pipeline_id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
+    delete: () => c,
+    like: (_col: string, pattern: string) => {
+      for (const key of [...m.jobs.keys()]) if (table === 'shopify_notification_jobs' && key.startsWith(pattern.replace(/%$/, ''))) m.jobs.delete(key)
+      return c
+    },
     then: (ok: (v: unknown) => unknown) => ok({
       data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved
         : table === 'profiles' ? [{ user_id: 'owner1' }] : null, error: null,
@@ -312,11 +317,20 @@ describe('Shopify webhook — order rejected by Dropi (Dropify "Dropi Sync Error
     await hook('orders/updated', rejected)
     expect(m.staff).toHaveLength(1)
     expect(m.staff[0]).toMatchObject({
-      key: 'gid://shopify/Order/77:dropi-sync-error', userIds: ['owner1'], title: 'Pedido #1004 no llegó a Dropi',
+      key: expect.stringMatching(/^gid:\/\/shopify\/Order\/77:dropi-sync-error:[0-9a-f]{12}$/), userIds: ['owner1'], title: 'Pedido #1004 no llegó a Dropi',
       body: expect.stringContaining('La ciudad no existe en el departamento ingresado, por favor corregir. CIUDAD: GUANTEMALA - DEPARTAMENTO: GUATEMALA.'),
     })
     expect(m.send).not.toHaveBeenCalled()
     expect(m.updates).toEqual([])
+  })
+  it('alerts again for a different reason, and for the same one after the incident was cleared', async () => {
+    await hook('orders/updated', rejected)
+    await hook('orders/updated', { ...rejected, note: ' - Nota Dropi: 4: El teléfono no es válido -- ' })
+    expect(m.staff).toHaveLength(2)
+    await hook('orders/updated', { ...rejected, tags: 'por-confirmar' }) // fixed and re-sent
+    await hook('orders/updated', rejected)
+    expect(m.staff).toHaveLength(3)
+    expect(m.staff[2].body).toContain('La ciudad no existe')
   })
   it('does not raise it again for an order that is already shipping', async () => {
     await hook('orders/updated', { ...rejected, fulfillments: [{ status: 'success', tracking_number: 'GT9' }] })

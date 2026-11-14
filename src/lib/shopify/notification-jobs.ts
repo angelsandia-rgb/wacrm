@@ -99,7 +99,9 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
           skip ||= Boolean(inbound?.length) || Date.now() - Date.parse(c.since) >= 24 * 3600_000
         }
       }
-      if (!skip && (payload.cart || payload.confirmation?.reminder || payload.staff)) {
+      // Business hours gate customer-facing sales messages only. Staff notices are
+      // operational (cancel before dispatch, money held) and go out at once.
+      if (!skip && !payload.staff && (payload.cart || payload.confirmation?.reminder)) {
         const { data: account, error: accountError } = await db.from('accounts').select('timezone').eq('id', job.account_id).maybeSingle()
         if (accountError) throw accountError
         if (!withinBusinessHours(new Date(), account?.timezone || 'America/Guatemala', 8, 20)) throw new Error('Waiting for business hours')

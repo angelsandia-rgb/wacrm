@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/webhooks/admin-client'
@@ -99,6 +100,12 @@ export async function POST(request: Request) {
     const live = fs.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
     // A stale tag on an order that is already shipping is no longer an exception.
     if (!live.length && hasDropiSyncError(order.tags)) return handleDropiSyncError(db, accountId, order)
+    if (!hasDropiSyncError(order.tags)) {
+      // The rejection was resolved: a later rejection of this order alerts again.
+      const { error } = await db.from('shopify_notification_jobs').delete()
+        .eq('account_id', accountId).like('event_key', `${order.admin_graphql_api_id}:dropi-sync-error%`)
+      if (error) return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
+    }
     if (!live.length) return NextResponse.json({ ok: true, skipped: 'not shipped' })
     return handleShipping(db, accountId, {
       orderGid: order.admin_graphql_api_id, orderName: order.name,
@@ -144,7 +151,8 @@ async function orderVerifiedDelivered(db: SupabaseClient, accountId: string, ord
 /** The order did NOT reach Dropi: tell the owner/admins once, with Dropify's
  *  reason and the safe next step. The customer is not told anything: the
  *  fix (address data) and the re-send are a person's call. */
-// ponytail: one alert per order (event key); a second, different rejection of the same order after a fix is not re-alerted.
+// One alert per order and reason: a different reason alerts again, and so does
+// the same one once the tag was cleared (the cleared incident's key is deleted).
 async function handleDropiSyncError(db: SupabaseClient, accountId: string, order: ShopifyOrderPayload) {
   try {
     const { data: deal, error: dealError } = await db.from('deals').select('contact_id')
@@ -170,7 +178,7 @@ async function handleDropiSyncError(db: SupabaseClient, accountId: string, order
       db, accountId, normalizeGtPhone(rawPhone), (contact?.name as string | null) ?? order.shipping_address?.name ?? null,
     )
     const reason = dropiSyncReason(order.note) || 'Dropify no indicó el motivo'
-    const eventKey = `${order.admin_graphql_api_id}:dropi-sync-error`
+    const eventKey = `${order.admin_graphql_api_id}:dropi-sync-error:${createHash('sha256').update(reason).digest('hex').slice(0, 12)}`
     await enqueueOrderNotification(db, accountId, eventKey, {
       conversationId, text: '', template: null,
       staff: {
