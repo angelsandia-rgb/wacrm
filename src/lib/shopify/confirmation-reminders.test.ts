@@ -30,4 +30,9 @@ describe('reminderText', () => {
       '¿Lo confirmamos? Responda *SÍ*, o díganos si desea cambiar o cancelar algo.',
     )
   })
+  it('does not promise to hold the shipment when the provider imports orders on its own', () => {
+    const text = reminderText('Ana', '#1002', 'Q300', false)
+    expect(text).not.toContain('no lo enviaremos')
+    expect(text).toBe('Hola Ana, su pedido *#1002* (Q300) aún está pendiente de confirmación. ¿Lo confirmamos? Responda *SÍ*, o díganos si desea cambiar o cancelar algo.')
+  })
 })

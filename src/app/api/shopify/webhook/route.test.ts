@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   queueError: false,
   /** Live order read back by the fulfillments/* delivery check. */
   liveOrder: null as Record<string, unknown> | null,
+  staff: [] as { key: string; title: string; body: string; userIds: string[] }[],
 }))
 
 const STAGES = [
@@ -35,7 +36,8 @@ function chain(table: string) {
     maybeSingle: async () => ({ data: table === 'deals' && cols === 'id, stage_id, pipeline_id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
     then: (ok: (v: unknown) => unknown) => ok({
-      data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved : null, error: null,
+      data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved
+        : table === 'profiles' ? [{ user_id: 'owner1' }] : null, error: null,
     }),
   }
   return c
@@ -54,6 +56,7 @@ vi.mock('@/lib/shopify/notification-jobs', () => ({
   runOrderNotificationSweep: async (db: never, account: string, key: string) => {
     const job = m.jobs.get(key)
     if (!job || job.sent) return
+    if (job.payload.staff) { m.staff.push({ key, ...job.payload.staff }); job.sent = true; return }
     try {
       const { notifyCustomer } = await import('@/lib/shopify/notify')
       job.sent = await notifyCustomer(db, account, job.payload.conversationId, job.payload.text, job.payload.template)
@@ -88,6 +91,7 @@ beforeEach(() => {
   m.jobs.clear()
   m.queueError = false
   m.liveOrder = null
+  m.staff = []
 })
 
 describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)', () => {
@@ -294,5 +298,34 @@ describe('Shopify webhook — payment method of web orders', () => {
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
       contentText: expect.not.stringContaining('contra entrega'),
     }))
+  })
+})
+
+describe('Shopify webhook — order rejected by Dropi (Dropify "Dropi Sync Error")', () => {
+  const rejected = {
+    admin_graphql_api_id: 'gid://shopify/Order/77', name: '#1004', fulfillments: [],
+    tags: 'Dropi Sync Error, por-confirmar',
+    note: ' - Nota Dropi: 3: La ciudad no existe en el departamento ingresado, por favor corregir. CIUDAD: GUANTEMALA - DEPARTAMENTO: GUATEMALA -- ',
+  }
+  it('tells the owner once, with the reason Dropify wrote, and never messages the customer', async () => {
+    await hook('orders/updated', rejected)
+    await hook('orders/updated', rejected)
+    expect(m.staff).toHaveLength(1)
+    expect(m.staff[0]).toMatchObject({
+      key: 'gid://shopify/Order/77:dropi-sync-error', userIds: ['owner1'], title: 'Pedido #1004 no llegó a Dropi',
+      body: expect.stringContaining('La ciudad no existe en el departamento ingresado, por favor corregir. CIUDAD: GUANTEMALA - DEPARTAMENTO: GUATEMALA.'),
+    })
+    expect(m.send).not.toHaveBeenCalled()
+    expect(m.updates).toEqual([])
+  })
+  it('does not raise it again for an order that is already shipping', async () => {
+    await hook('orders/updated', { ...rejected, fulfillments: [{ status: 'success', tracking_number: 'GT9' }] })
+    expect(m.staff).toEqual([])
+    expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's4' } })
+  })
+  it('treats a cancelled rejected order as cancelled, not as an exception', async () => {
+    await hook('orders/updated', { ...rejected, cancelled_at: '2026-11-14T06:00:00Z' })
+    expect(m.staff).toEqual([])
+    expect(m.updates).toContainEqual({ table: 'deals', row: expect.objectContaining({ status: 'lost' }) })
   })
 })

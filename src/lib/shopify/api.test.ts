@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -267,6 +267,19 @@ describe('Recurrente paid → Shopify order', () => {
     vi.stubGlobal('fetch', fetchMock)
     expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ')).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Dropi rejections written by Dropify', () => {
+  it('recognises the tag regardless of spacing and case', () => {
+    expect(hasDropiSyncError('por-confirmar, Dropi Sync Error')).toBe(true)
+    expect(hasDropiSyncError('dropi sync error')).toBe(true)
+    expect(hasDropiSyncError('por-confirmar')).toBe(false)
+    expect(hasDropiSyncError(null)).toBe(false)
+  })
+  it('extracts the reason from the order note', () => {
+    expect(dropiSyncReason(' - Nota Dropi: 3: La ciudad no existe. CIUDAD: X -- ')).toBe('La ciudad no existe. CIUDAD: X')
+    expect(dropiSyncReason('Cliente pidió llamar antes')).toBe('')
   })
 })
 

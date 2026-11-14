@@ -503,6 +503,17 @@ export function orderFullyDelivered(
     && live.every((f) => f.shipment_status === 'delivered')
 }
 
+/** Pure: Dropify tagged the order after Dropi rejected it ("Dropi Sync Error"). */
+export function hasDropiSyncError(tags: string | null | undefined): boolean {
+  return (tags ?? '').split(',').some((t) => t.trim().toLowerCase() === 'dropi sync error')
+}
+
+/** Pure: Dropify's reason, from the order note ("- Nota Dropi: 3: La ciudad no existe…"). */
+export function dropiSyncReason(note: string | null | undefined): string {
+  const m = (note ?? '').match(/Nota Dropi:\s*(?:\d+:\s*)?([\s\S]*?)(?:\s*--\s*|$)/i)
+  return (m?.[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
 /** Shopify signs webhooks with base64 HMAC-SHA256 of the raw body. */
 export function verifyShopifyHmac(rawBody: string, header: string | null, secret: string): boolean {
   if (!header) return false
