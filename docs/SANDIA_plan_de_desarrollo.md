@@ -34,6 +34,10 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-13 — Continuación del PR #371 (Codex), código pendiente de publicación.** Los pedidos consecutivos de un contacto ya no sobrescriben su trato anterior ni heredan su confirmación/cancelación. Los carritos utilizan la cola de reintentos, recuperan fallos anteriores dentro de su vigencia y se verifican de nuevo en Shopify antes de enviar. Ajuste operativo ya aplicado: se sincronizó `pedido_enviado` a APPROVED según Zernio; la cuenta tiene `pedido_enviado` y `pedido_recibido` aprobadas y 11 plantillas pendientes, sin forzar aprobaciones. Sigue siendo necesario aplicar la migración 179 antes de desplegar el PR.
+
+**2026-11-12 — Correcciones de seguridad operativa de Shopify preparadas por Codex, pendientes de publicación.** El formulario de pedidos reinicia los datos de entrega por cliente; un error de inventario impide crear pedidos o enlaces de pago. Los avisos de pedido usan una cola persistente con reintentos y reservas entre workers. Las decisiones de confirmar/cancelar se guardan localmente y excluyen recordatorios pendientes. Antes de publicar este cambio, aplicar la migración 179; ver `docs/SHOPIFY_NOTIFICATION_RECOVERY.md`. Esta entrada no afirma que los cambios estén desplegados.
+
 **(actualizado 2026-08-15, última sesión: Claude Code)**
 
 **Bloque 1 (múltiples números de WhatsApp por empresa) está completo en
@@ -5554,3 +5558,54 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   causa de que las plantillas sigan en PENDING. Se escribió a soporte de
   Zernio (chat del panel). Pendiente: revisar el estado directo en Zernio
   (`listZernioTemplates`) por si alguna se aprobó antes de activar el evento.
+
+## 2026-11-12 — Codex: correcciones de la auditoría de Shopify
+
+- Se corrigió la reutilización de dirección, departamento y forma de pago al cambiar de cliente o abrir un nuevo pedido. Los errores de red muestran el aviso de fallo del formulario.
+- La creación de pedidos y enlaces de pago se detiene si no se puede consultar el inventario o si la variante no existe.
+- Migración 179: cola de avisos por cuenta y evento, reservas con SKIP LOCKED y vencimiento, y decisión de confirmación en deals. Avisos de creación, envío, entrega y pago se conservan y reintentan con el cron existente. Las alertas internas usan IDs estables para reintentos.
+- Los recordatorios ya no se etiquetan como enviados antes de enviarse; se descartan ante confirmación, cancelación solicitada, despacho o respuesta del cliente. Se respeta el horario de atención en los reintentos de recordatorios y alertas.
+- Recurrente recupera el pedido pagado al reintentar un borrador ya completado para continuar su registro y aviso sin volver a completarlo.
+- Pruebas: 250 archivos y 2,940 pruebas aprobadas, incluidos inventario, persistencia, concurrencia, plantillas pendientes y cancelaciones. TypeScript y ESLint sin errores; compilación normal de producción con Turbopack aprobada y 143 páginas generadas; package-lock.json sin cambios. Migración ejecutada dos veces en PostgreSQL embebido (PGlite 0.5.16), con comprobaciones de claves por cuenta, reservas y recuperación, workers anteriores, trabajos enviados, permisos y restricción de decisiones aprobadas.
+- Graphify se intentó consultar y actualizar, pero el ejecutable falla con `uv trampoline failed to canonicalize script path`; no se pudo regenerar el grafo.
+- Pendiente de publicación: aplicar la migración 179 antes del despliegue, obtener aprobación del merge y ejecutar la prueba integral en una cuenta de pruebas. No se enviaron mensajes ni se crearon pedidos o cobros reales durante esta corrección. Procedimiento y límites: docs/SHOPIFY_NOTIFICATION_RECOVERY.md.
+
+## 2026-11-13 — Codex: pedidos repetidos, recuperación de carritos y plantillas
+
+- Cada ID de pedido conserva su propio trato y su respuesta. Un segundo pedido del mismo contacto crea otro trato o utiliza uno sin pedido; las repeticiones del mismo ID recuperan el existente. La asignación de un trato vacío compara su estado antes de actualizarlo.
+- Los recordatorios de carritos pasan a shopify_notification_jobs. Se excluyen los éxitos del registro anterior y se recuperan los fallos aún vigentes. Los reintentos consultan el checkout actual por Node: no envían si ya se completó, venció o cambió el teléfono; esperan ante actividad reciente y respetan el horario y los contactos excluidos.
+- Sincronización operativa aplicada a la cuenta de Casa Ceiba: pedido_enviado pasó de PENDING a APPROVED al comprobar el estado real de Zernio. Verificación posterior: pedido_enviado y pedido_recibido aprobadas, 11 pendientes. No se modificaron contenidos ni se forzaron aprobaciones. Copia previa de estados en tmp/zernio-template-status-before-sync.json.
+- Pruebas: 252 archivos y 2,957 pruebas aprobadas. Se añadieron casos de compras repetidas tras confirmación/cancelación, aislamiento por cuenta, recuperación de carritos fallidos, plantillas pendientes, compra completada durante la espera y cambios de teléfono. ESLint sin errores; package-lock.json sin cambios. La compilación final y CI se registran en el PR.
+- El código sigue en el PR #371 y no se ha desplegado. La migración 179 no cambió respecto de la versión validada en PostgreSQL embebido. Mantener el orden: migración, despliegue y comprobación en una cuenta de pruebas.
+### 13/11/2026 — Auditoría VSR: fechas, eventos y precios por ocupación
+
+- Auditoría de producción de solo lectura: siete días completos, 72 chats y
+  1,453 mensajes; 38 respuestas de IA y tres fotografías con entrega/lectura.
+  Se mantienen el horario autorizado 20:00–08:00, las pausas manuales y los
+  seguimientos comerciales desactivados. No se enviaron pruebas a huéspedes.
+- Se reprodujeron y corrigieron localmente las preguntas repetidas de salida:
+  «El 22», «El domingo 22» y «llego jueves y me retiro sábado». La guarda
+  reconoce respuestas a una pregunta reciente del bot y partidas explícitas;
+  no reutiliza fechas antiguas ni una pregunta del personal.
+- El triage de eventos reconoce «Nueva solicitud» y una cotización solicitada
+  que el cliente sigue esperando; conserva la derivación de gestiones previas
+  y la aclaración ante respuestas ambiguas.
+- Las recomendaciones de habitaciones verifican también los precios ya
+  presentes en el borrador. Se reutiliza la calculadora de tarifas: Junior
+  para tres adultos del 14 al 15/11 se estima en Q1,125, sin seleccionar
+  habitación, guardar una reserva ni sustituir acuerdos del personal.
+- Las correcciones son independientes de la cola de notificaciones de
+  Shopify y de su migración. No se aplicaron cambios de datos a producción.
+- Validación: regresiones reproducidas antes del cambio, 451 pruebas
+  focalizadas, suite completa de 247 archivos y 2,940 pruebas, TypeScript y
+  ESLint. Build registrado en el PR antes de solicitar su merge explícito.
+
+### 2026-11-13 — Codex: auditoría conjunta y preparación de autonomía
+
+- Se auditó producción de Villa San Ricardo y Casa Ceiba, sin enviar mensajes a clientes ni crear pedidos o cobros de prueba. La salud HTTP y los 14 heartbeats estaban correctos. El estado operativo no equivale a una prueba completa de venta y despacho.
+- Cambios operativos aplicados con respaldo y control de concurrencia: teléfono público de Casa Ceiba alineado con Zernio y el escaparate, comprobado en el widget; política de niños y mascotas de VSR alineada con el prompt vigente e indexada con búsqueda semántica y por texto. Se preservaron las exclusiones Sin IA, horarios y pausas manuales.
+- La migración 179 ahora incluye dos tablas y tres RPC: cola de avisos, registro de intentos de pedido, decisiones con todos sus efectos locales en una transacción y bloqueo compartido entre IA y agentes. Un resultado remoto indeterminado exige reconciliación; no se vuelve a crear el pedido a ciegas. Los recordatorios revalidan el estado actual y los workers renuevan su reserva antes de procesar cada trabajo.
+- Se propagan fallos al crear/enlazar un trato para recuperar el webhook; se conserva un trato por pedido. El contexto de productos admite hasta 50 entradas para cubrir los 32 productos activos observados. Se integraron las correcciones del hotel de fechas, triage y precio por ocupación.
+- Validación del conjunto: 252 archivos y 2,996 pruebas aprobadas, TypeScript y ESLint sin errores, build normal de producción con Turbopack aprobado, package-lock.json sin cambios. La prueba PostgreSQL embebida pasó con doble aplicación, atomicidad, rollback, aislamiento, permisos, concurrencia ordinaria y resultados inciertos. Cinco pruebas secas con modelos reales pasaron sin ejecutar acciones.
+- Pendiente antes del despliegue: aplicar/verificar la migración 179 y obtener el sí explícito para el merge del PR #371. El acceso administrativo local de Supabase devolvió 401; se solicitó iniciar sesión. Meta se revisará después por decisión del dueño.
+- Casa Ceiba conserva pedidos reales desactivados: faltan plantillas aprobadas, adaptar el seguimiento fuera de ventana y verificar el proceso de Dropify para pedidos aún sin confirmar. El pedido web revisado tenía un municipio inválido, sin evidencia de despacho; su dirección necesita validación. No se declara autonomía completa ni se alteraron pedidos existentes.

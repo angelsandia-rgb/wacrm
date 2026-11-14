@@ -252,6 +252,15 @@ describe('Recurrente paid → Shopify order', () => {
     expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
     expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
   })
+  it('recovers the paid order on a retry after completion without completing it again', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { draftOrder: {
+      status: 'COMPLETED', totalPriceSet: { shopMoney: { amount: '458.00' } },
+      order: { id: 'gid://shopify/Order/5', name: '#1005', displayFinancialStatus: 'PAID' },
+    } } })))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('order deal placement', () => {
@@ -333,6 +342,12 @@ describe('loadOrderStatuses', () => {
 })
 
 describe('outOfStockTitles', () => {
+  it('refuses to treat a missing variant as available stock', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [null] } }))))
+    await expect(outOfStockTitles({ shop: 'x.myshopify.com', token: 't' }, [
+      { variantId: 'missing', quantity: 1, title: 'Producto' },
+    ])).rejects.toThrow('No se pudo verificar el inventario')
+  })
   it('flags only tracked, deny-oversell variants short of the quantity (Dropi stock synced by Dropify)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [
       { id: 'a', inventoryQuantity: 0, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },

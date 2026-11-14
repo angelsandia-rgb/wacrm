@@ -421,43 +421,62 @@ export function trackingSentence(f: { tracking_company?: string | null; tracking
   return 'El mensajero le contactará antes de la entrega.'
 }
 
-/** Point the contact's open deal at this order (or open one in the
+/** Reuse this order's deal or an unassigned open deal (or open one in the
  *  "Pedidos" pipeline — else the oldest — at "Pedido creado" — else the
  *  first stage). An open deal still sitting in the orders board's first
  *  stage ("Consulta") moves to "Pedido creado". */
 export async function attachOrderToDeal(args: {
   db: SupabaseClient; accountId: string; userId: string; contactId: string
   order: { id: string; name: string; total: number }; currency: string
-}): Promise<string | null> {
+}): Promise<string> {
   const { db, accountId, userId, contactId, order, currency } = args
+  const { data: existing, error: existingError } = await db.from('deals').select('id')
+    .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+  if (existingError) throw new ShopifyError(`Order lookup failed: ${existingError.message}`)
+  if (existing) return existing.id as string
+
   const fields: Record<string, unknown> = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
-  const { data: pipelines } = await db
+  fields.shopify_confirmation_decision = null
+  const { data: pipelines, error: pipelinesError } = await db
     .from('pipelines').select('id, name').eq('account_id', accountId)
     .order('created_at', { ascending: true })
   const pipeline = pickOrderPipeline(pipelines ?? [])
-  const { data: stages } = pipeline
-    ? await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
-    : { data: [] as { id: string; name: string }[] }
+  if (pipelinesError) throw new ShopifyError(`Pipeline lookup failed: ${pipelinesError.message}`)
+  if (!pipeline) throw new ShopifyError('No pipeline available for Shopify orders')
+  const { data: stages, error: stagesError } = await db.from('pipeline_stages')
+    .select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
   const stage = pickOrderStage(stages ?? [])
+  if (stagesError) throw new ShopifyError(`Order stage lookup failed: ${stagesError.message}`)
+  if (!stage) throw new ShopifyError('No stage available for Shopify orders')
 
-  const { data: open } = await db
+  const { data: open, error: openError } = await db
     .from('deals').select('id, stage_id')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'open')
+    .is('shopify_order_id', null)
     .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+  if (openError) throw new ShopifyError(`Open deal lookup failed: ${openError.message}`)
   if (open) {
     if (stage && stages?.[0] && open.stage_id === stages[0].id && stage.id !== stages[0].id) fields.stage_id = stage.id
-    await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
-    return open.id as string
+    const { data: linked, error } = await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
+      .is('shopify_order_id', null).select('id').maybeSingle()
+    if (error) throw new ShopifyError(`Cannot link order: ${error.message}`)
+    if (linked) return linked.id as string
   }
-  if (!pipeline || !stage) return null
   const { data: deal, error } = await db.from('deals').insert({
     ...fields, account_id: accountId, user_id: userId, pipeline_id: pipeline.id, stage_id: stage.id,
     contact_id: contactId, currency, status: 'open',
   }).select('id').single()
   if (error) {
-    console.error('[shopify] deal insert failed:', error.message)
-    return null
+    // Concurrent deliveries may both miss the first lookup. The unique index
+    // keeps one deal; only that conflict is recoverable without a webhook retry.
+    if (error.code === '23505') {
+      const { data: winner, error: winnerError } = await db.from('deals').select('id')
+        .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+      if (!winnerError && winner) return winner.id as string
+    }
+    throw new ShopifyError(`Cannot create order deal: ${error.message}`)
   }
+  if (!deal) throw new ShopifyError('Order deal was not created')
   return deal.id as string
 }
 
@@ -663,20 +682,23 @@ export async function getRecurrenteCheckout(secretKey: string, checkoutId: strin
 }
 
 /** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Returns
- *  null when the draft is already completed (webhook retries, the legacy and
- *  unified events both arriving) or its total doesn't match `expectedTotal`. */
+ *  Reuses the paid order on webhook retries. Null on an amount mismatch. */
 export async function completePaidDraftOrder(
   cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   draftId: string,
   expectedTotal: number,
 ): Promise<{ id: string; name: string } | null> {
   const { draftOrder } = await shopifyGraphql<{
-    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } } } | null
-  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } } }`, { id: draftId })
-  if (!draftOrder || draftOrder.status === 'COMPLETED') return null
+    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } }; order?: { id: string; name: string; displayFinancialStatus: string } | null } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } order { id name displayFinancialStatus } } }`, { id: draftId })
+  if (!draftOrder) return null
   if (Math.abs(Number(draftOrder.totalPriceSet.shopMoney.amount) - expectedTotal) > 0.009) {
     console.warn(`[recurrente] ${draftId} total ${draftOrder.totalPriceSet.shopMoney.amount} != paid ${expectedTotal}, not completed`)
     return null
+  }
+  if (draftOrder.status === 'COMPLETED') {
+    if (!draftOrder.order || draftOrder.order.displayFinancialStatus !== 'PAID') return null
+    return { id: draftOrder.order.id, name: draftOrder.order.name }
   }
   // No paymentPending → Shopify records the order as paid.
   const data = await shopifyGraphql<{
@@ -701,6 +723,7 @@ export async function outOfStockTitles(
   )
   return lines.filter((l, i) => {
     const v = data.nodes[i]
+    if (!v) throw new ShopifyError(`No se pudo verificar el inventario de ${l.title}`)
     return v && v.inventoryItem.tracked && v.inventoryPolicy === 'DENY' && (v.inventoryQuantity ?? 0) < l.quantity
   }).map((l) => l.title)
 }

@@ -4,6 +4,11 @@ import { confirmationStep, reminderText, REMINDED_TAG, UNCONFIRMED_TAG } from '.
 const h = (n: number) => n * 3600_000
 
 describe('confirmationStep', () => {
+  it.each(['cliente-cancela', 'confirmado-whatsapp'])('does not remind or escalate %s orders', (tag) => {
+    for (const hours of [3, 25]) {
+      expect(confirmationStep({ waitingMs: h(hours), tags: [tag], customerWroteSince: false })).toBeNull()
+    }
+  })
   it('waits 3 hours, then reminds once', () => {
     expect(confirmationStep({ waitingMs: h(2), tags: ['por-confirmar'], customerWroteSince: false })).toBeNull()
     expect(confirmationStep({ waitingMs: h(3), tags: ['por-confirmar'], customerWroteSince: false })).toBe('remind')

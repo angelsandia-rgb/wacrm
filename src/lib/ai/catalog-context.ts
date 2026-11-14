@@ -6,7 +6,7 @@ import { formatDateEs, summarizeRates, type DayOfWeek } from '@/lib/products/rat
 // Bounds how much of the catalog reaches the prompt — plenty for a
 // small/medium product list, keeps token spend predictable for
 // accounts with a large one.
-const MAX_PRODUCTS_IN_PROMPT = 30
+const MAX_PRODUCTS_IN_PROMPT = 50
 const MAX_DESCRIPTION_CHARS = 80
 
 /**

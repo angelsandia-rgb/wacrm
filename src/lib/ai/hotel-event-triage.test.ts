@@ -27,6 +27,13 @@ describe('event quotation triage', () => {
   it.each(['Quiero cotizar', 'Deseo una cotizacion nueva', 'Cotizar'])('continues only explicit new quotes: %s', text => {
     expect(hotelEventTriage([user('Boda'), ask, user(text)])).toBe('new')
   })
+  it.each(['Nueva solicitud', 'Sí, una nueva', 'Una cotización nueva'])('accepts the guest choice after asking quotation status: %s', text => {
+    expect(hotelEventTriage([user('Necesito información de un evento'), ask, user(text)])).toBe('new')
+    expect(hotelEventTriage([user(text)])).toBe('none')
+  })
+  it.each(['Buenas noches, no me han enviado la cotización solicitada', 'Aún no nos han enviado la cotización', 'La cotización solicitada sigue pendiente'])('recognizes a requested quote that the guest is waiting for: %s', text => {
+    expect(hotelEventTriage([user('Evento'), ask, user(text)])).toBe('existing')
+  })
   it.each(['Si', 'No tengo cotizacion', '50 personas'])('does not assume new from ambiguity: %s', text => {
     expect(hotelEventTriage([user('Evento'), ask, user(text)])).toBe('ask')
   })

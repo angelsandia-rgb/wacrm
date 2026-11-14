@@ -3,7 +3,7 @@ import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
   attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles,
-  PAYMENT_GATEWAYS, ShopifyError,
+  PAYMENT_GATEWAYS,
 } from './api'
 
 // A re-emitted marker (the customer says "gracias" after confirming)
@@ -17,7 +17,7 @@ const DUPLICATE_WINDOW_MS = 30 * 60_000
  * gap (unknown product, bad phone/departamento, Shopify error) hands the
  * chat to a human instead of going quiet, same discipline as quotes.
  */
-export async function createShopifyOrderFromChat(args: {
+async function createShopifyOrderLocked(args: {
   db: SupabaseClient
   accountId: string
   contactId: string
@@ -30,6 +30,9 @@ export async function createShopifyOrderFromChat(args: {
    *  `handoff` receives the bare reason for the UI and no follow-up handoff is
    *  raised, the agent is already on the chat. Defaults to the AI. */
   actor?: 'ai' | 'agent'
+}, lifecycle: {
+  starting: () => void
+  created: (order: { id: string; name: string; draft: boolean }) => Promise<void>
 }): Promise<{ id: string; name: string; draft: boolean; paymentLink: string | null } | void> {
   const { db, accountId, contactId, conversationId, configOwnerUserId, proposal, handoff, sendText } = args
   const byAgent = args.actor === 'agent'
@@ -44,7 +47,7 @@ export async function createShopifyOrderFromChat(args: {
   }
   if (!cfg) return
 
-  const { data: recent } = await db
+  const { data: recent, error: recentError } = await db
     .from('ai_action_log')
     .select('id')
     .eq('account_id', accountId)
@@ -52,6 +55,7 @@ export async function createShopifyOrderFromChat(args: {
     .contains('input', { conversation_id: conversationId })
     .gte('created_at', new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString())
     .limit(1)
+  if (recentError) throw new Error(`Cannot verify previous orders: ${recentError.message}`)
   if (recent?.length) {
     console.warn('[shopify] create_shopify_order: order already created for this chat in the last 30 min, skipping')
     if (byAgent) await handoff('Ya se creó un pedido para este chat hace menos de 30 minutos')
@@ -80,12 +84,13 @@ export async function createShopifyOrderFromChat(args: {
   }
 
   // Provider stock first: no order, no payment link for what Dropi can't ship.
-  // A failed check doesn't block — Shopify itself refuses oversold real orders.
+  // A provider outage must not produce an unchecked order or payment link.
   let missing: string[] = []
   try {
     missing = await outOfStockTitles(cfg, lines)
   } catch (err) {
-    console.error('[shopify] stock check failed, continuing:', err instanceof Error ? err.message : err)
+    console.error('[shopify] stock check failed:', err instanceof Error ? err.message : err)
+    return fail('No se pudieron verificar las existencias. Reintente antes de crear el pedido o cobrar.')
   }
   if (missing.length) {
     const what = missing.join(', ')
@@ -102,18 +107,14 @@ export async function createShopifyOrderFromChat(args: {
   const { data: account } = await db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle()
   const currency = (account?.default_currency as string | undefined) ?? 'GTQ'
 
-  let order
-  try {
-    order = await createShopifyOrder(cfg, {
+  lifecycle.starting()
+  const order = await createShopifyOrder(cfg, {
       lines, currency,
       fullName: proposal.fullName, phone: proposal.phone, address: proposal.address,
       departamento: proposal.departamento, payment: proposal.payment,
       note: 'Pedido tomado por WhatsApp (Chat Sandía)',
-    })
-  } catch (err) {
-    if (err instanceof ShopifyError) return fail(err.message)
-    throw err
-  }
+  })
+  await lifecycle.created(order)
 
   // Logged first: the order exists now, so the duplicate guard above must see it
   // even if the deal or the confirmation message below fails.
@@ -178,4 +179,52 @@ export async function createShopifyOrderFromChat(args: {
     await handoff(`🛒 Borrador ${order.name} en Shopify (${label}, ${totalText}, ${PAYMENT_GATEWAYS[proposal.payment]}): ${todo}`)
   }
   return { id: order.id, name: order.name, draft: order.draft, paymentLink }
+}
+
+/** Serialize AI/manual creation across processes before contacting Shopify.
+ * A known success retains the existing 30-minute duplicate window. Unknown
+ * outcomes remain blocked instead of blindly placing another real order. */
+export async function createShopifyOrderFromChat(args: Parameters<typeof createShopifyOrderLocked>[0]) {
+  const { db, accountId, conversationId } = args
+  const { data, error } = await db.rpc('claim_shopify_order_attempt', {
+    p_account_id: accountId, p_conversation_id: conversationId,
+  })
+  if (error) return args.handoff(`No se pudo bloquear la creación del pedido; no se envió a Shopify. Reintente cuando se recupere el servicio: ${error.message}`)
+  const claim = data as { acquired: boolean; token?: string; status: string; orderName?: string | null } | null
+  if (!claim?.acquired || !claim.token) {
+    if (claim?.status === 'succeeded') {
+      if (args.actor === 'agent') await args.handoff(`Ya se creó un pedido para este chat hace menos de 30 minutos${claim.orderName ? `: ${claim.orderName}` : ''}`)
+    } else if (claim?.status === 'processing') {
+      // Another worker owns it. Keep the first worker's conversation eligible;
+      // an ordinary overlap must not turn into a human takeover.
+      if (args.actor === 'agent') await args.handoff('Su pedido está en proceso. Espere a que termine antes de intentar otro.')
+    } else {
+      await args.handoff('Hay un pedido en proceso o con resultado pendiente de verificar en Shopify. Revise el pedido existente antes de intentar crear otro.')
+    }
+    return
+  }
+  const progress: { started: boolean; created: { id: string; name: string; draft: boolean } | null } = { started: false, created: null }
+  const saveAttempt = async (status: 'succeeded' | 'failed' | 'blocked', lastError: string | null = null) => {
+    const { data: saved, error: saveError } = await db.from('shopify_order_attempts').update({
+      status, last_error: lastError,
+      ...(progress.created ? { order_id: progress.created.id, order_name: progress.created.name, draft: progress.created.draft } : {}),
+    }).eq('account_id', accountId).eq('conversation_id', conversationId).eq('attempt_token', claim.token)
+      .select('attempt_token').maybeSingle()
+    if (saveError || !saved) throw new Error(`Cannot save order attempt: ${saveError?.message || 'attempt no longer owned'}`)
+  }
+  try {
+    const result = await createShopifyOrderLocked(args, {
+      starting: () => { progress.started = true },
+      created: async (order) => { progress.created = order; await saveAttempt('succeeded') },
+    })
+    if (!progress.started) await saveAttempt('failed')
+    return result
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    try { await saveAttempt(progress.created ? 'succeeded' : progress.started ? 'blocked' : 'failed', reason) }
+    catch (saveError) { console.error('[shopify] order attempt recovery state failed:', saveError) }
+    await args.handoff(progress.started
+      ? `El pedido ${progress.created ? `${progress.created.name} ya existe` : 'puede haberse creado'} en Shopify, pero no se completó su registro o respuesta. No cree otro sin revisarlo. ${reason}`
+      : `Pedido no creado: ${reason}`)
+  }
 }

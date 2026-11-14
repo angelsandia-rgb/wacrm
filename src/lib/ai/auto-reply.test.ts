@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   resolveSystemAlert: vi.fn().mockResolvedValue(undefined),
   sendCatalogToConversation: vi.fn(),
   createShopifyOrderFromChat: vi.fn(),
+  loadPendingOrderConfirmation: vi.fn(),
+  resolveOrderConfirmation: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
   createEvent: vi.fn(),
@@ -164,6 +166,10 @@ vi.mock('./generate', async (importOriginal) => {
   return { ...actual, generateReply: h.generateReply }
 })
 vi.mock('@/lib/shopify/chat-order', () => ({ createShopifyOrderFromChat: h.createShopifyOrderFromChat }))
+vi.mock('@/lib/shopify/order-confirmation', () => ({
+  loadPendingOrderConfirmation: h.loadPendingOrderConfirmation,
+  resolveOrderConfirmation: h.resolveOrderConfirmation,
+}))
 vi.mock('@/lib/observability/alerts', () => ({
   dispatchSystemAlert: h.dispatchSystemAlert,
   resolveSystemAlert: h.resolveSystemAlert,
@@ -611,7 +617,7 @@ vi.mock('./admin-client', () => ({
 
 import { CATALOG_ONLY_REPLY_TEXT, dispatchInboundToAiReply, parseChildAges } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
-import { CLOSE_AVAILABILITY_AND_TOTAL_LINE, CLOSE_AVAILABILITY_LINE } from './hotel-stay-estimate'
+import { CLOSE_AVAILABILITY_AND_TOTAL_LINE } from './hotel-stay-estimate'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -638,6 +644,8 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 beforeEach(() => {
+  h.loadPendingOrderConfirmation.mockReset().mockResolvedValue(null)
+  h.resolveOrderConfirmation.mockReset().mockResolvedValue('Pedido guardado')
   h.state.conv = {
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
@@ -2326,6 +2334,19 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
     expect(h.state.updatePayload ?? {}).not.toHaveProperty('assigned_agent_id')
     expect(h.state.messageInserts.filter((m) => String(m.content_text ?? '').includes('confirmó explícitamente la compra'))).toHaveLength(0)
     expect(h.state.aiActionLogInserts.filter((r) => r.action === 'flag_deal_closing')).toHaveLength(1)
+  })
+  it.each(['confirm', 'cancel'] as const)('does not place a new order in the same turn as a pending order %s', async (decision) => {
+    h.state.products = [{ id: 'p1', name: 'Freidora de Aire' }]
+    const pending = { dealId: 'd', orderId: 'o', orderName: '#1002', pipelineId: 'p' }
+    h.loadPendingOrderConfirmation.mockResolvedValue(pending)
+    h.generateReply.mockResolvedValue({
+      text: 'Tomé nota de su respuesta para el pedido #1002.', handoff: false, markDealWon: false, moveToStageName: null, sendCatalog: false,
+      orderConfirmation: decision,
+      shopifyOrderProposal: { items: [{ name: 'Freidora de Aire', qty: 1 }], fullName: 'Cliente Prueba', phone: '55555555', address: 'Zona 1', departamento: 'Guatemala', payment: 'cod' },
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.resolveOrderConfirmation).toHaveBeenCalledWith(expect.objectContaining({ pending, decision }))
+    expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
   })
 
   it('suppresses the marker when the customer only asked a price (2026-10-06, owner rule)', async () => {
@@ -5819,6 +5840,27 @@ describe('Richard room recommendation with an estimate', () => {
     h.generateReply.mockResolvedValue({ text: 'Si contamos con agua caliente. Una buena opcion es la Suite Master Deluxe, o la Suite Premium.', handoff: false, markDealWon: false, moveToStageName: null })
   })
   afterEach(() => vi.useRealTimers())
+  it('replaces a model reference for the wrong occupancy with the published three-adult Saturday rate', async () => {
+    h.state.products = [{ id: 'junior', name: 'Junior Suite Familiar', category_id: 'rooms', max_guests: 5 }]
+    h.state.reservationRow = { id: 'rr-1', product_id: null, service_name: null, guests: 3, adults: 3, children_ages: [], check_in: '2026-11-14', check_out: '2026-11-15', category: 'habitaciones' }
+    h.state.productRates = [
+      { day_of_week: 'sat', occupancy: 'group', price: 1125, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quint', price: 1800, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'child', price: 200, date_from: null, date_to: null },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Hospedaje para 3 adultos del 14 de noviembre con salida el 15.' }])
+    h.generateReply.mockResolvedValue({ text: 'Para 3 adultos del 14/11/2026 al 15/11/2026, la opción que se ajusta es la Junior Suite Familiar, con tarifa de referencia de Q1,500 por noche para 5 personas; para una ocupación de 3 adultos, el hotel confirma el importe aplicable. ¿Qué opción prefiere?', handoff: false, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    const text = h.engineSendText.mock.calls[0]?.[0]?.text
+    expect(text).toContain('1,125')
+    expect(text).not.toContain('1,500')
+    expect(text).not.toContain('5 personas')
+    expect(text).toContain('3 personas')
+    expect(h.state.reservationRequestUpdates).toEqual([])
+    expect(h.state.reservationRequestInserts).toEqual([])
+    expect(h.upsertReservationRequest).not.toHaveBeenCalled()
+  })
   it('adds the computed reference and selection question without selecting or changing the request', async () => {
     await dispatchInboundToAiReply(ARGS)
     const text = h.engineSendText.mock.calls[0]?.[0]?.text
