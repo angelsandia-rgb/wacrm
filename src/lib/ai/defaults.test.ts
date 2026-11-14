@@ -94,6 +94,33 @@ describe('buildSystemPrompt — web COD order confirmation', () => {
     expect(p).toContain('[[ACTION:cancel_shopify_order]]')
     expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('confirm_shopify_order')
   })
+
+  it('does not promise a shipping hold or a saved decision before execution', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderConfirmation: '#1002' })
+    expect(p).not.toContain('It is NOT shipped until they confirm')
+    expect(p).not.toContain('tell them it is confirmed and will be delivered')
+    expect(p).toContain('acknowledge that you received their confirmation and are recording it')
+    expect(p).toContain('never during a complaint, cancellation, human request, refusal, opt-out, thanks or goodbye')
+  })
+})
+
+describe('buildSystemPrompt — ecommerce service priority', () => {
+  it('gives connected stores a final service priority over a pushy business prompt', () => {
+    const p = buildSystemPrompt({ userPrompt: 'End every reply with a sales question.', mode: 'auto_reply', shopifyOrders: true })
+    const boundary = p.indexOf('ECOMMERCE PRIORITY — SALES AND CUSTOMER SERVICE')
+    expect(boundary).toBeGreaterThan(p.indexOf('End every reply with a sales question.'))
+    expect(p.slice(boundary)).toContain('This overrides the generic two-step handoff rule')
+    expect(p.slice(boundary)).toContain('A closing question is optional')
+    expect(p.slice(boundary)).toContain('Receiving a request is not completing it')
+  })
+
+  it('keeps the ecommerce override out of other businesses and draft replies', () => {
+    for (const input of [
+      { mode: 'auto_reply' as const, shopifyOrders: false },
+      { mode: 'auto_reply' as const, hotelReservations: true },
+      { mode: 'draft' as const, shopifyOrders: true },
+    ]) expect(buildSystemPrompt({ userPrompt: null, ...input })).not.toContain('ECOMMERCE PRIORITY — SALES AND CUSTOMER SERVICE')
+  })
 })
 
 describe('buildSystemPrompt — send_catalog', () => {

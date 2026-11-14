@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   enqueue: vi.fn(), deliver: vi.fn(), muted: false, legacy: null as { checkout_id: string; error: string | null } | null,
-  legacyLookupFailed: false,
+  legacyLookupFailed: false, commercialOptOut: false,
   graphql: vi.fn(),
 }))
 const cart = (id: string, updatedAt: string) => ({
@@ -19,6 +19,7 @@ vi.mock('./api', async (original) => ({
 }))
 vi.mock('./notification-jobs', () => ({ enqueueOrderNotification: m.enqueue, runOrderNotificationSweep: m.deliver }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
+vi.mock('@/lib/ai/commercial-preferences', () => ({ contactMutesCommercial: async () => m.commercialOptOut }))
 vi.mock('@/lib/whatsapp/resolve-conversation', () => ({ resolveConversationByPhone: async () => ({ contactId: 'ct', conversationId: 'conv' }) }))
 import { runAbandonedCartSweep } from './abandoned-carts'
 
@@ -36,7 +37,7 @@ const db = { from(table: string) {
 const now = new Date('2026-11-13T18:00:00Z')
 beforeEach(() => {
   vi.clearAllMocks(); filters.length = 0
-  m.legacy = null; m.muted = false; m.legacyLookupFailed = false
+  m.legacy = null; m.muted = false; m.legacyLookupFailed = false; m.commercialOptOut = false
   m.deliver.mockResolvedValue({ sent: 0, pending: 1, skipped: 0 })
   m.graphql.mockReset().mockResolvedValue({ abandonedCheckouts: { nodes: [cart('cart1', '2026-11-13T16:00:00Z')] } })
 })
@@ -80,6 +81,11 @@ describe('migrating abandoned-cart attempts to durable delivery', () => {
   })
   it('respects a contact excluded from AI before scheduling a reminder', async () => {
     m.muted = true
+    await runAbandonedCartSweep(db as never, now)
+    expect(m.enqueue).not.toHaveBeenCalled()
+  })
+  it('does not schedule a cart promotion for a commercial opt-out', async () => {
+    m.commercialOptOut = true
     await runAbandonedCartSweep(db as never, now)
     expect(m.enqueue).not.toHaveBeenCalled()
   })

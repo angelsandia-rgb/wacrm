@@ -3,13 +3,14 @@ import type { OrderNotification } from './notification-jobs'
 import type { AbandonedCheckout } from './abandoned-cart-data'
 
 const m = vi.hoisted(() => ({
-  notify: vi.fn(), tags: [] as string[], muted: false, inbound: false, decision: null as string | null,
+  notify: vi.fn(), tags: [] as string[], muted: false, commercialOptOut: false, inbound: false, decision: null as string | null,
   cart: null as AbandonedCheckout | null,
   updateTags: vi.fn(),
   dealExists: true, dealStatus: 'open', stageName: 'Por confirmar',
 }))
 vi.mock('./notify', () => ({ notifyCustomer: m.notify }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
+vi.mock('@/lib/ai/commercial-preferences', () => ({ contactMutesCommercial: async () => m.commercialOptOut }))
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   CANCEL_REQUESTED_TAG: 'cliente-cancela', CONFIRMED_TAG: 'confirmado-whatsapp',
@@ -88,7 +89,7 @@ beforeEach(() => {
   m.notify.mockReset().mockResolvedValue(true)
   m.updateTags.mockReset().mockResolvedValue(undefined)
   m.dealExists = true; m.dealStatus = 'open'; m.stageName = 'Por confirmar'
-  m.tags = []; m.inbound = false; m.muted = false; m.decision = null
+  m.tags = []; m.inbound = false; m.muted = false; m.commercialOptOut = false; m.decision = null
   m.cart = {
     id: 'cart', updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(), completedAt: null,
     abandonedCheckoutUrl: 'https://store/checkouts/recover', customer: null,
@@ -213,6 +214,16 @@ describe('durable Shopify notification delivery', () => {
 
 describe('abandoned cart recovery in the same durable queue', () => {
   const cartJob: OrderNotification = { ...payload, cart: { checkoutId: 'cart', contactId: 'ct', phone: '+50254852732', storeName: 'Casa Ceiba' } }
+  it('rechecks a preference saved after enqueue and drops only the marketing job', async () => {
+    const { db, jobs } = database()
+    await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)
+    await enqueueOrderNotification(db, 'a', 'order:shipped', payload)
+    m.commercialOptOut = true
+    expect(await runOrderNotificationSweep(db)).toEqual({ sent: 1, pending: 0, skipped: 1 })
+    expect(jobs.get('a:cart:cart')?.status).toBe('skipped')
+    expect(m.notify).toHaveBeenCalledTimes(1)
+    expect(m.notify).toHaveBeenCalledWith(db, 'a', 'c', payload.text, null)
+  })
   it('retries a pending template then sends the current cart once', async () => {
     const { db } = database()
     await enqueueOrderNotification(db, 'a', 'cart:cart', cartJob)

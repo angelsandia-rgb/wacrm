@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { notifyCustomer } from './notify'
 import { CANCEL_REQUESTED_TAG, CONFIRMED_TAG, CONFIRM_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, shopifyGraphql, TO_CONFIRM_TAG, updateOrderTags } from './api'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
+import { contactMutesCommercial } from '@/lib/ai/commercial-preferences'
 import { withinBusinessHours } from '@/lib/ai/followups'
 import { CART_FIELDS, CART_MAX_AGE_MS, CART_WAIT_MS, cartReminderText, cartTemplate, type AbandonedCheckout } from './abandoned-cart-data'
 
@@ -65,7 +66,8 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
         const age = cart ? Date.now() - Date.parse(cart.updatedAt) : 0
         skip = !cart || Boolean(cart.completedAt) || !Number.isFinite(age) || age > CART_MAX_AGE_MS
         if (cart && !skip) {
-          skip = normalizeGtPhone(cart.shippingAddress?.phone || cart.customer?.phone || '') !== c.phone || await contactMutesAi(db, c.contactId)
+          skip = normalizeGtPhone(cart.shippingAddress?.phone || cart.customer?.phone || '') !== c.phone
+            || await contactMutesAi(db, c.contactId) || await contactMutesCommercial(db, job.account_id, c.contactId)
           if (!skip && age < CART_WAIT_MS) throw new Error('Waiting for cart inactivity')
           text = cartReminderText(cart, c.storeName)
           template = cartTemplate(cart)

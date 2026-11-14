@@ -22,6 +22,7 @@ import { autoReplyScheduleForAccount, withinAiAttentionHours, OutsideAiAttention
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { contactMutesAi } from './muted-contact';
+import { contactMutesCommercial } from './commercial-preferences';
 import {
   sendMessageToConversation,
   SendMessageError,
@@ -165,6 +166,18 @@ export async function runFollowupSweep(
       }
 
       const { step, stepIndex, lastCustomerAt, contactName } = decision;
+      // Revalidate immediately before sending: the contact may unsubscribe
+      // after the evaluation while this sweep is processing other chats.
+      try {
+        if (await contactMutesCommercial(admin, cfg.account_id, c.contact_id as string | null)) {
+          res.skipped++;
+          continue;
+        }
+      } catch (error) {
+        console.error('[followups] commercial preference lookup failed', error);
+        res.skipped++;
+        continue;
+      }
       sendsLeft--;
 
       let messageId: string | null = null;
@@ -347,6 +360,7 @@ async function evaluateConversation(
 
   // Staff / personal / supplier contact — never nudged.
   if (await contactMutesAi(admin, args.contactId)) return null;
+  if (await contactMutesCommercial(admin, args.accountId, args.contactId)) return null;
 
   // Our last reply asked nothing (a farewell, "aquí estamos para lo que
   // necesite") — the customer owes us no answer, so there is no lead to
