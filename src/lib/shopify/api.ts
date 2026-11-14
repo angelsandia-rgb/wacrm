@@ -428,7 +428,7 @@ export function trackingSentence(f: { tracking_company?: string | null; tracking
 export async function attachOrderToDeal(args: {
   db: SupabaseClient; accountId: string; userId: string; contactId: string
   order: { id: string; name: string; total: number }; currency: string
-}): Promise<string | null> {
+}): Promise<string> {
   const { db, accountId, userId, contactId, order, currency } = args
   const { data: existing, error: existingError } = await db.from('deals').select('id')
     .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
@@ -437,14 +437,17 @@ export async function attachOrderToDeal(args: {
 
   const fields: Record<string, unknown> = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
   fields.shopify_confirmation_decision = null
-  const { data: pipelines } = await db
+  const { data: pipelines, error: pipelinesError } = await db
     .from('pipelines').select('id, name').eq('account_id', accountId)
     .order('created_at', { ascending: true })
   const pipeline = pickOrderPipeline(pipelines ?? [])
-  const { data: stages } = pipeline
-    ? await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
-    : { data: [] as { id: string; name: string }[] }
+  if (pipelinesError) throw new ShopifyError(`Pipeline lookup failed: ${pipelinesError.message}`)
+  if (!pipeline) throw new ShopifyError('No pipeline available for Shopify orders')
+  const { data: stages, error: stagesError } = await db.from('pipeline_stages')
+    .select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
   const stage = pickOrderStage(stages ?? [])
+  if (stagesError) throw new ShopifyError(`Order stage lookup failed: ${stagesError.message}`)
+  if (!stage) throw new ShopifyError('No stage available for Shopify orders')
 
   const { data: open, error: openError } = await db
     .from('deals').select('id, stage_id')
@@ -459,15 +462,21 @@ export async function attachOrderToDeal(args: {
     if (error) throw new ShopifyError(`Cannot link order: ${error.message}`)
     if (linked) return linked.id as string
   }
-  if (!pipeline || !stage) return null
   const { data: deal, error } = await db.from('deals').insert({
     ...fields, account_id: accountId, user_id: userId, pipeline_id: pipeline.id, stage_id: stage.id,
     contact_id: contactId, currency, status: 'open',
   }).select('id').single()
   if (error) {
-    console.error('[shopify] deal insert failed:', error.message)
-    return null
+    // Concurrent deliveries may both miss the first lookup. The unique index
+    // keeps one deal; only that conflict is recoverable without a webhook retry.
+    if (error.code === '23505') {
+      const { data: winner, error: winnerError } = await db.from('deals').select('id')
+        .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+      if (!winnerError && winner) return winner.id as string
+    }
+    throw new ShopifyError(`Cannot create order deal: ${error.message}`)
   }
+  if (!deal) throw new ShopifyError('Order deal was not created')
   return deal.id as string
 }
 

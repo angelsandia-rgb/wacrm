@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { attachOrderToDeal } from './api'
 
 interface Deal { id: string; account_id: string; contact_id: string; stage_id: string; status: string; shopify_order_id: string | null; shopify_confirmation_decision: string | null }
-function database(decision: string | null, previousId: string | null = 'old') {
+function database(decision: string | null, previousId: string | null = 'old', insertFailure?: { message: string; code?: string }) {
   const rows: Deal[] = [{ id: 'previous', account_id: 'a', contact_id: 'c', stage_id: 'placed', status: 'open', shopify_order_id: previousId, shopify_confirmation_decision: decision }]
   const db = { from(table: string) {
     const filters: [string, unknown][] = []
@@ -27,7 +27,14 @@ function database(decision: string | null, previousId: string | null = 'old') {
       update: (fields: Record<string, unknown>) => { update = fields; return c },
       insert: (fields: Record<string, unknown>) => { insert = fields; return c },
       maybeSingle: async () => ({ data: execute()[0] ?? null, error: null }),
-      single: async () => ({ data: execute()[0] ?? null, error: null }),
+      single: async () => {
+        if (insertFailure) {
+          // A concurrent winner is visible to the next account-scoped lookup.
+          if (insertFailure.code === '23505') execute()
+          return { data: null, error: insertFailure }
+        }
+        return { data: execute()[0] ?? null, error: null }
+      },
       then: (resolve: (v: unknown) => unknown) => resolve({ data: execute(), error: null }),
     }
     return c
@@ -67,5 +74,16 @@ describe('a contact making another Shopify order', () => {
     expect(await attach('old', 'b')).not.toBe('previous')
     expect(rows[1].account_id).toBe('b')
     expect(rows[0].shopify_confirmation_decision).toBe('confirm')
+  })
+  it('propagates persistence failures instead of losing the order behind a success response', async () => {
+    const { rows, attach } = database(null, 'old', { message: 'database unavailable' })
+    await expect(attach()).rejects.toThrow('Cannot create order deal: database unavailable')
+    expect(rows).toHaveLength(1)
+  })
+  it('recovers the same order after a concurrent unique-index winner', async () => {
+    const { rows, attach } = database(null, 'old', { message: 'duplicate key', code: '23505' })
+    expect(await attach()).toBe('new-1')
+    expect(rows).toHaveLength(2)
+    expect(rows[1].shopify_order_id).toBe('new')
   })
 })

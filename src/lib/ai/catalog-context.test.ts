@@ -14,7 +14,7 @@ function makeDb(
           select: () => chain,
           eq: () => chain,
           order: () => chain,
-          limit: () => Promise.resolve({ data: products, error: null }),
+          limit: (limit: number) => Promise.resolve({ data: products.slice(0, limit), error: null }),
           // capacity read (migration 160)
           in: () =>
             Promise.resolve({
@@ -56,6 +56,17 @@ describe('loadCatalogContext', () => {
   it('returns null when the account has no active products', async () => {
     const res = await loadCatalogContext(makeDb([]), 'acct-1')
     expect(res).toBeNull()
+  })
+
+  it('keeps every product available to the assistant in a 32-product store', async () => {
+    const products = Array.from({ length: 32 }, (_, index) => ({
+      name: `Producto ${String(index + 1).padStart(2, '0')}`,
+      price: index + 100,
+      description: null,
+    }))
+    const res = await loadCatalogContext(makeDb(products, 'GTQ'), 'acct-1')
+    expect(res).toHaveLength(32)
+    expect(res?.at(-1)).toContain('Producto 32')
   })
 
   it('formats each product with its currency-formatted price', async () => {

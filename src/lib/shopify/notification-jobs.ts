@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { notifyCustomer } from './notify'
-import { CANCEL_REQUESTED_TAG, CONFIRMED_TAG, loadShopifyConfig, normalizeGtPhone, shopifyGraphql } from './api'
+import { CANCEL_REQUESTED_TAG, CONFIRMED_TAG, CONFIRM_STAGE_NAME, loadShopifyConfig, normalizeGtPhone, shopifyGraphql, TO_CONFIRM_TAG, updateOrderTags } from './api'
 import { contactMutesAi } from '@/lib/ai/muted-contact'
 import { withinBusinessHours } from '@/lib/ai/followups'
 import { CART_FIELDS, CART_MAX_AGE_MS, CART_WAIT_MS, cartReminderText, cartTemplate, type AbandonedCheckout } from './abandoned-cart-data'
@@ -12,6 +12,7 @@ export interface OrderNotification {
   template: { names: readonly string[]; params: string[] } | null
   /** Revalidate delayed confirmation jobs before every retry. */
   confirmation?: { orderId: string; contactId: string; since: string; reminder: boolean }
+  decision?: { orderId: string; decision: 'confirm' | 'cancel' }
   cart?: { checkoutId: string; contactId: string; phone: string; storeName: string }
   staff?: { userIds: string[]; title: string; body: string; ids?: string[] }
 }
@@ -33,6 +34,14 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
   if (error) throw new Error(`Cannot claim order notifications: ${error.message}`)
   const result = { sent: 0, pending: 0, skipped: 0 }
   for (const job of data ?? []) {
+    // A batch may take longer than its first lease. Renew each job only while
+    // we still own an unexpired lease, before any external side effect.
+    const { data: renewed, error: leaseError } = await db.from('shopify_notification_jobs').update({
+      next_attempt_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    }).eq('account_id', job.account_id).eq('event_key', job.event_key).eq('lease_token', job.lease_token)
+      .eq('status', 'processing').gt('next_attempt_at', new Date().toISOString()).select('lease_token').maybeSingle()
+    if (leaseError) throw new Error(`Cannot renew notification lease: ${leaseError.message}`)
+    if (!renewed) continue
     let status: 'sent' | 'pending' | 'skipped' = 'pending'
     let lastError: string | null = null
     try {
@@ -40,6 +49,13 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
       let text = payload.text
       let template = payload.template
       let skip = false
+      if (payload.decision) {
+        const cfg = await loadShopifyConfig(db, job.account_id)
+        if (!cfg) throw new Error('Shopify configuration unavailable')
+        await updateOrderTags(cfg, payload.decision.orderId,
+          [payload.decision.decision === 'confirm' ? CONFIRMED_TAG : CANCEL_REQUESTED_TAG], [TO_CONFIRM_TAG])
+        status = 'sent'
+      }
       if (payload.cart) {
         const c = payload.cart
         const cfg = await loadShopifyConfig(db, job.account_id)
@@ -57,15 +73,21 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
       }
       if (payload.confirmation) {
         const c = payload.confirmation
-        const { data: deal, error: dealError } = await db.from('deals').select('shopify_confirmation_decision')
+        const { data: deal, error: dealError } = await db.from('deals').select('shopify_confirmation_decision, status, stage_id')
           .eq('account_id', job.account_id).eq('shopify_order_id', c.orderId).maybeSingle()
         if (dealError) throw dealError
+        skip = !deal || deal.status !== 'open' || Boolean(deal.shopify_confirmation_decision)
+        if (deal && !skip) {
+          const { data: stage, error: stageError } = await db.from('pipeline_stages').select('name').eq('id', deal.stage_id).maybeSingle()
+          if (stageError) throw stageError
+          skip = String(stage?.name ?? '').trim().toLowerCase() !== CONFIRM_STAGE_NAME.toLowerCase()
+        }
         const cfg = await loadShopifyConfig(db, job.account_id)
         if (!cfg) throw new Error('Shopify configuration unavailable')
         const { order } = await shopifyGraphql<{ order: { tags: string[]; cancelledAt: string | null; displayFulfillmentStatus?: string } | null }>(
           cfg, 'query($id: ID!) { order(id: $id) { tags cancelledAt displayFulfillmentStatus } }', { id: c.orderId },
         )
-        skip = Boolean(deal?.shopify_confirmation_decision) || !order || Boolean(order.cancelledAt) || order.tags.some((t) => [CANCEL_REQUESTED_TAG, CONFIRMED_TAG].includes(t))
+        skip ||= !order || Boolean(order.cancelledAt) || order.tags.some((t) => [CANCEL_REQUESTED_TAG, CONFIRMED_TAG].includes(t))
         skip ||= ['FULFILLED', 'PARTIALLY_FULFILLED'].includes(order?.displayFulfillmentStatus ?? '')
         if (!payload.staff) skip ||= await contactMutesAi(db, c.contactId)
         if (c.reminder) {
@@ -81,6 +103,8 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
         if (!withinBusinessHours(new Date(), account?.timezone || 'America/Guatemala', 8, 20)) throw new Error('Waiting for business hours')
       }
       if (skip) status = 'skipped'
+      // Decision jobs only mutate tags; never send another customer message.
+      else if (payload.decision) status = 'sent'
       else if (payload.staff) {
         const { error: insertError } = await db.from('notifications').upsert(payload.staff.userIds.map((userId, i) => ({
           id: payload.staff!.ids![i], account_id: job.account_id, user_id: userId,

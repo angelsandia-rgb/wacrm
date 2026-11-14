@@ -5,6 +5,8 @@ import type { AbandonedCheckout } from './abandoned-cart-data'
 const m = vi.hoisted(() => ({
   notify: vi.fn(), tags: [] as string[], muted: false, inbound: false, decision: null as string | null,
   cart: null as AbandonedCheckout | null,
+  updateTags: vi.fn(),
+  dealExists: true, dealStatus: 'open', stageName: 'Por confirmar',
 }))
 vi.mock('./notify', () => ({ notifyCustomer: m.notify }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
@@ -13,6 +15,7 @@ vi.mock('./api', async (original) => ({
   CANCEL_REQUESTED_TAG: 'cliente-cancela', CONFIRMED_TAG: 'confirmado-whatsapp',
   loadShopifyConfig: async () => ({}),
   shopifyGraphql: async () => ({ order: { tags: m.tags, cancelledAt: null }, node: m.cart }),
+  updateOrderTags: m.updateTags,
 }))
 import { enqueueOrderNotification, runOrderNotificationSweep } from './notification-jobs'
 
@@ -20,13 +23,28 @@ function database() {
   const jobs = new Map<string, Record<string, unknown>>()
   const notifications = new Map<string, unknown>()
   let failSave = false
+  let lostLease = false
+  let expiredLease = false
   const db = {
     from(table: string) {
       let update: Record<string, unknown> | null = null
       const filters: Record<string, unknown> = {}
+      const after: Record<string, unknown> = {}
       const c = {
-        select: () => c, limit: () => c, gt: () => c,
-        maybeSingle: async () => ({ data: table === 'deals' ? { shopify_confirmation_decision: m.decision } : null, error: null }),
+        select: () => c, limit: () => c,
+        gt: (key: string, value: unknown) => { after[key] = value; return c },
+        maybeSingle: async () => {
+          if (table === 'shopify_notification_jobs') {
+            if (failSave) return { data: null, error: { message: 'db unavailable' } }
+            const row = [...jobs.values()].find(r => Object.entries(filters).every(([key, value]) => r[key] === value)
+              && Object.entries(after).every(([key, value]) => String(r[key]) > String(value)))
+            if (row) Object.assign(row, update)
+            return { data: row ?? null, error: null }
+          }
+          return { data: table === 'deals'
+          ? m.dealExists ? { shopify_confirmation_decision: m.decision, status: m.dealStatus, stage_id: 'pending' } : null
+          : table === 'pipeline_stages' ? { name: m.stageName } : null, error: null }
+        },
         eq: (key: string, value: unknown) => { filters[key] = value; return c },
         update: (value: Record<string, unknown>) => { update = value; return c },
         upsert: async (value: Record<string, unknown> | Record<string, unknown>[]) => {
@@ -53,17 +71,23 @@ function database() {
     rpc: async (_name: string, params: { p_account_id: string | null; p_event_key: string | null }) => {
       const rows = [...jobs.values()].filter((r) => r.status === 'pending' &&
         (!params.p_account_id || r.account_id === params.p_account_id) && (!params.p_event_key || r.event_key === params.p_event_key))
-      for (const row of rows) Object.assign(row, { status: 'processing', lease_token: 'lease', attempts: Number(row.attempts) + 1 })
-      return { data: rows.map((r) => ({ ...r })), error: null }
+      for (const row of rows) Object.assign(row, { status: 'processing', lease_token: 'lease', next_attempt_at: new Date(Date.now() + 10 * 60_000).toISOString(), attempts: Number(row.attempts) + 1 })
+      const claimed = rows.map(r => ({ ...r }))
+      if (lostLease) rows.forEach(row => { row.lease_token = 'new-owner' })
+      if (expiredLease) rows.forEach(row => { row.next_attempt_at = new Date(Date.now() - 1).toISOString() })
+      return { data: claimed, error: null }
     },
   }
-  return { db: db as never, jobs, notifications, failSaves: () => { failSave = true } }
+  return { db: db as never, jobs, notifications, failSaves: () => { failSave = true },
+    loseLease: () => { lostLease = true }, expireLease: () => { expiredLease = true } }
 }
 const payload: OrderNotification = { conversationId: 'c', text: 'Pedido enviado', template: null }
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-11-13T16:00:00Z'))
   m.notify.mockReset().mockResolvedValue(true)
+  m.updateTags.mockReset().mockResolvedValue(undefined)
+  m.dealExists = true; m.dealStatus = 'open'; m.stageName = 'Por confirmar'
   m.tags = []; m.inbound = false; m.muted = false; m.decision = null
   m.cart = {
     id: 'cart', updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(), completedAt: null,
@@ -76,6 +100,18 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('durable Shopify notification delivery', () => {
+  it.each(['confirm', 'cancel'] as const)('recovers %s tags after a provider outage without sending a second customer message', async (decision) => {
+    const { db, jobs } = database()
+    await enqueueOrderNotification(db, 'a', 'o:decision', { ...payload, decision: { orderId: 'o', decision } })
+    m.updateTags.mockRejectedValueOnce(new Error('Shopify unavailable'))
+    expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+    expect(jobs.get('a:o:decision')?.last_error).toBe('Shopify unavailable')
+    expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+    await runOrderNotificationSweep(db)
+    expect(m.updateTags).toHaveBeenCalledTimes(2)
+    expect(m.updateTags).toHaveBeenLastCalledWith({}, 'o', [decision === 'confirm' ? 'confirmado-whatsapp' : 'cliente-cancela'], ['por-confirmar'])
+    expect(m.notify).not.toHaveBeenCalled()
+  })
   it('retries an unavailable template, keeps the original payload and does not resend success', async () => {
     const { db, jobs } = database()
     await enqueueOrderNotification(db, 'a', 'order:shipped', payload)
@@ -131,11 +167,36 @@ describe('durable Shopify notification delivery', () => {
     expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
     expect(m.notify).not.toHaveBeenCalled()
   })
+  it.each(['deleted', 'closed', 'advanced'])('discards a queued confirmation after its deal was %s', async (change) => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'order:reminder', {
+      ...payload, confirmation: { orderId: 'o', contactId: 'ct', since: new Date().toISOString(), reminder: true },
+    })
+    if (change === 'deleted') m.dealExists = false
+    if (change === 'closed') m.dealStatus = 'lost'
+    if (change === 'advanced') m.stageName = 'Enviado'
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+    expect(m.notify).not.toHaveBeenCalled()
+  })
   it('surfaces persistence failures rather than reporting a healthy sweep', async () => {
     const { db, failSaves } = database()
     await enqueueOrderNotification(db, 'a', 'order:created', payload)
     failSaves()
+    await expect(runOrderNotificationSweep(db)).rejects.toThrow('Cannot renew notification lease')
+  })
+  it('surfaces a result-write failure after provider acceptance', async () => {
+    const { db, failSaves } = database()
+    await enqueueOrderNotification(db, 'a', 'order:created', payload)
+    m.notify.mockImplementationOnce(async () => { failSaves(); return true })
     await expect(runOrderNotificationSweep(db)).rejects.toThrow('Cannot save notification result')
+  })
+  it.each(['expired', 'reclaimed'])('does not send using a lease which was %s before this batch item', async state => {
+    const { db, loseLease, expireLease } = database()
+    await enqueueOrderNotification(db, 'a', 'order:created', payload)
+    if (state === 'expired') expireLease()
+    else loseLease()
+    await runOrderNotificationSweep(db)
+    expect(m.notify).not.toHaveBeenCalled()
   })
   it('persists stable staff notification IDs for idempotent insert retries', async () => {
     const { db, jobs, notifications } = database()

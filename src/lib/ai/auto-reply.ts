@@ -2470,13 +2470,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // Only taught while a web COD order waits for this customer's answer.
     if (orderConfirmation && pendingOrder) {
       try {
-        const line = await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation })
-        if (orderConfirmation === 'cancel') {
-          await handOffToHuman({
-            db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
-            alreadyAssigned: Boolean(conv.assigned_agent_id), summary: line,
-          })
-        }
+        await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation, handoffAgentId: config.handoffAgentId })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] order confirmation failed:', err)
@@ -2485,7 +2479,7 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     // Same defense in depth: only an account with a connected store was
     // taught the marker; createShopifyOrderFromChat re-checks the config.
-    if (shopifyOrderProposal && shopifyOrders) {
+    if (shopifyOrderProposal && shopifyOrders && !(orderConfirmation && pendingOrder)) {
       try {
         await createShopifyOrderFromChat({
           db, accountId, contactId, conversationId, configOwnerUserId, proposal: shopifyOrderProposal,
@@ -2503,7 +2497,7 @@ For airport transport, record the guest's request in nota on the relevant existi
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_shopify_order failed:', err)
       }
-    } else if (shopifyOrders && claimsOrderRegistration(outboundText)) {
+    } else if (shopifyOrders && !orderConfirmation && claimsOrderRegistration(outboundText)) {
       // Told the customer the order is being registered but sent no order
       // marker (Casa Ceiba 2026-11-07): nothing was created and nobody knew.
       console.warn(`[ai auto-reply] conversation ${conversationId}: order claimed without the create_shopify_order marker`)

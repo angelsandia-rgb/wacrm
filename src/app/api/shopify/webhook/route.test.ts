@@ -148,6 +148,16 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
 })
 
 describe('Shopify webhook — web-store orders', () => {
+  it('asks Shopify to retry when its order deal could not be persisted', async () => {
+    m.attach.mockRejectedValueOnce(new Error('Cannot create order deal: database unavailable'))
+    const response = await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '300.00', currency: 'GTQ',
+      shipping_address: { first_name: 'Ana', phone: '42883689' },
+    })
+    expect(response.status).toBe(500)
+    expect(m.jobs.size).toBe(0)
+    expect(m.send).not.toHaveBeenCalled()
+  })
   it('sends the order number with the approved template to a customer who never wrote', async () => {
     m.deal = null
     await hook('orders/create', {

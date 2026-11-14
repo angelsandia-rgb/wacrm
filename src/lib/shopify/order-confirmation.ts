@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  CANCEL_REQUESTED_TAG, CONFIRM_STAGE_NAME, CONFIRMED_TAG, loadShopifyConfig, ORDER_PLACED_STAGE_NAME, TO_CONFIRM_TAG,
-  updateOrderTags,
+  CONFIRM_STAGE_NAME,
 } from './api'
+import { runOrderNotificationSweep } from './notification-jobs'
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
 
@@ -36,41 +36,21 @@ export async function loadPendingOrderConfirmation(
 
 /** The customer answered the confirmation request. Confirmed: the deal
  *  moves to "Pedido creado", the order is tagged confirmado-whatsapp and
- *  the team is notified. Cancelled: tagged cliente-cancela; the caller
+ *  the team is notified. Cancelled: tagged cliente-cancela; the transaction
  *  hands the chat to a person, who cancels it in Dropi and Shopify (never
  *  cancelled automatically — that can't be undone). Returns the staff line. */
 export async function resolveOrderConfirmation(args: {
-  db: SupabaseClient; accountId: string; conversationId: string; pending: PendingOrder; decision: 'confirm' | 'cancel'
+  db: SupabaseClient; accountId: string; conversationId: string; pending: PendingOrder; decision: 'confirm' | 'cancel'; handoffAgentId?: string | null
 }): Promise<string> {
   const { db, accountId, conversationId, pending, decision } = args
-  const confirmed = decision === 'confirm'
-  // Persist the customer's answer locally even if Shopify's tag API is down.
-  const { error: decisionError } = await db.from('deals').update({ shopify_confirmation_decision: decision })
-    .eq('id', pending.dealId).eq('account_id', accountId)
-  if (decisionError) throw new Error(`Cannot save order confirmation: ${decisionError.message}`)
-  if (confirmed) {
-    const { data: stages } = await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pending.pipelineId)
-    const placed = (stages ?? []).find((s) => sameName(s.name, ORDER_PLACED_STAGE_NAME))
-    if (placed) await db.from('deals').update({ stage_id: placed.id }).eq('id', pending.dealId).eq('account_id', accountId)
-  }
-  try {
-    const cfg = await loadShopifyConfig(db, accountId)
-    if (cfg) await updateOrderTags(cfg, pending.orderId, [confirmed ? CONFIRMED_TAG : CANCEL_REQUESTED_TAG], [TO_CONFIRM_TAG])
-  } catch (err) {
-    console.error(`[shopify] order ${pending.orderName} confirmation tags failed:`, err instanceof Error ? err.message : err)
-  }
-  const line = confirmed
-    ? `✅ El cliente confirmó por WhatsApp el pedido ${pending.orderName} (contra entrega). Ya puede despacharse en Dropi.`
-    : `❌ El cliente NO confirma el pedido ${pending.orderName}: cancélelo en Dropi y en Shopify antes de que se despache.`
-  if (confirmed) {
-    const { data: recipients } = await db
-      .from('profiles').select('user_id').eq('account_id', accountId).in('account_role', ['owner', 'admin'])
-    if (recipients?.length) {
-      await db.from('notifications').insert(recipients.map((r) => ({
-        account_id: accountId, user_id: r.user_id as string, type: 'ai_handoff', conversation_id: conversationId,
-        title: `Pedido ${pending.orderName} confirmado`, body: line,
-      })))
-    }
-  }
-  return line
+  // Decision, stage/handoff, internal note, staff alerts and the remote tag
+  // job commit together. A retry never accepts an answer with missing effects.
+  const { data, error } = await db.rpc('record_shopify_order_decision', {
+    p_account_id: accountId, p_deal_id: pending.dealId, p_order_id: pending.orderId,
+    p_conversation_id: conversationId, p_decision: decision,
+    p_handoff_agent_id: args.handoffAgentId ?? null,
+  })
+  if (error) throw new Error(`Cannot save order confirmation: ${error.message}`)
+  await runOrderNotificationSweep(db, accountId, `${pending.orderId}:decision`)
+  return data as string
 }
