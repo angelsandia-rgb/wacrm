@@ -55,6 +55,29 @@ describe('staff-owned hotel conversations', () => {
   })
 })
 describe('explicit stay length', () => {
+  const checkoutQuestion: ChatMessage = { role: 'assistant', content: '¿Qué fecha de salida desea para su estadía?', createdAt: '2026-11-12T02:28:53Z' }
+  it.each(['El 22', 'El domingo 22', 'Quiero llegar el 21 y salir el 22'])('accepts the contextual checkout answer without a repeated question: %s', content => {
+    const reply = { ...user(content), createdAt: '2026-11-12T02:33:41Z' }
+    const messages = [user('Precio de hospedaje para la noche de sábado 21 de noviembre'), checkoutQuestion, reply]
+    expect(hasUnconfirmedStayDuration(messages)).toBe(false)
+    expect(shouldDeferHotelStaffFollowup([reply], true, messages)).toBe(false)
+  })
+  it.each(['Solo para una persona, llego jueves y me retiro sábado', 'Quiero llegar el 21 y salir el 22', 'Hospedaje, llegamos viernes y nos retiramos domingo'])('accepts a stated departure verb: %s', text => {
+    expect(hasUnconfirmedStayDuration([user(text)])).toBe(false)
+  })
+  it.each(['2 personas', 'No sé todavía', 'Gracias', 'El 32'])('keeps an unanswered checkout question pending: %s', text => {
+    expect(hasUnconfirmedStayDuration([user('Hospedaje para el sábado 21'), checkoutQuestion, user(text)])).toBe(true)
+  })
+  it('does not borrow a bare day from a staff question or an unrelated or expired bot question', () => {
+    const arrival = user('Hospedaje para el sábado 21')
+    const reply = { ...user('El 22'), createdAt: '2026-11-12T02:33:41Z' }
+    expect(hasUnconfirmedStayDuration([arrival, { ...checkoutQuestion, senderType: 'agent' }, reply])).toBe(true)
+    expect(hasUnconfirmedStayDuration([arrival, { ...checkoutQuestion, content: '¿Qué día entra?' }, reply])).toBe(true)
+    expect(hasUnconfirmedStayDuration([arrival, { ...checkoutQuestion, createdAt: '2026-11-09T02:28:53Z' }, reply])).toBe(true)
+  })
+  it('does not reuse a completed old stay after a new arrival is stated', () => {
+    expect(hasUnconfirmedStayDuration([user('Entrada 1 de octubre, salida 2 de octubre'), user('Ahora quiero hospedaje para el sábado 21')])).toBe(true)
+  })
   it('does not infer Fanny’s checkout from her arrival date and guest count', () => {
     expect(hasUnconfirmedStayDuration([user('Estoy interesada en alojamiento para el domingo 18 de octubre'), user('Somos 3 adultos y 2 niños de 4 y 2 años')])).toBe(true)
   })

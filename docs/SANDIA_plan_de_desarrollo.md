@@ -5577,3 +5577,25 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
 - Sincronización operativa aplicada a la cuenta de Casa Ceiba: pedido_enviado pasó de PENDING a APPROVED al comprobar el estado real de Zernio. Verificación posterior: pedido_enviado y pedido_recibido aprobadas, 11 pendientes. No se modificaron contenidos ni se forzaron aprobaciones. Copia previa de estados en tmp/zernio-template-status-before-sync.json.
 - Pruebas: 252 archivos y 2,957 pruebas aprobadas. Se añadieron casos de compras repetidas tras confirmación/cancelación, aislamiento por cuenta, recuperación de carritos fallidos, plantillas pendientes, compra completada durante la espera y cambios de teléfono. ESLint sin errores; package-lock.json sin cambios. La compilación final y CI se registran en el PR.
 - El código sigue en el PR #371 y no se ha desplegado. La migración 179 no cambió respecto de la versión validada en PostgreSQL embebido. Mantener el orden: migración, despliegue y comprobación en una cuenta de pruebas.
+### 13/11/2026 — Auditoría VSR: fechas, eventos y precios por ocupación
+
+- Auditoría de producción de solo lectura: siete días completos, 72 chats y
+  1,453 mensajes; 38 respuestas de IA y tres fotografías con entrega/lectura.
+  Se mantienen el horario autorizado 20:00–08:00, las pausas manuales y los
+  seguimientos comerciales desactivados. No se enviaron pruebas a huéspedes.
+- Se reprodujeron y corrigieron localmente las preguntas repetidas de salida:
+  «El 22», «El domingo 22» y «llego jueves y me retiro sábado». La guarda
+  reconoce respuestas a una pregunta reciente del bot y partidas explícitas;
+  no reutiliza fechas antiguas ni una pregunta del personal.
+- El triage de eventos reconoce «Nueva solicitud» y una cotización solicitada
+  que el cliente sigue esperando; conserva la derivación de gestiones previas
+  y la aclaración ante respuestas ambiguas.
+- Las recomendaciones de habitaciones verifican también los precios ya
+  presentes en el borrador. Se reutiliza la calculadora de tarifas: Junior
+  para tres adultos del 14 al 15/11 se estima en Q1,125, sin seleccionar
+  habitación, guardar una reserva ni sustituir acuerdos del personal.
+- Las correcciones son independientes de la cola de notificaciones de
+  Shopify y de su migración. No se aplicaron cambios de datos a producción.
+- Validación: regresiones reproducidas antes del cambio, 451 pruebas
+  focalizadas, suite completa de 247 archivos y 2,940 pruebas, TypeScript y
+  ESLint. Build registrado en el PR antes de solicitar su merge explícito.

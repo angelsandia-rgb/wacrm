@@ -617,7 +617,7 @@ vi.mock('./admin-client', () => ({
 
 import { CATALOG_ONLY_REPLY_TEXT, dispatchInboundToAiReply, parseChildAges } from './auto-reply'
 import { SendCatalogError } from '@/lib/products/send-catalog'
-import { CLOSE_AVAILABILITY_AND_TOTAL_LINE, CLOSE_AVAILABILITY_LINE } from './hotel-stay-estimate'
+import { CLOSE_AVAILABILITY_AND_TOTAL_LINE } from './hotel-stay-estimate'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -5840,6 +5840,27 @@ describe('Richard room recommendation with an estimate', () => {
     h.generateReply.mockResolvedValue({ text: 'Si contamos con agua caliente. Una buena opcion es la Suite Master Deluxe, o la Suite Premium.', handoff: false, markDealWon: false, moveToStageName: null })
   })
   afterEach(() => vi.useRealTimers())
+  it('replaces a model reference for the wrong occupancy with the published three-adult Saturday rate', async () => {
+    h.state.products = [{ id: 'junior', name: 'Junior Suite Familiar', category_id: 'rooms', max_guests: 5 }]
+    h.state.reservationRow = { id: 'rr-1', product_id: null, service_name: null, guests: 3, adults: 3, children_ages: [], check_in: '2026-11-14', check_out: '2026-11-15', category: 'habitaciones' }
+    h.state.productRates = [
+      { day_of_week: 'sat', occupancy: 'group', price: 1125, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quint', price: 1800, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'child', price: 200, date_from: null, date_to: null },
+    ]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'Hospedaje para 3 adultos del 14 de noviembre con salida el 15.' }])
+    h.generateReply.mockResolvedValue({ text: 'Para 3 adultos del 14/11/2026 al 15/11/2026, la opción que se ajusta es la Junior Suite Familiar, con tarifa de referencia de Q1,500 por noche para 5 personas; para una ocupación de 3 adultos, el hotel confirma el importe aplicable. ¿Qué opción prefiere?', handoff: false, markDealWon: false, moveToStageName: null })
+    await dispatchInboundToAiReply(ARGS)
+    const text = h.engineSendText.mock.calls[0]?.[0]?.text
+    expect(text).toContain('1,125')
+    expect(text).not.toContain('1,500')
+    expect(text).not.toContain('5 personas')
+    expect(text).toContain('3 personas')
+    expect(h.state.reservationRequestUpdates).toEqual([])
+    expect(h.state.reservationRequestInserts).toEqual([])
+    expect(h.upsertReservationRequest).not.toHaveBeenCalled()
+  })
   it('adds the computed reference and selection question without selecting or changing the request', async () => {
     await dispatchInboundToAiReply(ARGS)
     const text = h.engineSendText.mock.calls[0]?.[0]?.text

@@ -7,6 +7,19 @@ const OPERATIONAL = /\b(cancel\w*|reembols\w*|devol\w*|pago\w*|pagar|deposit\w*|
 const INFORMATION = /\b(precios?|tarifas?|cuanto|cuesta[n]?|comparar|referencias?|horarios?|a que horas?|horas? de (?:entrada|salida|ingreso)|entregan la habitacion|check.?in|check.?out|desayun\w*|almuerz\w*|cena\w*|parqueo|wifi|wi.fi|mascotas?|piscina|gimnasio|jacuzzi|ubicacion|direccion|como lleg\w*|fotos?|fotograf\w*|imagenes?|menu|breakfast|parking|photos?|directions|amenities)\b/
 const TOTAL_QUESTION = /\b(?:como|cuanto|cual|que)\b[^.!?\n]{0,60}\btotal(?:es)?\b/
 const NEW_INQUIRY = /\b(hospedaje|alojamiento|habitacion\w*|suite|paquete|masaje|spa|stay|room)\b/
+const DATE_ANSWER = /\b(?:hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b|\b\d{1,4}[\/-]\d{1,2}|\b\d{1,2}\s*(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/
+const BARE_DAY_ANSWER = /^(?:(?:el|para el|dia|el dia)\s+)?(?:0?[1-9]|[12]\d|3[01])[.!\s]*$/
+const DEPARTURE_WITH_DATE = /\b(?:salir|salgo|salimos|me retiro|nos retiramos|me voy|nos vamos)\s+(?:el\s+)?(?:0?[1-9]|[12]\d|3[01]|hoy|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/
+
+function isRecentBotQuestion(question: ChatMessage, answer: ChatMessage): boolean {
+  if (question.role !== 'assistant' || question.senderType === 'agent' || !/[?¿]/.test(question.content)) return false
+  const gap = Date.parse(answer.createdAt ?? '') - Date.parse(question.createdAt ?? '')
+  return !Number.isFinite(gap) || (gap >= 0 && gap <= 24 * 60 * 60_000)
+}
+
+function isIntakeDateAnswer(text: string): boolean {
+  return DATE_ANSWER.test(text) || BARE_DAY_ANSWER.test(text.trim()) || DEPARTURE_WITH_DATE.test(text)
+}
 
 export const HOTEL_RECEPTION_PENDING_PREFIX = '🤝 Pendiente de recepción.'
 
@@ -99,15 +112,13 @@ export function answersHotelIntakeQuestion(messages: ChatMessage[], context: Cha
   const latestIndex = context.findLastIndex(m => m.role === 'user')
   const last = context[latestIndex]
   const question = context.slice(0, latestIndex).findLast(m => m.role === 'assistant')
-  if (!last || !question || question.senderType === 'agent' || !/[?¿]/.test(question.content)) return false
-  const gap = Date.parse(last.createdAt ?? '') - Date.parse(question.createdAt ?? '')
-  if (Number.isFinite(gap) && (gap < 0 || gap > 24 * 60 * 60_000)) return false
+  if (!last || !question || !isRecentBotQuestion(question, last)) return false
   const trailing: string[] = []
   for (let i = messages.length - 1; i >= 0 && messages[i].role === 'user'; i--) trailing.unshift(messages[i].content)
   const text = normalize(trailing.join(' '))
   if (OPERATIONAL.test(text) || hotelReceptionReason(messages)) return false
   const ask = normalize(question.content)
-  const dateAnswer = /\b(?:hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b|\b\d{1,4}[\/-]\d{1,2}|\b\d{1,2}\s*(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.test(text)
+  const dateAnswer = isIntakeDateAnswer(text)
   if (/\b(?:fecha|dia|entrada|ingres\w*|salida|lleg\w*)\b/.test(ask) && dateAnswer) return true
   if (/\b(?:noches|duracion|tiempo|dias)\b/.test(ask) && /\b(?:\d+|un[ao]?|dos|tres|cuatro|cinco)\s+(?:noches?|dias?)\b/.test(text)) return true
   if (/\b(?:personas|adultos|ninos|edades|huespedes)\b/.test(ask) && /\b(?:\d+|uno|una|dos|tres|cuatro|cinco|seis|siete)\b/.test(text)) return true
@@ -128,7 +139,15 @@ export function hasUnconfirmedStayDuration(messages: ChatMessage[]): boolean {
   const users = current.filter((m) => m.role === 'user').map((m) => normalize(m.content))
   const dates = users.join(' ')
   const explicit = /\b(?:\d+|una|un|dos|tres|one|two|three)\s+(?:noches?|nights?)\b|\b(?:salida|check.?out|departure)\b|\b(?:del|desde|from)\s+.{0,35}\b(?:al|hasta|to)\s+\d|\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+(?:a|al|hasta)\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(dates)
-  if (explicit) return false
+  if (explicit || DEPARTURE_WITH_DATE.test(dates)) return false
+  // A short answer such as "El 22" has meaning only in the context of the
+  // bot's recent checkout question. Do not borrow staff questions or old dates.
+  for (let i = 1; i < current.length; i++) {
+    if (current[i].role !== 'user' || !isIntakeDateAnswer(normalize(current[i].content))) continue
+    const question = current.slice(0, i).findLast(m => m.role === 'assistant')
+    if (question && isRecentBotQuestion(question, current[i])
+      && /\b(?:salida|check.?out|departure)\b/.test(normalize(question.content))) return false
+  }
   // A guest may confirm the dates in the bot's explicit question.
   for (let i = 1; i < current.length; i++) {
     if (current[i].role === 'user' && /^(si|ok|correcto|confirmo|yes|correct)\b/.test(normalize(current[i].content).trim())
