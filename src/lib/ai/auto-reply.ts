@@ -17,7 +17,7 @@ import { loadAiConfig } from './config'
 import { buildConversationContext, recentExchangeNote } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
-import { loadCatalogContext } from './catalog-context'
+import { catalogQueryFromMessages, loadCatalogContext } from './catalog-context'
 import {
   CLOSE_AVAILABILITY_AND_TOTAL_LINE,
   CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN,
@@ -985,7 +985,7 @@ export async function dispatchInboundToAiReply(
       const enrichment = await Promise.allSettled([
         retrieveKnowledge(db, accountId, config, latestUserMessage(messages)),
         loadDealStageOptions({ db, accountId, contactId, conversationId }),
-        loadCatalogContext(db, accountId),
+        loadCatalogContext(db, accountId, catalogQueryFromMessages(messages)),
         loadQuickReplyContext(db, accountId),
         loadKnownContactFacts(db, accountId, contactId),
         db.from('shopify_config').select('id').eq('account_id', accountId).maybeSingle(),

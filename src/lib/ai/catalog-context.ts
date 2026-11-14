@@ -8,6 +8,53 @@ import { formatDateEs, summarizeRates, type DayOfWeek } from '@/lib/products/rat
 // accounts with a large one.
 const MAX_PRODUCTS_IN_PROMPT = 50
 const MAX_DESCRIPTION_CHARS = 80
+const MAX_COMMERCE_DESCRIPTION_CHARS = 300
+const MAX_QUERY_TOKENS = 8
+const MAX_CATALOG_QUERY_CHARS = 2000
+const CATALOG_QUERY_STOP_WORDS = new Set([
+  'al', 'algo', 'como', 'con', 'cual', 'cuando', 'cuanto', 'cuesta', 'cuestan', 'de', 'del', 'el', 'en', 'es', 'esa', 'ese', 'esta', 'este',
+  'foto', 'fotos', 'gracias', 'hola', 'la', 'las', 'lo', 'los', 'me', 'mi', 'necesito', 'para', 'por', 'precio', 'precios', 'puede', 'que',
+  'quiero', 'saber', 'se', 'si', 'sobre', 'su', 'tienen', 'tiene', 'un', 'una', 'unos', 'unas', 'ver', 'y',
+  'asi', 'bien', 'confirmo', 'confirmar', 'confirma', 'confirmado', 'correcto', 'dejo', 'direccion', 'entrega', 'le', 'nombre', 'pago',
+  'pedido', 'producto', 'productos', 'resumen', 'tarjeta', 'telefono', 'total', 'unidad', 'unidades',
+])
+
+/** Recent customer intent plus the summary they may be confirming. Limit
+ * each turn so a long message cannot crowd all previous product names out. */
+export function catalogQueryFromMessages(messages: readonly { role: string; content: string }[]): string {
+  return messages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-4).reverse()
+    .map((m) => m.content.slice(0, 500)).join('\n').slice(0, MAX_CATALOG_QUERY_CHARS)
+}
+
+function normalizeProductSearch(value: string): string {
+  return value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+function catalogQueryTokens(query: string): string[] {
+  const groups = query.slice(0, MAX_CATALOG_QUERY_CHARS).split('\n').map((turn) => normalizeProductSearch(turn).split(' ')
+    .filter((token) => token.length >= 2 && token.length <= 40 && !/^\d{5,}$/.test(token) && !CATALOG_QUERY_STOP_WORDS.has(token)))
+  const selected = new Set<string>()
+  // Give the current turn first priority while retaining room for the
+  // preceding product summary after replies such as "sí" or "lo quiero".
+  for (const token of groups[0]?.slice(0, 4) ?? []) selected.add(token)
+  const longest = Math.max(0, ...groups.map((g) => g.length))
+  for (let i = 0; i < longest && selected.size < MAX_QUERY_TOKENS; i++) {
+    for (const group of groups) {
+      if (group[i]) selected.add(group[i])
+      if (selected.size === MAX_QUERY_TOKENS) break
+    }
+  }
+  return [...selected]
+}
+
+function productRelevance(product: CatalogProductRow, query: string, tokens: string[]): number {
+  const name = normalizeProductSearch(product.name)
+  const matched = tokens.filter((token) => name.includes(token)).length
+  if (!matched) return 0
+  // The complete named item beats another product that merely shares a word.
+  const nameAt = query.indexOf(name)
+  return (nameAt >= 0 ? 100_000 + (query.length - nameAt) * 100 : 0) + matched * 10
+}
 
 /**
  * Compact, prompt-ready lines describing the account's active catalog
@@ -35,6 +82,7 @@ interface RateRow {
 export async function loadCatalogContext(
   db: SupabaseClient,
   accountId: string,
+  query = '',
 ): Promise<string[] | null> {
   const [{ data: products }, { data: account }] = await Promise.all([
     db
@@ -53,7 +101,38 @@ export async function loadCatalogContext(
   if (!products || products.length === 0) return null
 
   const currency = (account?.default_currency as string | undefined) ?? 'USD'
-  const typed = products as CatalogProductRow[]
+  let typed = products as CatalogProductRow[]
+  const normalizedQuery = normalizeProductSearch(query.slice(0, MAX_CATALOG_QUERY_CHARS))
+  const tokens = catalogQueryTokens(query)
+  if (tokens.length) {
+    let relevant: CatalogProductRow[] = []
+    // Small catalogs are already complete. On larger ones, find matching
+    // active names in the database without loading the rest of the catalog.
+    if (typed.length === MAX_PRODUCTS_IN_PROMPT) {
+      // User punctuation and wildcards never reach PostgREST syntax. The
+      // generated single-character vowel wildcards also match accented names;
+      // false positives are removed below by accent-insensitive relevance.
+      const filters = tokens.map((token) => `name.ilike.%${token.replace(/[aeiou]/g, '_')}%`)
+      const search = async (filter: string): Promise<CatalogProductRow[]> => {
+        try {
+          const { data, error } = await db.from('products').select('id, name, price, description')
+            .eq('account_id', accountId).eq('is_active', true).or(filter).order('name').limit(MAX_PRODUCTS_IN_PROMPT)
+          return error ? [] : ((data ?? []) as CatalogProductRow[]).filter((p) => productRelevance(p, normalizedQuery, tokens) > 0)
+        } catch {
+          // An unavailable search must not discard the already-loaded catalog.
+          return []
+        }
+      }
+      // Prefer names containing every search term before the broad fallback,
+      // so a common word cannot crowd the named product out of the first 50.
+      relevant = await search(filters.length > 1 ? `and(${filters.join(',')})` : filters[0])
+      if (!relevant.length && filters.length > 1) relevant = await search(filters.join(','))
+    }
+    const unique = new Map<string, CatalogProductRow>()
+    for (const product of [...typed, ...relevant]) unique.set(product.id || product.name, product)
+    typed = [...unique.values()].sort((a, b) => productRelevance(b, normalizedQuery, tokens) - productRelevance(a, normalizedQuery, tokens)
+      || a.name.localeCompare(b.name)).slice(0, MAX_PRODUCTS_IN_PROMPT)
+  }
 
   // Hotel vertical: show each room's per-date rate structure (migration
   // 106) instead of just the base price, so the model can inform
@@ -81,7 +160,9 @@ export async function loadCatalogContext(
   }
 
   return typed.map((p) => {
-    const desc = p.description ? ` — ${truncate(p.description, account?.industry_vertical === 'hotel' ? 1200 : MAX_DESCRIPTION_CHARS)}` : ''
+    const descriptionLimit = account?.industry_vertical === 'hotel' ? 1200
+      : account?.industry_vertical === 'dropshipping' ? MAX_COMMERCE_DESCRIPTION_CHARS : MAX_DESCRIPTION_CHARS
+    const desc = p.description ? ` — ${truncate(p.description, descriptionLimit)}` : ''
     const rates = ratesByProduct.get(p.id) ?? []
     if (rates.length > 0) {
       const cap = maxGuestsByProduct.get(p.id)

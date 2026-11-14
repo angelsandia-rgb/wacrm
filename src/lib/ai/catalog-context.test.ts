@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadCatalogContext } from './catalog-context'
+import { catalogQueryFromMessages, loadCatalogContext } from './catalog-context'
 
 function makeDb(
   products: { id?: string; name: string; price: number; description: string | null }[],
@@ -167,6 +167,151 @@ describe('loadCatalogContext', () => {
     expect(res).toHaveLength(1)
     expect(res![0]).toContain('- Widget (')
     expect(res![0]).toContain('10')
+  })
+})
+
+type SearchProduct = { id: string; name: string; price: number; description: string | null; account_id: string; is_active: boolean }
+type ProductQuery = { filters: Record<string, unknown>; nameFilter: string | null; limit: number }
+
+function makeSearchDb(products: SearchProduct[], queries: ProductQuery[], searchFails = false) {
+  return {
+    from(table: string) {
+      if (table === 'accounts') return {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { default_currency: 'GTQ', industry_vertical: 'dropshipping' }, error: null }) }) }),
+      }
+      const filters: Record<string, unknown> = {}
+      let nameFilter: string | null = null
+      const chain = {
+        select: () => chain,
+        eq: (key: string, value: unknown) => { filters[key] = value; return chain },
+        or: (filter: string) => { nameFilter = filter; return chain },
+        order: () => chain,
+        limit: async (limit: number) => {
+          queries.push({ filters: { ...filters }, nameFilter, limit })
+          if (nameFilter && searchFails) return { data: null, error: { message: 'Search unavailable' } }
+          const patterns = nameFilter ? [...nameFilter.matchAll(/name\.ilike\.%([\p{L}\p{N}_]+)%/gu)]
+            .map((match) => new RegExp(match[1].replace(/_/g, '.'), 'iu')) : []
+          const data = products.filter((p) => Object.entries(filters).every(([key, value]) => p[key as keyof SearchProduct] === value))
+            .filter((p) => !patterns.length || (nameFilter?.startsWith('and(') ? patterns.every((r) => r.test(p.name)) : patterns.some((r) => r.test(p.name))))
+            .sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit)
+          return { data, error: null }
+        },
+      }
+      return chain
+    },
+  } as unknown as SupabaseClient
+}
+
+const largeCatalog = (): SearchProduct[] => [
+  ...Array.from({ length: 55 }, (_, i) => ({ id: `p-${i}`, name: `Artículo ${String(i).padStart(2, '0')}`, price: 100 + i, description: null, account_id: 'acct-1', is_active: true })),
+  { id: 'sofa', name: 'Sofá Inflable', price: 400, description: 'Se desinfla para guardarlo.', account_id: 'acct-1', is_active: true },
+]
+
+describe('loadCatalogContext — bounded product-name retrieval', () => {
+  it('retains a product beyond the first 50 when the buyer confirms its recent summary', async () => {
+    const messages = [
+      { role: 'user', content: 'Quiero un Sofá Inflable' },
+      { role: 'assistant', content: 'Resumen: Sofá Inflable, total Q400, pago contra entrega. ¿Confirma?' },
+      { role: 'user', content: 'Sí, lo quiero' },
+    ]
+    const query = catalogQueryFromMessages(messages)
+    const lines = await loadCatalogContext(makeSearchDb(largeCatalog(), []), 'acct-1', query)
+    expect(query.startsWith('Sí, lo quiero')).toBe(true)
+    expect(lines?.[0]).toContain('Sofá Inflable')
+    expect(lines).toHaveLength(50)
+  })
+
+  it('prioritizes a newly named product over the previous product in recent history', async () => {
+    const products = largeCatalog()
+    products.push({ id: 'organizer', name: 'Organizador Plegable', price: 189, description: 'Para ordenar zapatos.', account_id: 'acct-1', is_active: true })
+    const query = catalogQueryFromMessages([
+      { role: 'user', content: 'Sofá Inflable' },
+      { role: 'assistant', content: 'El Sofá Inflable cuesta Q400.' },
+      { role: 'user', content: 'Mejor quiero el Organizador Plegable' },
+    ])
+    const lines = await loadCatalogContext(makeSearchDb(products, []), 'acct-1', query)
+    expect(lines?.[0]).toContain('Organizador Plegable')
+  })
+
+  it('bounds recent context and omits unrelated older turns', () => {
+    const query = catalogQueryFromMessages([
+      { role: 'user', content: 'Producto antiguo fuera de contexto' },
+      ...Array.from({ length: 4 }, (_, i) => ({ role: 'user', content: `Producto ${i} ${'x'.repeat(900)}` })),
+    ])
+    expect(query).not.toContain('antiguo')
+    expect(query).toHaveLength(2000)
+    expect(query.startsWith('Producto 3')).toBe(true)
+  })
+
+  it('includes a named product beyond the initial 50 while keeping the final prompt bounded and deduplicated', async () => {
+    const products = largeCatalog()
+    const queries: ProductQuery[] = []
+    const lines = await loadCatalogContext(makeSearchDb(products, queries), 'acct-1', 'Quiero saber el precio del sofa inflable')
+    expect(lines).toHaveLength(50)
+    expect(lines?.[0]).toContain('Sofá Inflable')
+    expect(lines?.filter((line) => line.includes('Sofá Inflable'))).toHaveLength(1)
+    expect(queries).toHaveLength(2)
+    expect(queries.every((q) => q.limit === 50)).toBe(true)
+  })
+
+  it('keeps both base and relevant searches scoped to the account and active products', async () => {
+    const products = largeCatalog()
+    products.push(
+      { ...products.at(-1)!, id: 'other-account', price: 999, account_id: 'acct-2' },
+      { ...products.at(-1)!, id: 'inactive', price: 888, is_active: false },
+    )
+    const queries: ProductQuery[] = []
+    const lines = await loadCatalogContext(makeSearchDb(products, queries), 'acct-1', 'Sofá inflable')
+    expect(lines?.filter((line) => line.includes('Sofá Inflable'))).toHaveLength(1)
+    expect(lines?.some((line) => /999|888/.test(line))).toBe(false)
+    expect(queries.every((q) => q.filters.account_id === 'acct-1' && q.filters.is_active === true)).toBe(true)
+  })
+
+  it('prefers the complete named item over many products sharing only one word', async () => {
+    const products = largeCatalog()
+    products.push(...Array.from({ length: 60 }, (_, i) => ({ ...products.at(-1)!, id: `other-sofa-${i}`, name: `A Sofá modelo ${i}` })))
+    const lines = await loadCatalogContext(makeSearchDb(products, []), 'acct-1', 'Quiero el sofa inflable')
+    expect(lines?.[0]).toContain('Sofá Inflable')
+  })
+
+  it('removes user filter syntax and wildcards and bounds search tokens', async () => {
+    const queries: ProductQuery[] = []
+    await loadCatalogContext(makeSearchDb(largeCatalog(), queries), 'acct-1', 'Sofá %_),account_id.eq.acct2,is_active.eq.false,*"\n uno dos tres cuatro cinco seis siete ocho nueve diez')
+    const searches = queries.filter((q) => q.nameFilter)
+    expect(searches.length).toBeGreaterThan(0)
+    for (const search of searches) {
+      expect(search.nameFilter).not.toContain('account_id.eq')
+      expect(search.nameFilter).not.toContain('is_active.eq')
+      expect(search.nameFilter).not.toContain('*')
+      expect([...search.nameFilter!.matchAll(/name\.ilike/g)]).toHaveLength(8)
+      expect(search.nameFilter).toMatch(/^(?:and\()?name\.ilike\.%[\p{L}\p{N}_]+%(?:,name\.ilike\.%[\p{L}\p{N}_]+%)*(?:\))?$/u)
+    }
+  })
+
+  it('does not expand a greeting or punctuation-only input into a wildcard search', async () => {
+    const queries: ProductQuery[] = []
+    const lines = await loadCatalogContext(makeSearchDb(largeCatalog(), queries), 'acct-1', 'Hola, ¿precio? %_*(),')
+    expect(lines).toHaveLength(50)
+    expect(queries).toHaveLength(1)
+  })
+
+  it('retains the base catalog if relevant-name retrieval fails', async () => {
+    const queries: ProductQuery[] = []
+    const lines = await loadCatalogContext(makeSearchDb(largeCatalog(), queries, true), 'acct-1', 'Sofá inflable')
+    expect(lines).toHaveLength(50)
+    expect(lines?.[0]).toContain('Artículo')
+  })
+
+  it('shows up to 300 description characters for commerce, retaining the generic and hotel bounds', async () => {
+    const description = `${'Detalle '.repeat(18)}BENEFICIO_VERIFICADO ${'x'.repeat(200)}`
+    const commerce = await loadCatalogContext(makeDb([{ name: 'Producto', price: 100, description }], 'GTQ', { vertical: 'dropshipping' }), 'acct-1')
+    expect(commerce?.[0]).toContain('BENEFICIO_VERIFICADO')
+    expect(commerce?.[0].split(' — ')[1]).toHaveLength(300)
+    const generic = await loadCatalogContext(makeDb([{ name: 'Producto', price: 100, description }]), 'acct-1')
+    expect(generic?.[0].split(' — ')[1]).toHaveLength(80)
+    const hotel = await loadCatalogContext(makeDb([{ name: 'Habitación', price: 100, description: `${'x'.repeat(900)}RESTRICCION_REAL` }], 'GTQ', { vertical: 'hotel' }), 'acct-1')
+    expect(hotel?.[0]).toContain('RESTRICCION_REAL')
+    expect(hotel?.[0]).not.toContain('…')
   })
 })
 

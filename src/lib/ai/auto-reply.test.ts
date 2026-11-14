@@ -153,7 +153,10 @@ vi.mock('./context', async (importOriginal) => ({
   buildConversationContext: h.buildConversationContext,
 }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
-vi.mock('./catalog-context', () => ({ loadCatalogContext: h.loadCatalogContext }))
+vi.mock('./catalog-context', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./catalog-context')>(),
+  loadCatalogContext: h.loadCatalogContext,
+}))
 vi.mock('./quick-reply-context', () => ({ loadQuickReplyContext: h.loadQuickReplyContext }))
 vi.mock('@/lib/clinic/appointment-context', () => ({
   loadClinicAppointmentContext: h.loadClinicAppointmentContext,

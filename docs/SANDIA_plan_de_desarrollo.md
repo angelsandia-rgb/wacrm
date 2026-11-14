@@ -34,6 +34,8 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-14 — Cesi, enganches humanos y catálogo por intención (Codex).** Prompt operativo de Casa Ceiba actualizado y verificado con enganche por beneficio real de cada producto, estilo comercial 70/30 y SAC preservado. Once casos de modelo aprobados sin efectos externos. Se prepara un PR para buscar productos nombrados fuera de los primeros 50, conservarlos tras respuestas «sí» y dar hasta 300 caracteres de ficha a tiendas, sin cambiar límites de hoteles. El prompt está activo; la mejora de catálogo sigue pendiente de publicación. Ver `docs/CASA_CEIBA_ENGANCHES_Y_CATALOGO_2026-11-14.md`.
+
 **2026-11-14 — Casa Ceiba: revisión de #372–375 y refuerzo de ventas/SAC preparado (Codex).** #371 y migración 179 ya están publicados; #372–374 corrigen pagos, estados y municipio, y #375 documenta el modo autónomo activado. La lectura actual confirmó `orders_live=true`; falta el recorrido externo completo hasta entrega. Nueva rama `fix/casa-ceiba-sales-and-service`: venta consultiva sin presión, prioridad SAC, traspaso directo, confirmación sin promesa de retención, cancelación compatible con handoff y baja persistente para seguimientos/carritos. Prompt propio de Casa Ceiba preparado con política comercial vigente, sin modificar aún la configuración viva. Publicación pendiente de pruebas finales, PR y sí explícito de merge. Ver `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md` para riesgos pendientes de pagos tardíos, alertas, conciliación y SAC operativo. Las entradas antiguas de estado siguientes son históricas.
 
 **2026-11-13 — Continuación del PR #371 (Codex), código pendiente de publicación.** Los pedidos consecutivos de un contacto ya no sobrescriben su trato anterior ni heredan su confirmación/cancelación. Los carritos utilizan la cola de reintentos, recuperan fallos anteriores dentro de su vigencia y se verifican de nuevo en Shopify antes de enviar. Ajuste operativo ya aplicado: se sincronizó `pedido_enviado` a APPROVED según Zernio; la cuenta tiene `pedido_enviado` y `pedido_recibido` aprobadas y 11 plantillas pendientes, sin forzar aprobaciones. Sigue siendo necesario aplicar la migración 179 antes de desplegar el PR.
@@ -5726,3 +5728,10 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   - Firma de webhooks no documentada: se resuelve con cabecera propia más relectura por API.
   - Dropify rechaza los productos que no son de Dropi (según foros).
   - Pendientes del propietario en §8.3.
+
+### 2026-11-14 — Codex: enganches de Cesi y continuidad del catálogo ampliado
+
+- Por instrucción del propietario, aplicado el prompt de enganches humanos por producto: beneficio cotidiano real, precio y cierre, conservando estilo 70/30 y SAC. Once casos de modelo aprobados; no se fabrican rankings ni se ejecutaron propuestas. Snapshot en `docs/prompts/casa-ceiba-system-prompt-2026-11-14-enganches.md`; configuración leída de nuevo con coincidencia exacta.
+- Código preparado en rama para nombres relevantes fuera del corte inicial de 50, conservando el producto tras «sí/lo quiero» mediante contexto reciente. Búsqueda y prompt limitados, cuenta/activos obligatorios, descripción dropshipping hasta 300 caracteres y límites/reglas del hotel conservados.
+- Pruebas enfocadas: 352 aprobadas. Validación completa de código `11011199`: TypeScript, ESLint, 255 archivos / 3,078 pruebas y build Next/Turbopack de 143 páginas aprobados en copia limpia, lockfile sin cambios. Búsqueda validada además contra la base real en solo lectura. Graphify mantiene el error conocido de uv; fuentes revisadas directamente.
+- El prompt está activo. El código requiere PR y sí explícito para su merge; la autorización del #376 no cubre este nuevo PR. No se cambió el diseño de proveedor Effi ni el enrutamiento de compras.
