@@ -399,6 +399,18 @@ export const DELIVERED_STAGE_NAME = 'Entregado'
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
 
+/** Stages of the "Pedidos" board that only the order code sets (an order
+ *  exists, was paid, shipped…). The AI's move_deal marker never uses them:
+ *  a chat lead jumped to "Pago confirmado" before any order existed, and its
+ *  order card stayed there although cash on delivery was unpaid (Casa
+ *  Ceiba, 2026-11-14). */
+const ORDER_STATE_STAGE_NAMES = [
+  CONFIRM_STAGE_NAME, ORDER_PLACED_STAGE_NAME, PAYMENT_CONFIRMED_STAGE_NAME, SHIPPED_STAGE_NAME, DELIVERED_STAGE_NAME,
+]
+export function isOrderStateStage(pipelineName: unknown, stageName: unknown): boolean {
+  return sameName(pipelineName, ORDERS_PIPELINE_NAME) && ORDER_STATE_STAGE_NAMES.some((n) => sameName(stageName, n))
+}
+
 /** Pure: the "Pedidos" pipeline when the account has one, else its oldest
  *  (rows ordered oldest-first); within it the "Pedido creado" stage, else
  *  the first (rows ordered by position). */

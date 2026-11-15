@@ -55,7 +55,7 @@ import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
 import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
 import { loadPendingOrderRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
-import { describeOrderStatuses, loadOrderStatuses } from '@/lib/shopify/api'
+import { describeOrderStatuses, isOrderStateStage, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
   missingReservationFields,
@@ -3567,16 +3567,19 @@ async function loadPreSaleStages(
   db: SupabaseClient,
   pipelineId: string,
 ): Promise<{ id: string; name: string }[]> {
-  const { data } = await db
-    .from('pipeline_stages')
-    .select('id, name, is_won')
-    .eq('pipeline_id', pipelineId)
-    .order('position')
+  const [{ data }, { data: pipeline }] = await Promise.all([
+    db.from('pipeline_stages').select('id, name, is_won').eq('pipeline_id', pipelineId).order('position'),
+    db.from('pipelines').select('name').eq('id', pipelineId).maybeSingle(),
+  ])
   const all = (data ?? []) as { id: string; name: string; is_won: boolean }[]
 
   const wonIndex = all.findIndex((s) => s.is_won)
   const preSale = wonIndex === -1 ? all.filter((s) => !s.is_won) : all.slice(0, wonIndex)
-  return preSale.map((s) => ({ id: s.id, name: s.name }))
+  // The orders board's order stages belong to the order code, never the
+  // model: offering them let a chat lead reach "Pago confirmado" unpaid.
+  return preSale
+    .filter((s) => !isOrderStateStage((pipeline as { name?: string } | null)?.name, s.name))
+    .map((s) => ({ id: s.id, name: s.name }))
 }
 
 /**
