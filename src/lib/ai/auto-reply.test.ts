@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   resolveOrderConfirmation: vi.fn(),
   loadPendingOrderRequest: vi.fn(),
   settleOrderRequest: vi.fn(),
+  finishOrderRequest: vi.fn(),
   persistCommercialOptOut: vi.fn(),
   sendRestaurantMenuToConversation: vi.fn(),
   checkFreeBusy: vi.fn(),
@@ -180,6 +181,7 @@ vi.mock('@/lib/shopify/order-confirmation', () => ({
 vi.mock('@/lib/shopify/order-requests', () => ({
   loadPendingOrderRequest: h.loadPendingOrderRequest,
   settleOrderRequest: h.settleOrderRequest,
+  finishOrderRequest: h.finishOrderRequest,
 }))
 vi.mock('@/lib/observability/alerts', () => ({
   dispatchSystemAlert: h.dispatchSystemAlert,
@@ -672,6 +674,7 @@ beforeEach(() => {
   h.loadPendingOrderConfirmation.mockReset().mockResolvedValue(null)
   h.loadPendingOrderRequest.mockReset().mockResolvedValue(null)
   h.settleOrderRequest.mockReset().mockResolvedValue(true)
+  h.finishOrderRequest.mockReset().mockResolvedValue(undefined)
   h.resolveOrderConfirmation.mockReset().mockResolvedValue('Pedido guardado')
   h.state.conv = {
     assigned_agent_id: null,
@@ -2457,16 +2460,51 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
 
   describe('web order form request (no Shopify order yet)', () => {
     const stored = { items: [{ name: 'Freidora de Aire', qty: 2 }], fullName: 'Ana López', phone: '+50254852732', address: '4a calle', departamento: 'Guatemala', municipio: 'Mixco', payment: 'cod' as const }
+    const terms = { lines: [{ variantId: 'gid://shopify/ProductVariant/7', quantity: 2, price: 500 }], currency: 'GTQ', total: 1000 }
     const modelGuess = { items: [{ name: 'Freidora de Aire', qty: 9 }], fullName: 'Otra', phone: '55555555', address: 'X', departamento: 'Guatemala', payment: 'cod' as const }
     beforeEach(() => {
-      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire' })
+      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire', terms })
     })
     it.each([['confirm', 'cod'], ['confirm_card', 'card']] as const)('a %s answer places the STORED request once, never the model proposal', async (decision, payment) => {
       h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: decision, shopifyOrderProposal: modelGuess })
       await dispatchInboundToAiReply(ARGS)
-      expect(h.settleOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'confirmed')
-      expect(h.createShopifyOrderFromChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ proposal: { ...stored, payment } }))
+      expect(h.settleOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'processing')
+      expect(h.createShopifyOrderFromChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ proposal: { ...stored, payment }, accepted: terms }))
       expect(h.resolveOrderConfirmation).not.toHaveBeenCalled()
+    })
+    it('the created order is recorded on the request', async () => {
+      h.createShopifyOrderFromChat.mockResolvedValue({ id: 'gid://shopify/Order/9', name: '#1009', draft: false, paymentLink: null })
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.finishOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', { status: 'confirmed', orderId: 'gid://shopify/Order/9', orderName: '#1009' })
+    })
+    it('no order (another one in progress in this chat): held for a person, never back to pending', async () => {
+      h.createShopifyOrderFromChat.mockResolvedValue(undefined)
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.finishOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', { status: 'held', note: expect.stringContaining('otro pedido en proceso') })
+      expect(h.state.updatePayload?.ai_handoff_summary).toContain('no se creó el pedido')
+      expect(h.settleOrderRequest).not.toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'pending')
+    })
+    it('the creation reports why it stopped: that reason is kept on the held request', async () => {
+      h.createShopifyOrderFromChat.mockImplementation(async (args: { handoff: (s: string) => Promise<void> }) => { await args.handoff('🛒 cambió lo que el cliente aceptó') })
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.finishOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', { status: 'held', note: '🛒 cambió lo que el cliente aceptó' })
+    })
+    it('an error after the claim holds the request as unverified instead of retrying it', async () => {
+      h.createShopifyOrderFromChat.mockRejectedValue(new Error('socket hang up'))
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.finishOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', { status: 'held', note: expect.stringContaining('socket hang up') })
+      expect(h.createShopifyOrderFromChat).toHaveBeenCalledTimes(1)
+    })
+    it('a request without accepted terms is never placed', async () => {
+      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire', terms: null })
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+      expect(h.finishOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', { status: 'held', note: expect.stringContaining('condiciones aceptadas') })
     })
     it('a duplicate answer (request already settled) places nothing', async () => {
       h.settleOrderRequest.mockResolvedValue(false)

@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   /** The deal the draft belongs to (status read before releasing anything). */
   draftDeal: { id: 'd1', status: 'open', contact_id: 'ct1' } as Record<string, unknown> | null,
   enqueue: vi.fn(),
+  recipients: [{ user_id: 'owner1' }] as { user_id: string }[],
 }))
 
 vi.mock('@/lib/webhooks/admin-client', () => ({ supabaseAdmin: () => ({ from: () => {
@@ -16,7 +17,7 @@ vi.mock('@/lib/webhooks/admin-client', () => ({ supabaseAdmin: () => ({ from: ()
   const c: Record<string, unknown> = {
     select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c,
     maybeSingle: async () => ({ data: cols === 'id, status, contact_id' ? m.draftDeal : cols === 'phone, name' ? { phone: '54852732', name: 'Ana' } : null, error: null }),
-    then: (ok: (v: unknown) => unknown) => ok({ data: [{ user_id: 'owner1' }], error: null }),
+    then: (ok: (v: unknown) => unknown) => ok({ data: m.recipients, error: null }),
     update: (row: Record<string, unknown>) => { m.updates.push(row); return c },
   }
   return c
@@ -47,6 +48,7 @@ beforeEach(() => {
   m.enqueue.mockReset()
   m.draftDeal = { id: 'd1', status: 'open', contact_id: 'ct1' }
   m.updates = []
+  m.recipients = [{ user_id: 'owner1' }]
 })
 
 describe('Recurrente payments', () => {
@@ -60,6 +62,21 @@ describe('Recurrente payments', () => {
     expect(m.enqueue).toHaveBeenCalledWith(expect.anything(), ACCOUNT, 'ch_1:payment-held', expect.objectContaining({
       conversationId: 'conv1', staff: expect.objectContaining({ userIds: ['owner1'], title: 'Pago de Q300 retenido' }),
     }))
+  })
+  it('a held payment with no linked customer still notifies the owner, with references and no invented customer', async () => {
+    m.cfg!.ordersLive = false
+    m.draftDeal = null
+    await paid()
+    expect(m.enqueue).toHaveBeenCalledExactlyOnceWith(expect.anything(), ACCOUNT, 'ch_1:payment-held', expect.objectContaining({
+      conversationId: '', staff: expect.objectContaining({ userIds: ['owner1'], body: expect.stringContaining('cobro ch_1, borrador gid://shopify/DraftOrder/1') }),
+    }))
+  })
+  it('with no owner/admin to notify, the critical platform alert is the escalation', async () => {
+    m.cfg!.ordersLive = false
+    m.recipients = []
+    expect((await paid()).status).toBe(200)
+    expect(m.alert).toHaveBeenCalledWith(expect.objectContaining({ severity: 'critical' }))
+    expect(m.enqueue).not.toHaveBeenCalled()
   })
   it('answers 500 (Recurrente retries) when the owner notice cannot be stored', async () => {
     m.cfg!.ordersLive = false

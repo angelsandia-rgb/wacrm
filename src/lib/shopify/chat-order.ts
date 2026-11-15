@@ -2,10 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento,
+  attachOrderToDeal, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento,
   normalizeGtPhone, outOfStockTitles,
   PAYMENT_GATEWAYS,
 } from './api'
+import type { AcceptedTerms } from './order-requests'
 
 // A re-emitted marker (the customer says "gracias" after confirming)
 // must never place a second order.
@@ -31,6 +32,10 @@ async function createShopifyOrderLocked(args: {
    *  `handoff` receives the bare reason for the UI and no follow-up handoff is
    *  raised, the agent is already on the chat. Defaults to the AI. */
   actor?: 'ai' | 'agent'
+  /** A web form request: the exact variants, quantities, prices and currency
+   *  the customer accepted. Any difference from the current catalog → no
+   *  order, no link; a person re-quotes. */
+  accepted?: AcceptedTerms
 }, lifecycle: {
   starting: () => void
   created: (order: { id: string; name: string; draft: boolean }) => Promise<void>
@@ -72,6 +77,15 @@ async function createShopifyOrderLocked(args: {
   if (proposal.municipio && !municipioMatchesDepartamento(proposal.municipio, proposal.departamento)) {
     return fail(`el municipio "${proposal.municipio}" no corresponde al departamento "${proposal.departamento}"`)
   }
+  // Checked again here, not only when the request was made: a coverage change
+  // after the customer's form also stops the order and the payment link.
+  const coverage = coverageVerdict(cfg.shippingCoverage, proposal.departamento, proposal.municipio)
+  if (coverage !== 'ok') {
+    const where = [proposal.municipio, proposal.departamento].filter(Boolean).join(', ')
+    return fail(coverage === 'outside'
+      ? `${where} está fuera de la cobertura de envío configurada; no se creó pedido ni link de pago`
+      : `falta el municipio para confirmar la cobertura de envío (${where}); no se creó pedido ni link de pago`)
+  }
 
   const { data: products } = await db
     .from('products')
@@ -79,12 +93,36 @@ async function createShopifyOrderLocked(args: {
     .eq('account_id', accountId)
     .eq('is_active', true)
     .not('shopify_variant_id', 'is', null)
-  const byName = new Map((products ?? []).map((p) => [String(p.name).trim().toLowerCase(), p]))
+  const { data: account } = await db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle()
+  const currency = (account?.default_currency as string | undefined) ?? 'GTQ'
   const lines = []
-  for (const item of proposal.items) {
-    const p = byName.get(item.name.trim().toLowerCase())
-    if (!p) return fail(`"${item.name}" no coincide con un producto activo de Shopify`)
-    lines.push({ variantId: p.shopify_variant_id as string, quantity: item.qty, price: Number(p.price), title: p.name as string })
+  if (args.accepted) {
+    const byVariant = new Map((products ?? []).map((p) => [p.shopify_variant_id as string, p]))
+    const changes = args.accepted.lines.flatMap((l) => {
+      const p = byVariant.get(l.variantId)
+      if (!p) return [`un producto ya no está disponible (${l.variantId.split('/').pop()})`]
+      lines.push({ variantId: l.variantId, quantity: l.quantity, price: l.price, title: p.name as string })
+      return Math.abs(Number(p.price) - l.price) > 0.009 ? [`${p.name}: aceptó ${formatCurrency(l.price, args.accepted!.currency)}, hoy cuesta ${formatCurrency(Number(p.price), currency)}`] : []
+    })
+    if (args.accepted.currency !== currency) changes.push(`moneda ${args.accepted.currency} → ${currency}`)
+    if (!args.accepted.lines.length) changes.push('la solicitud no tiene artículos aceptados')
+    if (changes.length) {
+      if (!byAgent) {
+        try {
+          await sendText('Gracias 🙏 Antes de registrar su pedido verificamos el precio y cambió desde su solicitud. Un asesor le escribe por aquí con el total actualizado para que lo confirme.')
+        } catch (err) {
+          console.error('[shopify] accepted-terms notice failed:', err)
+        }
+      }
+      return handoff(`🛒 Solicitud de pedido no creada (${label}): cambió lo que el cliente aceptó — ${changes.join('; ')}. No se creó pedido ni link de pago: envíe el resumen actualizado y espere su nueva confirmación.`)
+    }
+  } else {
+    const byName = new Map((products ?? []).map((p) => [String(p.name).trim().toLowerCase(), p]))
+    for (const item of proposal.items) {
+      const p = byName.get(item.name.trim().toLowerCase())
+      if (!p) return fail(`"${item.name}" no coincide con un producto activo de Shopify`)
+      lines.push({ variantId: p.shopify_variant_id as string, quantity: item.qty, price: Number(p.price), title: p.name as string })
+    }
   }
 
   // Provider stock first: no order, no payment link for what Dropi can't ship.
@@ -107,9 +145,6 @@ async function createShopifyOrderLocked(args: {
     }
     return handoff(byAgent ? `Sin existencias en Dropi: ${what}` : `🛒 Sin existencias en Dropi para el pedido (${label}): ${what}. Ofrécele una alternativa al cliente.`)
   }
-
-  const { data: account } = await db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle()
-  const currency = (account?.default_currency as string | undefined) ?? 'GTQ'
 
   lifecycle.starting()
   const order = await createShopifyOrder(cfg, {

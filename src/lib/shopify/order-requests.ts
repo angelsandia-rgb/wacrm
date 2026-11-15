@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { departamentoCode, loadShopifyConfig, municipioMatchesDepartamento, normalizeGtPhone, outOfStockTitles } from './api'
+import { coverageVerdict, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento, normalizeGtPhone, outOfStockTitles } from './api'
 import { ORDER_TEMPLATES } from './notify'
 import { enqueueOrderNotification, runOrderNotificationSweep } from './notification-jobs'
 
@@ -13,6 +13,14 @@ type Proposal = NonNullable<GenerateResult['shopifyOrderProposal']>
 export const REQUEST_TTL_MS = 72 * 3600_000
 const MAX_LINES = 10
 const MAX_QTY = 20
+
+/** What the customer accepted. The order is placed with these exact prices
+ *  or not at all (see createShopifyOrderFromChat). */
+export interface AcceptedTerms {
+  lines: { variantId: string; quantity: number; price: number }[]
+  currency: string
+  total: number
+}
 
 export interface OrderFormInput {
   items: { variantId: string; quantity: number }[]
@@ -57,6 +65,9 @@ export function parseOrderForm(body: unknown): OrderFormInput | { error: string 
 export async function submitOrderForm(db: SupabaseClient, accountId: string, input: OrderFormInput): Promise<{ ok: true } | { error: string; status: number }> {
   const cfg = await loadShopifyConfig(db, accountId)
   if (!cfg) return { error: 'La tienda no acepta pedidos por este medio.', status: 404 }
+  if (coverageVerdict(cfg.shippingCoverage, input.departamento, input.municipio) !== 'ok') {
+    return { error: `Por ahora no hacemos envíos a ${input.municipio}, ${input.departamento}. Escríbanos por WhatsApp y le ayudamos.`, status: 422 }
+  }
 
   const ids = [...new Set(input.items.map((i) => variantGid(i.variantId)))]
   const { data: products, error: productsError } = await db.from('products').select('name, price, shopify_variant_id')
@@ -87,8 +98,9 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
   const { error: supersedeError } = await db.from('shopify_order_requests').update({ status: 'superseded', decided_at: new Date().toISOString() })
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'pending')
   if (supersedeError) throw supersedeError
+  const terms: AcceptedTerms = { lines: lines.map((l) => ({ variantId: l.variantId, quantity: l.quantity, price: l.price })), currency, total }
   const { data: request, error: insertError } = await db.from('shopify_order_requests').insert({
-    account_id: accountId, contact_id: contactId, conversation_id: conversationId, proposal, total, currency,
+    account_id: accountId, contact_id: contactId, conversation_id: conversationId, proposal, total, currency, terms,
   }).select('id').single()
   if (insertError) throw insertError
 
@@ -113,11 +125,11 @@ export function requestSummary(p: Pick<Proposal, 'items'>): string {
   return p.items.map((i) => `${i.qty} x ${i.name}`).join(', ')
 }
 
-export interface PendingOrderRequest { id: string; proposal: Proposal; summary: string }
+export interface PendingOrderRequest { id: string; proposal: Proposal; summary: string; terms: AcceptedTerms | null }
 
 /** The contact's form request still waiting for their WhatsApp answer. */
 export async function loadPendingOrderRequest(db: SupabaseClient, accountId: string, contactId: string): Promise<PendingOrderRequest | null> {
-  const { data, error } = await db.from('shopify_order_requests').select('id, proposal, total, currency')
+  const { data, error } = await db.from('shopify_order_requests').select('id, proposal, total, currency, terms')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'pending')
     .gte('created_at', new Date(Date.now() - REQUEST_TTL_MS).toISOString())
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
@@ -125,16 +137,29 @@ export async function loadPendingOrderRequest(db: SupabaseClient, accountId: str
   if (!data) return null
   const proposal = data.proposal as Proposal
   return {
-    id: data.id as string, proposal,
+    id: data.id as string, proposal, terms: (data.terms as AcceptedTerms | null) ?? null,
     summary: `${requestSummary(proposal)}; total ${formatCurrency(Number(data.total), data.currency as string)}; entrega en ${[proposal.address, proposal.municipio, proposal.departamento].filter(Boolean).join(', ')}`,
   }
 }
 
-/** Atomically settle a pending request. False when another worker already
- *  did (a duplicate answer must never place a second order). */
-export async function settleOrderRequest(db: SupabaseClient, accountId: string, id: string, status: 'confirmed' | 'cancelled'): Promise<boolean> {
+/** Atomically take a pending request: 'processing' (the customer said yes,
+ *  creation starts) or 'cancelled'. False when another worker already did
+ *  (a duplicate answer must never place a second order). */
+export async function settleOrderRequest(db: SupabaseClient, accountId: string, id: string, status: 'processing' | 'cancelled'): Promise<boolean> {
   const { data, error } = await db.from('shopify_order_requests').update({ status, decided_at: new Date().toISOString() })
     .eq('account_id', accountId).eq('id', id).eq('status', 'pending').select('id').maybeSingle()
   if (error) throw error
   return Boolean(data)
+}
+
+/** Close a 'processing' request: the order it produced, or 'held' with the
+ *  reason a person must reconcile it. Never back to pending — a request whose
+ *  Shopify result is unknown must not be placed again. */
+export async function finishOrderRequest(db: SupabaseClient, accountId: string, id: string,
+  outcome: { status: 'confirmed'; orderId: string; orderName: string } | { status: 'held'; note: string }): Promise<void> {
+  const { error } = await db.from('shopify_order_requests').update(outcome.status === 'confirmed'
+    ? { status: 'confirmed', order_id: outcome.orderId, order_name: outcome.orderName }
+    : { status: 'held', outcome_note: outcome.note.slice(0, 500) })
+    .eq('account_id', accountId).eq('id', id).eq('status', 'processing')
+  if (error) throw error
 }

@@ -112,7 +112,8 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
       else if (payload.staff) {
         const { error: insertError } = await db.from('notifications').upsert(payload.staff.userIds.map((userId, i) => ({
           id: payload.staff!.ids![i], account_id: job.account_id, user_id: userId,
-          type: 'ai_handoff', conversation_id: payload.conversationId,
+          // A staff notice may have no conversation (a payment with no linked customer).
+          type: 'ai_handoff', conversation_id: payload.conversationId || null,
           title: payload.staff!.title, body: payload.staff!.body,
         })), { onConflict: 'id', ignoreDuplicates: true })
         if (insertError) throw insertError

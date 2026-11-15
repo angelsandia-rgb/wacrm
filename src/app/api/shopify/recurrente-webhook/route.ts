@@ -87,16 +87,21 @@ export async function POST(request: Request) {
       const { data: recipients, error: recipientsError } = await db.from('profiles').select('user_id')
         .eq('account_id', accountId).in('account_role', ['owner', 'admin'])
       if (recipientsError) throw recipientsError
-      // ponytail: no contact (unlinked draft) → only the platform alert above; add a conversation-less owner notice if that ever happens.
-      if (contact?.phone && recipients?.length) {
-        const { conversationId } = await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)
+      // No owner/admin to tell: the critical platform alert above is the escalation.
+      if (recipients?.length) {
+        // No linked customer (unlinked draft): the notice still reaches the
+        // owner, without a conversation and without inventing a customer.
+        const conversationId = contact?.phone
+          ? (await resolveConversationByPhone(db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null)).conversationId
+          : ''
         const eventKey = `${checkoutId}:payment-held`
         await enqueueOrderNotification(db, accountId, eventKey, {
           conversationId, text: '', template: null,
           staff: {
             userIds: recipients.map((r) => r.user_id as string),
             title: `Pago de ${amount} retenido`,
-            body: `💳 Se cobraron ${amount} con tarjeta pero no se creó el pedido: ${reason}. Revise el cobro en Recurrente y el borrador en Shopify, y resuelva con el cliente (completar el pedido o reembolsar según su política).`,
+            body: `💳 Se cobraron ${amount} con tarjeta pero no se creó el pedido: ${reason}. Revise el cobro en Recurrente y el borrador en Shopify, y resuelva con el cliente (completar el pedido o reembolsar según su política).` +
+              (conversationId ? '' : ` Sin cliente vinculado en el CRM. Referencias: cobro ${checkoutId}, borrador ${draftId}.`),
           },
         })
         await runOrderNotificationSweep(db, accountId, eventKey)

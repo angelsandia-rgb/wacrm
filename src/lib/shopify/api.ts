@@ -36,6 +36,8 @@ export interface ShopifyConfig {
   recurrenteSecretKey: string | null
   /** Svix signing secret (whsec_…) of the Recurrente webhook that completes paid card drafts. */
   recurrenteWebhookSecret: string | null
+  /** The store's commercial shipping coverage; null = no restriction. */
+  shippingCoverage: ShippingCoverage | null
   /** Dev Dashboard apps only: fetches a fresh token (and caches it), used on a 401. */
   refreshToken?: () => Promise<string>
 }
@@ -76,7 +78,7 @@ export async function fetchClientCredentialsToken(
 export async function loadShopifyConfig(db: SupabaseClient, accountId: string): Promise<ShopifyConfig | null> {
   const { data } = await db
     .from('shopify_config')
-    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key, recurrente_webhook_secret')
+    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key, recurrente_webhook_secret, shipping_coverage')
     .eq('account_id', accountId)
     .maybeSingle()
   if (!data) return null
@@ -89,6 +91,7 @@ export async function loadShopifyConfig(db: SupabaseClient, accountId: string): 
     templateLanguage: (data.confirmation_template_language as string | null) || 'es',
     recurrenteSecretKey: data.recurrente_secret_key ? decrypt(data.recurrente_secret_key as string) : null,
     recurrenteWebhookSecret: data.recurrente_webhook_secret ? decrypt(data.recurrente_webhook_secret as string) : null,
+    shippingCoverage: (data.shipping_coverage as ShippingCoverage | null) ?? null,
   }
   if (data.client_id && data.client_secret) {
     const clientId = data.client_id as string
@@ -294,6 +297,25 @@ export function municipioMatchesDepartamento(municipio: string, departamento: st
 export function departamentoCode(name: string): string | undefined {
   const key = name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
   return GT_DEPARTAMENTOS[key] ?? (GUATEMALA_MUNICIPIOS.has(key) ? 'GUA' : undefined)
+}
+
+/** Departamento → the municipios the store delivers to, or '*' for all of it. */
+export type ShippingCoverage = Record<string, string[] | '*'>
+
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
+
+/** Pure: is the address inside the store's commercial coverage? Existing in
+ *  the carrier's list is not enough. 'ambiguous' when the municipio needed to
+ *  decide is missing or the departamento is unknown — never assumed covered. */
+export function coverageVerdict(coverage: ShippingCoverage | null | undefined, departamento: string, municipio?: string | null): 'ok' | 'outside' | 'ambiguous' {
+  if (!coverage) return 'ok'
+  const code = departamentoCode(departamento)
+  if (!code) return 'ambiguous'
+  const covered = Object.entries(coverage).find(([d]) => departamentoCode(d) === code && fold(d) in GT_DEPARTAMENTOS)?.[1]
+  if (!covered) return 'outside'
+  if (covered === '*') return 'ok'
+  if (!municipio?.trim()) return 'ambiguous'
+  return covered.some((m) => fold(m) === fold(municipio)) ? 'ok' : 'outside'
 }
 
 /** Pure: the `orderCreate` input for a confirmed chat order. */
