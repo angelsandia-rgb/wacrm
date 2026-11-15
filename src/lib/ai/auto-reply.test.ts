@@ -60,7 +60,7 @@ const h = vi.hoisted(() => ({
      *  since the mock's `ai_action_log` chain's `.limit()` doesn't
      *  distinguish by `action` either (see the `ai_action_log` mock below). */
     priorScheduleBookings: [] as { input: Record<string, unknown>; created_at?: string }[],
-    pipeline: null as { id: string } | null,
+    pipeline: null as { id: string; name?: string } | null,
     /** All of the account's pipelines (id + name), for
      *  `resolveHotelCategoryPipeline`'s name-matched lookup — empty means
      *  "no per-category pipeline", falling back to `pipeline` above. */
@@ -1835,6 +1835,24 @@ describe('dispatchInboundToAiReply — autonomous move_deal', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.moveDeal).not.toHaveBeenCalled()
     expect(h.state.aiActionLogInserts).toEqual([])
+  })
+
+  it('never moves a chat lead into the orders board\'s order stages (only the order code sets them)', async () => {
+    h.state.pipeline = { id: 'pipe-1', name: 'Pedidos' }
+    h.state.openDeal = { id: 'deal-1', pipeline_id: 'pipe-1', stage_id: 'stage-a' }
+    h.state.stages = [
+      { id: 'stage-a', name: 'Consulta', is_won: false },
+      { id: 'stage-b', name: 'Por confirmar', is_won: false },
+      { id: 'stage-c', name: 'Pedido creado', is_won: false },
+      { id: 'stage-d', name: 'Pago confirmado', is_won: false },
+      { id: 'stage-e', name: 'Entregado', is_won: true },
+    ]
+    for (const stage of ['Por confirmar', 'Pedido creado', 'Pago confirmado']) {
+      h.generateReply.mockResolvedValue({ text: 'ok', handoff: false, markDealWon: false, moveToStageName: stage })
+      await dispatchInboundToAiReply(ARGS)
+    }
+    expect(h.moveDeal).not.toHaveBeenCalled()
+    expect(h.state.aiActionLogInserts.filter((r) => r.action === 'move_deal')).toEqual([])
   })
 
   it('does nothing when the named stage is already the deal\'s current stage', async () => {
