@@ -5754,3 +5754,10 @@ ya no se pasa a un asesor. En modo prueba los borradores no se tocan.
   - Se pregunta al cliente con la plantilla `confirmar_pedido`. «Sí» crea el pedido COD con la propuesta guardada por el servidor (no la que lea el modelo); «con tarjeta» envía el link de Recurrente; «no» cierra sin handoff. Liquidación atómica: un doble «sí» crea un solo pedido. Vigencia 72 h; una solicitud nueva reemplaza a la anterior del contacto.
   - Antiabuso: honeypot y límites por IP (8/h), teléfono (3/día) y tienda (200/día).
 - Prompt vivo sin tocar (el propietario pidió dejarlo así). Pasos pendientes, cada uno con su «sí»: instalar botón y script en el tema vivo, prueba controlada con el número de QA (confirmar que Dropi recibe COD), y luego quitar COD del checkout nativo de Shopify.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, botón en el tema, prueba #1005 y etapas de pedido (#383)
+
+- Botón «Pedir, pago contra entrega» instalado en `layout/theme.liquid` del tema vivo, **visible solo con `?sandia_form=1`** (se guarda en sessionStorage) mientras se prueba. Sin el parámetro la tienda no cambia. Prueba del formulario: pendiente del propietario.
+- Prueba de venta por chat con el número de QA (+502 4284 5157): la IA creó el pedido #1005 (COD, Q400, municipio Villa Canales resuelto bien). **Dropi lo rechazó**: «No posee saldo suficiente en la wallet, monto mínimo requerido: 39.68». El aviso del CRM (#379) llegó 6 min después. Falta comprobar que Dropi recibe COD con saldo en la billetera. #1005 cancelado en Shopify (sin aviso al cliente); la oportunidad pasó sola a perdida.
+- Hallazgo: la oportunidad del chat quedó en «Pago confirmado» sin pago, porque la IA movía leads a etapas del tablero «Pedidos». **#383** (`b6070d8`): en ese tablero la IA ya no puede mover a Por confirmar, Pedido creado, Pago confirmado, Enviado ni Entregado; solo el código de pedidos. Otros embudos sin cambio. Sin migración.
+- Pendientes, cada uno con su «sí»: el propietario prueba el formulario; recargar la billetera de Dropi y validar COD; hacer público el botón; quitar COD del checkout nativo; texto del aviso para errores de saldo (hoy dice «corrige los datos»).
