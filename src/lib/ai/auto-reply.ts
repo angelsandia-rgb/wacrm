@@ -54,7 +54,7 @@ import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
 import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
-import { loadPendingOrderRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
+import { finishOrderRequest, loadPendingOrderRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
 import { describeOrderStatuses, isOrderStateStage, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
@@ -2568,24 +2568,48 @@ For airport transport, record the guest's request in nota on the relevant existi
     if (orderConfirmation && pendingRequest && shopifyOrders) {
       requestPlaced = true
       const request = pendingRequest
+      let claimed = false
       try {
-        const settled = await settleOrderRequest(db, accountId, request.id, orderConfirmation === 'cancel' ? 'cancelled' : 'confirmed')
-        if (settled && orderConfirmation !== 'cancel') {
-          await createShopifyOrderFromChat({
-            db, accountId, contactId, conversationId, configOwnerUserId,
-            proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' ? 'card' : 'cod' },
-            handoff: (summary) => handOffToHuman({
+        claimed = await settleOrderRequest(db, accountId, request.id, orderConfirmation === 'cancel' ? 'cancelled' : 'processing')
+        if (claimed && orderConfirmation !== 'cancel') {
+          // Every path without a known order ends 'held' with its reason, and
+          // a person is told: the request never returns to pending.
+          let heldReason: string | null = null
+          const handoff = (summary: string) => {
+            heldReason = summary
+            return handOffToHuman({
               db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
               alreadyAssigned: Boolean(conv.assigned_agent_id), summary, transient: true,
-            }),
-            sendText: async (contentText) => {
-              await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
-            },
-          })
+            })
+          }
+          const order = request.terms
+            ? await createShopifyOrderFromChat({
+                db, accountId, contactId, conversationId, configOwnerUserId, accepted: request.terms,
+                proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' ? 'card' : 'cod' },
+                handoff,
+                sendText: async (contentText) => {
+                  await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
+                },
+              })
+            : undefined
+          if (order) {
+            await finishOrderRequest(db, accountId, request.id, { status: 'confirmed', orderId: order.id, orderName: order.name })
+          } else {
+            // Another order in progress / just created for this chat returns
+            // silently: the purchase is still held for a person.
+            if (!heldReason) {
+              await handoff(`🛒 El cliente confirmó su solicitud del formulario web (${request.summary}), pero no se creó el pedido: ${request.terms ? 'hay otro pedido en proceso o recién creado en este chat' : 'la solicitud no guardó las condiciones aceptadas'}. Revise Shopify antes de crearlo.`)
+            }
+            await finishOrderRequest(db, accountId, request.id, { status: 'held', note: heldReason ?? 'No se creó el pedido.' })
+          }
         }
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] order request confirmation failed:', err)
+        if (claimed && orderConfirmation !== 'cancel') {
+          try { await finishOrderRequest(db, accountId, request.id, { status: 'held', note: `Resultado no verificado: ${describeError(err)}` }) }
+          catch (holdErr) { console.error('[ai auto-reply] order request hold failed:', holdErr) }
+        }
         await handOffToHuman({
           db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
           alreadyAssigned: Boolean(conv.assigned_agent_id), transient: true,

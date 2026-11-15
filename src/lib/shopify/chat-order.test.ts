@@ -168,3 +168,46 @@ describe('delivery municipio', () => {
     expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('no corresponde al departamento'))
   })
 })
+
+describe('form request: order only on the terms the customer accepted', () => {
+  const v1 = 'gid://shopify/ProductVariant/1'
+  const accepted = (price: number, extra: Partial<{ currency: string; variantId: string }> = {}) => ({
+    lines: [{ variantId: extra.variantId ?? v1, quantity: 2, price }], currency: extra.currency ?? 'GTQ', total: price * 2,
+  })
+  it('places the accepted variant, quantity and price when the catalog still matches', async () => {
+    await run({ accepted: accepted(300) })
+    expect(m.create).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+      lines: [{ variantId: v1, quantity: 2, price: 300, title: 'Producto' }], currency: 'GTQ',
+    }))
+  })
+  it.each([
+    ['a price increase', accepted(250)],
+    ['a price decrease', accepted(350)],
+    ['another currency', accepted(300, { currency: 'USD' })],
+    ['an item no longer sold', accepted(300, { variantId: 'gid://shopify/ProductVariant/2' })],
+  ])('%s: no order, no payment link, the customer is told and a person re-quotes', async (_case, terms) => {
+    await run({ accepted: terms, proposal: { items: [{ name: 'Producto', qty: 2 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'card' } })
+    expect(m.create).not.toHaveBeenCalled()
+    expect(m.checkout).not.toHaveBeenCalled()
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('cambió lo que el cliente aceptó'))
+    expect(m.send).toHaveBeenCalledWith(expect.stringContaining('total actualizado'))
+  })
+})
+
+describe('commercial coverage at creation time', () => {
+  it.each([
+    ['outside', { Guatemala: ['Villa Nueva'] }, { departamento: 'Guatemala', municipio: 'Mixco' }, 'fuera de la cobertura'],
+    ['ambiguous', { Guatemala: ['Mixco'] }, { departamento: 'Guatemala' }, 'falta el municipio'],
+  ])('%s (incl. coverage changed after the form): no order, no link', async (_c, coverage, where, reason) => {
+    m.cfg = { shop: 'store', token: 't', shippingCoverage: coverage }
+    await run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: '4a calle', payment: 'card', ...where } as never })
+    expect(m.create).not.toHaveBeenCalled()
+    expect(m.checkout).not.toHaveBeenCalled()
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining(reason))
+  })
+  it('a covered address is placed normally', async () => {
+    m.cfg = { shop: 'store', token: 't', shippingCoverage: { Guatemala: ['Mixco'] } }
+    await run({ proposal: { items: [{ name: 'Producto', qty: 1 }], fullName: 'Ana', phone: '50242883689', address: '4a calle', departamento: 'Guatemala', municipio: 'Mixco', payment: 'cod' } })
+    expect(m.create).toHaveBeenCalledTimes(1)
+  })
+})

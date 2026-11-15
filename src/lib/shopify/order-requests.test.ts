@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   stock: [] as string[],
+  coverage: null as Record<string, string[] | '*'> | null,
   inserts: [] as Record<string, unknown>[],
   updates: [] as Record<string, unknown>[],
   jobs: [] as { key: string; payload: Record<string, unknown> }[],
@@ -9,7 +10,7 @@ const m = vi.hoisted(() => ({
 }))
 vi.mock('./api', async (orig) => ({
   ...(await orig<typeof import('./api')>()),
-  loadShopifyConfig: async () => ({ shop: 's', token: 't' }),
+  loadShopifyConfig: async () => ({ shop: 's', token: 't', shippingCoverage: m.coverage }),
   outOfStockTitles: async () => m.stock,
 }))
 vi.mock('@/lib/whatsapp/resolve-conversation', () => ({ resolveConversationByPhone: async () => ({ contactId: 'ct1', conversationId: 'cv1' }) }))
@@ -18,7 +19,7 @@ vi.mock('./notification-jobs', () => ({
   runOrderNotificationSweep: vi.fn(),
 }))
 
-import { parseOrderForm, settleOrderRequest, submitOrderForm } from './order-requests'
+import { finishOrderRequest, parseOrderForm, settleOrderRequest, submitOrderForm } from './order-requests'
 
 function db() {
   const chain = (table: string) => {
@@ -43,7 +44,7 @@ const form = {
   address: '4a calle 8-20 zona 1', reference: 'frente al parque', municipio: 'Mixco', departamento: 'Guatemala',
 }
 
-beforeEach(() => { m.stock = []; m.inserts = []; m.updates = []; m.jobs = []; m.settled = { id: 'r1' } })
+beforeEach(() => { m.coverage = null; m.stock = []; m.inserts = []; m.updates = []; m.jobs = []; m.settled = { id: 'r1' } })
 
 describe('parseOrderForm', () => {
   it('accepts a complete form', () => {
@@ -65,6 +66,8 @@ describe('submitOrderForm', () => {
     const request = m.inserts.find((r) => r.table === 'shopify_order_requests')!
     expect(request).toMatchObject({
       contact_id: 'ct1', total: 398, currency: 'GTQ',
+      // What the customer accepts: the order is placed with exactly this or not at all.
+      terms: { lines: [{ variantId: 'gid://shopify/ProductVariant/7', quantity: 2, price: 199 }], currency: 'GTQ', total: 398 },
       proposal: {
         items: [{ name: 'Lámpara', qty: 2 }], phone: '+50254852732', municipio: 'Mixco', departamento: 'Guatemala',
         payment: 'cod', address: '4a calle 8-20 zona 1. Ref.: frente al parque',
@@ -73,6 +76,15 @@ describe('submitOrderForm', () => {
     // The previous pending request of this contact is superseded first.
     expect(m.updates[0]).toMatchObject({ table: 'shopify_order_requests', status: 'superseded' })
     expect(m.jobs[0]).toMatchObject({ key: 'request:r1:ask', payload: { template: { names: ['confirmar_pedido'], params: ['Ana', 'de 2 x Lámpara', 'Q398'] } } })
+  })
+  it.each([
+    ['an excluded municipio', { Guatemala: ['Guatemala', 'Villa Nueva'] }],
+    ['an excluded departamento', { Sacatepéquez: '*' as const }],
+  ])('refuses %s of the configured coverage without saving or messaging', async (_c, coverage) => {
+    m.coverage = coverage
+    expect(await submitOrderForm(db(), 'a1', parseOrderForm(form) as never)).toEqual({ error: expect.stringContaining('no hacemos envíos a Mixco'), status: 422 })
+    expect(m.inserts).toEqual([])
+    expect(m.jobs).toEqual([])
   })
   it('refuses products out of stock and unknown variants without saving anything', async () => {
     m.stock = ['Lámpara']
@@ -86,8 +98,19 @@ describe('submitOrderForm', () => {
 
 describe('settleOrderRequest', () => {
   it('settles a pending request once; a second answer finds nothing to settle', async () => {
-    expect(await settleOrderRequest(db(), 'a1', 'r1', 'confirmed')).toBe(true)
+    expect(await settleOrderRequest(db(), 'a1', 'r1', 'processing')).toBe(true)
     m.settled = null
-    expect(await settleOrderRequest(db(), 'a1', 'r1', 'confirmed')).toBe(false)
+    expect(await settleOrderRequest(db(), 'a1', 'r1', 'processing')).toBe(false)
+  })
+})
+
+describe('finishOrderRequest', () => {
+  it('records the created order, or holds the request with its reason — never back to pending', async () => {
+    await finishOrderRequest(db(), 'a1', 'r1', { status: 'confirmed', orderId: 'gid://shopify/Order/9', orderName: '#1009' })
+    await finishOrderRequest(db(), 'a1', 'r1', { status: 'held', note: 'Shopify no respondió' })
+    expect(m.updates).toEqual([
+      { table: 'shopify_order_requests', status: 'confirmed', order_id: 'gid://shopify/Order/9', order_name: '#1009' },
+      { table: 'shopify_order_requests', status: 'held', outcome_note: 'Shopify no respondió' },
+    ])
   })
 })

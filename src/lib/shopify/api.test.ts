@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildOrderInput, CARD_TAG, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
+  buildOrderInput, CARD_TAG, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
   completePaidDraftOrder, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
@@ -92,7 +92,7 @@ describe('helpers', () => {
 describe('card orders', () => {
   const cfg = {
     shop: 'x.myshopify.com', token: 't', ordersLive: true, webhookSecret: null,
-    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1', recurrenteWebhookSecret: null,
+    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1', recurrenteWebhookSecret: null, shippingCoverage: null,
   }
   const req = {
     lines: [{ variantId: 'gid://v/1', quantity: 1, price: 229, title: 'X' }],
@@ -431,5 +431,28 @@ describe('outOfStockTitles', () => {
       { variantId: '3', quantity: 1, title: 'Luces' }, { variantId: '4', quantity: 2, title: 'Proyector' },
     ]
     expect(await outOfStockTitles({ shop: 'x.myshopify.com', token: 't' }, lines)).toEqual(['Drone', 'Proyector'])
+  })
+})
+
+describe('coverageVerdict', () => {
+  const coverage = { Guatemala: ['Guatemala', 'Mixco', 'Villa Canales'], Sacatepéquez: '*' as const }
+  it('no configured coverage keeps every store as it was', () => {
+    expect(coverageVerdict(null, 'Petén', 'Flores')).toBe('ok')
+  })
+  it('allows a listed municipio (accents and case ignored) and a fully covered departamento', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', 'villa canales')).toBe('ok')
+    expect(coverageVerdict(coverage, 'sacatepequez', 'Antigua Guatemala')).toBe('ok')
+  })
+  it('excludes an unlisted municipio or departamento, even if the carrier delivers there', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', 'San Raymundo')).toBe('outside')
+    expect(coverageVerdict(coverage, 'Petén', 'Flores')).toBe('outside')
+  })
+  it('a homonym in another departamento is not covered', () => {
+    // "Guatemala" the municipio is covered; nothing in Escuintla is.
+    expect(coverageVerdict(coverage, 'Escuintla', 'Guatemala')).toBe('outside')
+  })
+  it('missing municipio or unknown departamento is ambiguous, never assumed covered', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', '')).toBe('ambiguous')
+    expect(coverageVerdict(coverage, 'Guatemal', 'Mixco')).toBe('ambiguous')
   })
 })
