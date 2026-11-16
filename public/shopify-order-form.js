@@ -8,6 +8,8 @@
  * The variant is the one selected in the product form (input name="id"), or
  * data-variant-id on the button. A button with data-sandia-cart orders the
  * whole cart instead (cart page / drawer) and empties it once sent.
+ * An element with data-sandia-order-page (a "Pedido" page) shows the same form
+ * inline with the cart's summary: the store's checkout page.
  * Submitting saves an order REQUEST in the
  * CRM, which asks the customer on WhatsApp; the Shopify order is created
  * only after their "sí" (or card payment). No cookies, no tracking.
@@ -56,6 +58,8 @@
     '.sof button{width:100%;margin-top:16px;padding:13px;border:0;border-radius:8px;background:#111;color:#fff;font:inherit;font-weight:700;cursor:pointer}' +
     '.sof button[disabled]{opacity:.6;cursor:wait}.sof .sof-x{background:none;color:#555;margin-top:8px;font-weight:400}' +
     '.sof .sof-msg{margin-top:12px;padding:10px;border-radius:8px}.sof .sof-err{background:#fde8e8;color:#8a1c1c}.sof .sof-ok{background:#e6f6ea;color:#14532d}' +
+    '.sof-page .sof{max-width:560px;max-height:none;margin:0 auto;border:1px solid #ddd;border-radius:14px}' +
+    '.sof-sum{list-style:none;margin:0 0 14px;padding:12px;background:#f6f6f6;border-radius:8px}.sof-sum li{display:flex;justify-content:space-between;gap:12px;padding:3px 0}.sof-sum .sof-total{font-weight:700;border-top:1px solid #ddd;margin-top:6px;padding-top:8px}' +
     '.sof .sof-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}'
 
   function el(tag, attrs, text) {
@@ -92,14 +96,17 @@
   }
 
   // cartItems: the cart's lines when the button orders the whole cart.
-  function open(button, cartItems) {
+  // mount: the page element to render into (order page) instead of a dialog;
+  // summary: that page's cart summary, shown above the fields.
+  function open(button, cartItems, mount, summary) {
     var variantId = cartItems ? null : selectedVariant(button)
-    var back = el('div', { class: 'sof-back' })
-    var box = el('div', { class: 'sof', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sof-title' })
+    var back = mount || el('div', { class: 'sof-back' })
+    var box = el('div', mount ? { class: 'sof' } : { class: 'sof', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sof-title' })
     var form = el('form', { novalidate: '' })
-    box.appendChild(el('h2', { id: 'sof-title' }, 'Pedir con pago contra entrega'))
+    box.appendChild(el('h2', { id: 'sof-title' }, mount ? 'Confirmar pedido' : 'Pedir con pago contra entrega'))
     var title = cartItems ? 'Su carrito (' + cartItems.length + (cartItems.length === 1 ? ' producto)' : ' productos)') : button.getAttribute('data-title') || 'Su pedido'
     box.appendChild(el('p', {}, title + '. Le escribimos por WhatsApp para confirmarlo; puede pagar en efectivo al recibir o con tarjeta.'))
+    if (summary) box.appendChild(summary)
     if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', value: '1', inputmode: 'numeric', required: '' })
     field(form, 'Nombre completo', 'fullName', { autocomplete: 'name', required: '' })
     field(form, 'Teléfono (WhatsApp)', 'phone', { type: 'tel', autocomplete: 'tel-national', inputmode: 'numeric', placeholder: '8 dígitos', required: '' })
@@ -113,25 +120,30 @@
     departamento.addEventListener('change', function () {
       fill(form.querySelector('[name="municipio"]'), 'Elija su municipio', MUNICIPIOS[departamento.value] || [])
     })
+    field(form, 'NIT (opcional)', 'nit', { maxlength: '20', placeholder: 'CF si no tiene' })
     var hp = el('div', { class: 'sof-hp', 'aria-hidden': 'true' })
     hp.appendChild(el('input', { name: 'website', tabindex: '-1', autocomplete: 'off' }))
     form.appendChild(hp)
-    var submit = el('button', { type: 'submit' }, 'Enviar pedido')
+    var submit = el('button', { type: 'submit' }, mount ? 'Confirmar pedido' : 'Enviar pedido')
     var close = el('button', { type: 'button', class: 'sof-x' }, 'Cancelar')
     var msg = el('div', { role: 'status', 'aria-live': 'polite' })
     form.appendChild(submit)
-    form.appendChild(close)
+    if (!mount) form.appendChild(close)
     form.appendChild(msg)
     box.appendChild(form)
     back.appendChild(box)
-    document.body.appendChild(back)
-    form.querySelector('input').focus()
+    if (!mount) {
+      document.body.appendChild(back)
+      form.querySelector('input').focus()
+    }
 
-    function done() { back.remove(); document.removeEventListener('keydown', onKey); button.focus() }
-    function onKey(e) { if (e.key === 'Escape') done() }
-    document.addEventListener('keydown', onKey)
-    close.addEventListener('click', done)
-    back.addEventListener('click', function (e) { if (e.target === back) done() })
+    if (!mount) {
+      function done() { back.remove(); document.removeEventListener('keydown', onKey); button.focus() }
+      function onKey(e) { if (e.key === 'Escape') done() }
+      document.addEventListener('keydown', onKey)
+      close.addEventListener('click', done)
+      back.addEventListener('click', function (e) { if (e.target === back) done() })
+    }
     function show(kind, text) { msg.className = 'sof-msg ' + kind; msg.textContent = text }
 
     form.addEventListener('submit', function (e) {
@@ -147,7 +159,7 @@
         body: JSON.stringify({
           items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
           fullName: data.get('fullName'), phone: data.get('phone'), address: data.get('address'), reference: data.get('reference'),
-          departamento: data.get('departamento'), municipio: data.get('municipio'), website: data.get('website'),
+          departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), website: data.get('website'),
         }),
       }).then(function (r) { return r.json().catch(function () { return {} }).then(function (b) { return { ok: r.ok, body: b } }) })
         .then(function (res) {
@@ -162,6 +174,28 @@
   }
 
   document.head.appendChild(el('style', {}, css))
+
+  // Order page: the cart's summary and the form, inline.
+  var page = document.querySelector('[data-sandia-order-page]')
+  if (page) {
+    page.classList.add('sof-page')
+    fetch('/cart.js', { headers: { Accept: 'application/json' } }).then(function (r) { return r.json() }).then(function (cart) {
+      if (!cart.items.length) return page.appendChild(el('p', {}, 'Su carrito está vacío. Agregue un producto para hacer su pedido.'))
+      var money = function (cents) { return 'Q' + (cents / 100).toLocaleString('es-GT', { minimumFractionDigits: 2 }) }
+      var summary = el('ul', { class: 'sof-sum' })
+      cart.items.forEach(function (i) {
+        var li = el('li')
+        li.appendChild(el('span', {}, i.quantity + ' x ' + i.product_title))
+        li.appendChild(el('span', {}, money(i.final_line_price)))
+        summary.appendChild(li)
+      })
+      var total = el('li', { class: 'sof-total' })
+      total.appendChild(el('span', {}, 'Total · envío gratis'))
+      total.appendChild(el('span', {}, money(cart.total_price)))
+      summary.appendChild(total)
+      open(page, cart.items.map(function (i) { return { variantId: String(i.variant_id), quantity: i.quantity } }), page, summary)
+    }).catch(function () { page.appendChild(el('p', {}, 'No pudimos cargar su carrito. Recargue la página.')) })
+  }
   document.addEventListener('click', function (e) {
     var button = e.target.closest && e.target.closest('[data-sandia-order]')
     if (!button) return

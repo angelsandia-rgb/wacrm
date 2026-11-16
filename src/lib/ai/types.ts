@@ -178,6 +178,8 @@ export interface GenerateResult {
     payment: 'cod' | 'card'
     /** Municipio (Dropi needs city ≠ departamento). Optional: older markers omit it. */
     municipio?: string
+    /** Tax id typed in the store's order form; goes to the order note. */
+    nit?: string
   } | null
   /** The customer's answer to a pending web COD order confirmation
    *  (see `CONFIRM_SHOPIFY_ORDER_SENTINEL`), or undefined. */

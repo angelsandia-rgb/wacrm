@@ -151,7 +151,7 @@ async function createShopifyOrderLocked(args: {
       lines, currency,
       fullName: proposal.fullName, phone: proposal.phone, address: proposal.address,
       departamento: proposal.departamento, municipio: proposal.municipio, payment: proposal.payment,
-      note: 'Pedido tomado por WhatsApp (Chat Sandía)',
+      note: ['Pedido tomado por WhatsApp (Chat Sandía)', proposal.nit && `NIT: ${proposal.nit}`].filter(Boolean).join('\n'),
   })
   await lifecycle.created(order)
 
