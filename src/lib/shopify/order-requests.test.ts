@@ -49,6 +49,7 @@ beforeEach(() => { m.coverage = null; m.stock = []; m.inserts = []; m.updates = 
 describe('parseOrderForm', () => {
   it('accepts a complete form', () => {
     expect(parseOrderForm(form)).toMatchObject({ phone: '5485 2732', items: [{ variantId: '7', quantity: 2 }] })
+    expect(parseOrderForm({ ...form, nit: ' 1234567-8 ' })).toMatchObject({ nit: '1234567-8' })
   })
   it('rejects bad phones, unknown departamentos and a capital municipio in another departamento', () => {
     expect(parseOrderForm({ ...form, phone: '123' })).toEqual({ error: expect.stringContaining('teléfono') })

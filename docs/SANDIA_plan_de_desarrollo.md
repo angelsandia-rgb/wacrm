@@ -5820,3 +5820,10 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
   - Un botón con `data-sandia-cart` pide **todo el carrito** (lee `/cart.js`, hasta 10 líneas) y lo vacía al enviarse. Permite quitar contra entrega del checkout nativo sin dejar el carrito sin salida.
   - Corrección: «San Pedro Sacatepéquez, San Marcos» se rechazaba porque el nombre también existe en Guatemala. Lo encontró la prueba nueva, que comprueba que toda opción de la lista pasa la validación del servidor.
 - Pendiente tras el despliegue: cambiar en el tema el botón «Pagar» del carrito por el formulario, ocultar «Comprar ahora» y desactivar «Pago contra entrega» en Shopify. Sigue sin probarse un pedido real de punta a punta (billetera de Dropi en Q0, token vence el 17/11).
+
+### 2026-11-15 (noche, 2) — Claude Code: Casa Ceiba, página de pedido propia y NIT
+
+- **Contexto:** el propietario pidió un checkout «como el de Anacate» (carrito → «Confirmar pedido») y, además, atar el pedido a la respuesta del cliente por WhatsApp. Con el checkout nativo eso no es posible: Shopify crea el pedido al terminar el checkout y Dropify lo importa en ese momento, sin opción de espera. La única forma es que el pedido nazca con el «sí», que es lo que hace el formulario propio (#381).
+- Por decisión del propietario se **reactivó** «Pago contra entrega» en el checkout nativo (se había desactivado horas antes) y el carrito volvió al checkout de Shopify, con selector de departamento/municipio previo, botón «Confirmar pedido» y campo NIT opcional (atributo `NIT` del carrito). No hay recogida en tienda.
+- **Este PR** (sin migración): `public/shopify-order-form.js` puede mostrarse **como página** en un elemento `data-sandia-order-page` (resumen del carrito con total, datos, municipio en lista, NIT opcional y «Confirmar pedido»). El NIT del formulario se guarda en la propuesta y llega a la nota del pedido de Shopify (`NIT: …`).
+- Pendiente: publicar la página `/pages/pedido` en el tema, que el propietario la vea, y solo con su visto bueno cambiar el botón del carrito para que lleve ahí.
