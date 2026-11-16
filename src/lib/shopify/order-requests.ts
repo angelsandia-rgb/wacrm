@@ -8,8 +8,9 @@ import { enqueueOrderNotification, runOrderNotificationSweep } from './notificat
 
 type Proposal = NonNullable<GenerateResult['shopifyOrderProposal']>
 
-/** A request older than this is no longer waiting: the customer re-orders. */
-// ponytail: no reminder for unanswered requests; reuse confirmation-reminders if they pile up.
+/** A request older than this is no longer waiting: the backlog check marks it
+ *  'expired' and tells the team (src/lib/shopify/backlog.ts). */
+// ponytail: no automatic customer reminder; a person recovers it (opt-out, hours, WhatsApp limits).
 export const REQUEST_TTL_MS = 72 * 3600_000
 const MAX_LINES = 10
 const MAX_QTY = 20
