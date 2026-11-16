@@ -5,6 +5,18 @@ import { enqueueOrderNotification } from './notification-jobs'
 import { REQUEST_TTL_MS, requestSummary } from './order-requests'
 import { SERVICE_CASE_ESCALATE_MS, SERVICE_CASE_PREFIX } from './service-cases'
 
+/** One reminder, this long after the summary reached WhatsApp with no answer. */
+export const REQUEST_REMINDER_MS = 3 * 3600_000
+/** {{1}} name, {{2}} order. Its promise ("no lo enviaremos hasta que lo confirme")
+ *  is true for a form request: no order exists until the customer accepts. */
+const REQUEST_REMINDER_TEMPLATE = ['recordatorio_confirmacion']
+
+/** Pure: the reminder for a purchase whose summary got no answer. */
+export function requestReminderText(firstName: string, summary: string, total: string): string {
+  return `Hola${firstName ? ` ${firstName}` : ''}, su pedido de ${summary} por ${total} sigue esperando su confirmación; no lo enviamos hasta que nos confirme. ` +
+    'Responda *SÍ* y lo preparamos, o díganos qué desea cambiar.'
+}
+
 /** A "sí" being placed takes seconds; this long means the worker died mid-way. */
 const STUCK_PROCESSING_MS = 15 * 60_000
 /** A notice still undelivered after this long (or this many tries) needs a person. */
@@ -39,15 +51,34 @@ export function stuckByAccount(requests: RequestRow[], jobs: JobRow[], now: Date
 
 /**
  * Rides the follow-ups cron, before the notification sweep:
+ * 0. A form request whose summary was delivered 3 h ago with no answer gets
+ *    ONE reminder (the sender applies opt-out, business hours and "the
+ *    customer already wrote back").
  * 1. Form requests unanswered for 72 h become 'expired' (visible, not silently
- *    dropped) and owners/admins get one notice to follow up by hand. No
- *    automatic customer message: opt-out, hours and WhatsApp limits stay a
- *    person's call.
+ *    dropped) and owners/admins get one notice to follow up by hand.
  * 2. Requests stuck mid-placement, notices that do not go out and SAC cases
  *    open > 24 h raise one platform alert per account; it resolves itself once clear.
  */
 export async function runShopifyBacklogCheck(db: SupabaseClient, now: Date = new Date()): Promise<{ expired: number; stuckAccounts: number }> {
   const res = { expired: 0, stuckAccounts: 0 }
+
+  // ponytail: re-queues every waiting request each run (the job key makes it one reminder); keep a reminded_at column if this ever scans thousands.
+  const { data: waiting, error: waitingError } = await db.from('shopify_order_requests')
+    .select('id, account_id, conversation_id, contact_id, proposal, total, currency, ask_delivered_at')
+    .eq('status', 'pending').lt('ask_delivered_at', new Date(now.getTime() - REQUEST_REMINDER_MS).toISOString())
+    .gt('created_at', new Date(now.getTime() - REQUEST_TTL_MS).toISOString())
+  if (waitingError) throw new Error(`Cannot read waiting order requests: ${waitingError.message}`)
+  for (const r of waiting ?? []) {
+    const proposal = r.proposal as { fullName?: string; items: { name: string; qty: number }[] }
+    const firstName = (proposal.fullName ?? '').trim().split(' ')[0]
+    const summary = requestSummary(proposal)
+    await enqueueOrderNotification(db, r.account_id as string, `request:${r.id}:reminder`, {
+      conversationId: r.conversation_id as string,
+      text: requestReminderText(firstName, summary, formatCurrency(Number(r.total), r.currency as string)),
+      template: { names: REQUEST_REMINDER_TEMPLATE, params: [firstName || 'cliente', `de ${summary}`] },
+      request: { id: r.id as string, reminder: { contactId: r.contact_id as string, since: r.ask_delivered_at as string } },
+    })
+  }
 
   const { data: expired, error: expireError } = await db.from('shopify_order_requests')
     .update({ status: 'expired', decided_at: now.toISOString() })

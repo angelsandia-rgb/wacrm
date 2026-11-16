@@ -16,8 +16,9 @@ export interface OrderNotification {
   decision?: { orderId: string; decision: 'confirm' | 'cancel' }
   cart?: { checkoutId: string; contactId: string; phone: string; storeName: string }
   staff?: { userIds: string[]; title: string; body: string; ids?: string[] }
-  /** The form request revision this question belongs to (set by the database). */
-  request?: { id: string }
+  /** The form request revision this question belongs to (set by the database).
+   *  `reminder`: the one nudge sent when its summary got no answer. */
+  request?: { id: string; reminder?: { contactId: string; since: string } }
 }
 
 export async function enqueueOrderNotification(db: SupabaseClient, accountId: string, eventKey: string, payload: OrderNotification) {
@@ -82,6 +83,18 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
           .eq('account_id', job.account_id).eq('id', payload.request.id).maybeSingle()
         if (askedError) throw askedError
         skip = asked?.status !== 'pending'
+        const reminder = payload.request.reminder
+        if (!skip && reminder) {
+          // Never nudge someone who opted out, or who already wrote back
+          // (their message is being handled in the chat).
+          skip = await contactMutesAi(db, reminder.contactId) || await contactMutesCommercial(db, job.account_id, reminder.contactId)
+          if (!skip) {
+            const { data: inbound, error: inboundError } = await db.from('messages').select('id')
+              .eq('conversation_id', payload.conversationId).eq('sender_type', 'customer').gt('created_at', reminder.since).limit(1)
+            if (inboundError) throw inboundError
+            skip = Boolean(inbound?.length)
+          }
+        }
       }
       if (payload.confirmation) {
         const c = payload.confirmation
@@ -111,7 +124,7 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
       }
       // Business hours gate customer-facing sales messages only. Staff notices are
       // operational (cancel before dispatch, money held) and go out at once.
-      if (!skip && !payload.staff && (payload.cart || payload.confirmation?.reminder)) {
+      if (!skip && !payload.staff && (payload.cart || payload.confirmation?.reminder || payload.request?.reminder)) {
         const { data: account, error: accountError } = await db.from('accounts').select('timezone').eq('id', job.account_id).maybeSingle()
         if (accountError) throw accountError
         if (!withinBusinessHours(new Date(), account?.timezone || 'America/Guatemala', 8, 20)) throw new Error('Waiting for business hours')
@@ -132,7 +145,7 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
         status = await notifyCustomer(db, job.account_id, payload.conversationId, text, template) ? 'sent' : 'pending'
         if (status === 'pending') lastError = 'No approved template outside messaging window'
         // Only a summary that reached WhatsApp can be accepted later.
-        if (status === 'sent' && payload.request) {
+        if (status === 'sent' && payload.request && !payload.request.reminder) {
           const { error: deliveredError } = await db.from('shopify_order_requests').update({ ask_delivered_at: new Date().toISOString() })
             .eq('account_id', job.account_id).eq('id', payload.request.id).is('ask_delivered_at', null)
           if (deliveredError) throw deliveredError

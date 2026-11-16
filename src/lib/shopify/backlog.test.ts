@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { stuckByAccount } from './backlog'
+import { requestReminderText, stuckByAccount } from './backlog'
 
 const now = new Date('2026-11-15T12:00:00Z')
 const ago = (min: number) => new Date(now.getTime() - min * 60_000).toISOString()
+
+describe('requestReminderText', () => {
+  it('names the purchase and promises only what is true: nothing ships before the customer accepts', () => {
+    const text = requestReminderText('Ana', '2 x Freidora de Aire', 'Q1,000')
+    expect(text).toContain('Hola Ana, su pedido de 2 x Freidora de Aire por Q1,000')
+    expect(text).toContain('no lo enviamos hasta que nos confirme')
+    expect(requestReminderText('', '1 x Sofá', 'Q400').startsWith('Hola, su pedido')).toBe(true)
+  })
+})
 
 describe('stuckByAccount', () => {
   it('flags requests stuck mid-placement and undelivered notices, per account', () => {
