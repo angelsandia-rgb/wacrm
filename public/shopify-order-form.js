@@ -60,6 +60,9 @@
     '.sof .sof-msg{margin-top:12px;padding:10px;border-radius:8px}.sof .sof-err{background:#fde8e8;color:#8a1c1c}.sof .sof-ok{background:#e6f6ea;color:#14532d}' +
     '.sof-page .sof{max-width:560px;max-height:none;margin:0 auto;border:1px solid #ddd;border-radius:14px}' +
     '.sof-sum{list-style:none;margin:0 0 14px;padding:12px;background:#f6f6f6;border-radius:8px}.sof-sum li{display:flex;justify-content:space-between;gap:12px;padding:3px 0}.sof-sum .sof-total{font-weight:700;border-top:1px solid #ddd;margin-top:6px;padding-top:8px}' +
+    '.sof h3{margin:18px 0 2px;font-size:16px}.sof .sof-note{margin:0 0 8px;font-size:13px}' +
+    '.sof .sof-pay{display:flex;align-items:flex-start;gap:10px;margin:0 0 8px;padding:12px;border:1px solid #bbb;border-radius:8px;font-weight:400;cursor:pointer}' +
+    '.sof .sof-pay input{width:auto;margin:3px 0 0}.sof .sof-pay b{display:block}.sof .sof-pay small{color:#555}' +
     '.sof .sof-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}'
 
   function el(tag, attrs, text) {
@@ -105,7 +108,7 @@
     var form = el('form', { novalidate: '' })
     box.appendChild(el('h2', { id: 'sof-title' }, mount ? 'Confirmar pedido' : 'Pedir con pago contra entrega'))
     var title = cartItems ? 'Su carrito (' + cartItems.length + (cartItems.length === 1 ? ' producto)' : ' productos)') : button.getAttribute('data-title') || 'Su pedido'
-    box.appendChild(el('p', {}, title + '. Le escribimos por WhatsApp para confirmarlo; puede pagar en efectivo al recibir o con tarjeta.'))
+    box.appendChild(el('p', {}, title + '. Le escribimos por WhatsApp para confirmarlo con estos mismos datos.'))
     if (summary) box.appendChild(summary)
     if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', value: '1', inputmode: 'numeric', required: '' })
     field(form, 'Nombre completo', 'fullName', { autocomplete: 'name', required: '' })
@@ -121,6 +124,18 @@
       fill(form.querySelector('[name="municipio"]'), 'Elija su municipio', MUNICIPIOS[departamento.value] || [])
     })
     field(form, 'NIT (opcional)', 'nit', { maxlength: '20', placeholder: 'CF si no tiene' })
+    form.appendChild(el('h3', {}, 'Pago'))
+    form.appendChild(el('p', { class: 'sof-note' }, 'Todas las transacciones son seguras y están encriptadas.'))
+    ;[['cod', 'Pago contra entrega', 'Paga en efectivo cuando recibe su pedido.'],
+      ['card', 'Tarjeta de crédito o débito', 'Al confirmar por WhatsApp le enviamos su link de pago seguro.']].forEach(function (o, i) {
+      var label = el('label', { class: 'sof-pay' })
+      label.appendChild(el('input', Object.assign({ type: 'radio', name: 'payment', value: o[0] }, i ? {} : { checked: '' })))
+      var copy = el('span')
+      copy.appendChild(el('b', {}, o[1]))
+      copy.appendChild(el('small', {}, o[2]))
+      label.appendChild(copy)
+      form.appendChild(label)
+    })
     var hp = el('div', { class: 'sof-hp', 'aria-hidden': 'true' })
     hp.appendChild(el('input', { name: 'website', tabindex: '-1', autocomplete: 'off' }))
     form.appendChild(hp)
@@ -159,7 +174,7 @@
         body: JSON.stringify({
           items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
           fullName: data.get('fullName'), phone: data.get('phone'), address: data.get('address'), reference: data.get('reference'),
-          departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), website: data.get('website'),
+          departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), payment: data.get('payment'), website: data.get('website'),
         }),
       }).then(function (r) { return r.json().catch(function () { return {} }).then(function (b) { return { ok: r.ok, body: b } }) })
         .then(function (res) {

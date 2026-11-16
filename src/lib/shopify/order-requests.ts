@@ -32,6 +32,7 @@ export interface OrderFormInput {
   municipio: string
   departamento: string
   nit: string
+  payment: 'cod' | 'card'
 }
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '')
@@ -51,7 +52,7 @@ export function parseOrderForm(body: unknown): OrderFormInput | { error: string 
   const input = {
     items, fullName: text(b.fullName, 120), phone: text(b.phone, 30), address: text(b.address, 200),
     reference: text(b.reference, 200), municipio: text(b.municipio, 80), departamento: text(b.departamento, 40),
-    nit: text(b.nit, 20),
+    nit: text(b.nit, 20), payment: b.payment === 'card' ? 'card' as const : 'cod' as const,
   }
   if (input.fullName.length < 3) return { error: 'Escriba su nombre completo.' }
   if (normalizeGtPhone(input.phone).replace(/\D/g, '').length !== 11) return { error: 'Escriba un teléfono de 8 dígitos.' }
@@ -93,7 +94,7 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
   const address = [input.address, input.reference && `Ref.: ${input.reference}`].filter(Boolean).join('. ')
   const proposal: Proposal = {
     items: lines.map((l) => ({ name: l.title, qty: l.quantity })),
-    fullName: input.fullName, phone, address, departamento: input.departamento, municipio: input.municipio, payment: 'cod',
+    fullName: input.fullName, phone, address, departamento: input.departamento, municipio: input.municipio, payment: input.payment,
     ...(input.nit && { nit: input.nit }),
   }
 
@@ -111,14 +112,17 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
   const firstName = input.fullName.split(' ')[0]
   const totalText = formatCurrency(total, currency)
   const summary = requestSummary(proposal)
+  const card = input.payment === 'card'
   const eventKey = `request:${request.id}:ask`
   await enqueueOrderNotification(db, accountId, eventKey, {
     conversationId,
     text: `¡Hola ${firstName}! Recibimos su pedido:\n${lines.map((l) => `• ${l.quantity} x ${l.title}`).join('\n')}\n` +
-      `Total: ${totalText}, pago contra entrega.\nEntrega en: ${[address, input.municipio, input.departamento].join(', ')}.\n\n` +
-      '¿Confirma su pedido? Responda *SÍ* y lo preparamos para envío. Si prefiere pagar con tarjeta, díganos y le enviamos un link seguro.',
+      `Total: ${totalText}, ${card ? 'pago con tarjeta' : 'pago contra entrega'}.\nEntrega en: ${[address, input.municipio, input.departamento].join(', ')}.\n\n` +
+      (card
+        ? '¿Confirma su pedido? Responda *SÍ* y le enviamos su link de pago seguro.'
+        : '¿Confirma su pedido? Responda *SÍ* y lo preparamos para envío. Si prefiere pagar con tarjeta, díganos y le enviamos un link seguro.'),
     // confirmar_pedido: "recibimos su pedido {{2}} en Casa Ceiba por {{3}}".
-    template: { names: ORDER_TEMPLATES.confirm, params: [firstName, `de ${summary}`, totalText] },
+    template: { names: card ? ORDER_TEMPLATES.confirmCard : ORDER_TEMPLATES.confirm, params: [firstName, `de ${summary}`, totalText] },
   })
   await runOrderNotificationSweep(db, accountId, eventKey)
   return { ok: true }

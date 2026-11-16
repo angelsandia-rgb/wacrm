@@ -5827,3 +5827,11 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
 - Por decisión del propietario se **reactivó** «Pago contra entrega» en el checkout nativo (se había desactivado horas antes) y el carrito volvió al checkout de Shopify, con selector de departamento/municipio previo, botón «Confirmar pedido» y campo NIT opcional (atributo `NIT` del carrito). No hay recogida en tienda.
 - **Este PR** (sin migración): `public/shopify-order-form.js` puede mostrarse **como página** en un elemento `data-sandia-order-page` (resumen del carrito con total, datos, municipio en lista, NIT opcional y «Confirmar pedido»). El NIT del formulario se guarda en la propuesta y llega a la nota del pedido de Shopify (`NIT: …`).
 - Pendiente: publicar la página `/pages/pedido` en el tema, que el propietario la vea, y solo con su visto bueno cambiar el botón del carrito para que lleve ahí.
+
+### 2026-11-15 (noche, 3) — Claude Code: Casa Ceiba, forma de pago en la página de pedido
+
+- #390 fusionado y desplegado (`85be942c`). La página `/pages/pedido` funciona en la tienda (resumen del carrito, datos, municipio en lista, NIT) y el propietario la aprobó.
+- Pedido del propietario: quitar el botón «Pagar con tarjeta por WhatsApp» del carrito y poner la elección de pago **dentro de la página**, en un apartado «Pago», para que WhatsApp use los datos ya llenados y de ahí siga el link de pago.
+- **Este PR** (sin migración): el formulario tiene el apartado «Pago» con «Pago contra entrega» (predeterminado) y «Tarjeta de crédito o débito». La elección viaja como `payment` y se guarda en la propuesta. Con tarjeta, el mensaje de confirmación dice «pago con tarjeta» y un «sí» del cliente genera el link de Recurrente (instrucción nueva en el prompt del sistema; el pedido pagado se crea con el webhook verificado, como hasta ahora).
+- Plantilla: fuera de la ventana de 24 h el mensaje sale por plantilla. Para tarjeta se intenta `confirmar_pedido_tarjeta` y, mientras Meta no la apruebe, se usa `confirmar_pedido` (que dice «pago contra entrega»); la IA aclara y envía el link al confirmar. Falta enviar la plantilla nueva a Meta.
+- Pendiente tras el despliegue (tema): botón «Confirmar pedido» del carrito → `/pages/pedido`, quitar el botón de tarjeta por WhatsApp, el selector de municipio previo y el NIT del carrito (ya están en la página).
