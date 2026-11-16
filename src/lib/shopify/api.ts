@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto'
+import { checkMunicipio, departamentosOfMunicipio } from './gt-geo'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 
@@ -275,29 +276,21 @@ const GT_DEPARTAMENTOS: Record<string, string> = {
   suchitepequez: 'SUC', totonicapan: 'TOT', zacapa: 'ZAC',
 }
 
-// The model often writes the municipio where the departamento goes ("Villa
-// Canales", Casa Ceiba 2026-11-07) — these all belong to Guatemala (GUA).
-const GUATEMALA_MUNICIPIOS = new Set([
-  'ciudad de guatemala', 'guatemala ciudad', 'capital', 'santa catarina pinula', 'san jose pinula', 'san jose del golfo',
-  'palencia', 'chinautla', 'san pedro ayampuc', 'mixco', 'san pedro sacatepequez', 'san juan sacatepequez',
-  'san raymundo', 'chuarrancho', 'fraijanes', 'amatitlan', 'villa nueva', 'villa canales', 'san miguel petapa', 'petapa',
-])
-
-/** Pure: false only when we KNOW the municipio is in another departamento
- *  (a capital-area municipio given with a different departamento). Unknown
- *  names pass: Dropi's own check reports them (Dropi Sync Error → owner). */
-// ponytail: only the Guatemala-departamento municipios are known; add the full 340-municipio table if rejections show up elsewhere.
+/** Pure: the municipio exists in that departamento (canonical list of 340,
+ *  src/lib/shopify/gt-geo.ts). A misspelt or misplaced municipio is refused
+ *  here, before an order exists, instead of by the supplier afterwards. */
 export function municipioMatchesDepartamento(municipio: string, departamento: string): boolean {
-  const key = municipio.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
-  if (!GUATEMALA_MUNICIPIOS.has(key)) return true
-  const code = departamentoCode(departamento)
-  // San Pedro Sacatepéquez is also a municipio of San Marcos.
-  return code === undefined || code === 'GUA' || (key === 'san pedro sacatepequez' && code === 'SMA')
+  return checkMunicipio(municipio, departamento).ok
 }
 
 export function departamentoCode(name: string): string | undefined {
   const key = name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
-  return GT_DEPARTAMENTOS[key] ?? (GUATEMALA_MUNICIPIOS.has(key) ? 'GUA' : undefined)
+  if (GT_DEPARTAMENTOS[key]) return GT_DEPARTAMENTOS[key]
+  // The model often writes the municipio where the departamento goes ("Villa
+  // Canales", Casa Ceiba 2026-11-07). Only a name that exists in exactly one
+  // departamento settles it; a homonym does not.
+  const owners = departamentosOfMunicipio(name)
+  return owners.length === 1 ? departamentoCode(owners[0]) : undefined
 }
 
 /** Departamento → the municipios the store delivers to, or '*' for all of it. */
@@ -319,6 +312,14 @@ export function coverageVerdict(coverage: ShippingCoverage | null | undefined, d
   return covered.some((m) => fold(m) === fold(municipio)) ? 'ok' : 'outside'
 }
 
+/** Pure: the city sent to Shopify (and so to the supplier): the municipio
+ *  spelt as in the canonical list when it is one, else what was given. */
+function canonicalCity(municipio: string | undefined, departamento: string): string {
+  if (!municipio?.trim()) return departamento
+  const check = checkMunicipio(municipio, departamento)
+  return check.ok ? check.municipio : municipio.trim()
+}
+
 /** Pure: the `orderCreate` input for a confirmed chat order. */
 export function buildOrderInput(req: OrderRequest) {
   const total = req.lines.reduce((s, l) => s + l.price * l.quantity, 0)
@@ -327,7 +328,7 @@ export function buildOrderInput(req: OrderRequest) {
   const address = {
     ...splitName(req.fullName),
     address1: req.address,
-    city: req.municipio?.trim() || req.departamento,
+    city: canonicalCity(req.municipio, req.departamento),
     provinceCode: departamentoCode(req.departamento) ?? (req.municipio ? departamentoCode(req.municipio) : undefined),
     countryCode: 'GT',
     phone,

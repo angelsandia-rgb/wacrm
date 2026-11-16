@@ -5867,3 +5867,16 @@ Decisiones de arquitectura: la identidad de compra vive en `shopify_order_reques
 - Pruebas: `scripts/test-shopify-purchase-identity.sh` ejecuta 15 casos de concurrencia contra un Postgres real (doble envío, dos pestañas, dos workers, edición, otra cuenta). Pruebas unitarias de vinculación, marcadores y cola.
 
 **Queda para 1b:** llevar la venta directa por chat al mismo contrato (identidad y condiciones durables) y sustituir el bloqueo por conversación por uno por compra. La edición de una compra desde la página web llega con la Entrega 4 (el servidor ya la admite).
+
+### 2026-11-16 — Claude Code: Entrega 3a, geografía canónica en el servidor
+
+PR apilado sobre el de la Entrega 1a. **Sin migración.**
+
+- `src/lib/shopify/gt-geo.ts`: lista canónica de los 22 departamentos y 340 municipios (división política oficial, al 16/11/2026) con `checkMunicipio`. Normaliza acentos, mayúsculas y espacios; no adivina lugares. Solo admite como alias las formas de escribir la capital y «Petapa».
+- El servidor ya no deja pasar un municipio desconocido «para que decida Dropi»: un error de tecleo («Guantemala», caso real #1004), una aldea o zona escrita como municipio, o un municipio en el departamento equivocado se rechazan **antes** de que exista el pedido. Aplica al formulario y al pedido que crea Cesi por chat (en chat queda detenido con el motivo para una persona).
+- Homónimos (San Pedro Sacatepéquez, La Libertad, San José…): válidos solo con su propio departamento; el error dice a cuáles pertenece el nombre.
+- A Shopify, y por tanto al proveedor, se envía el municipio con la grafía canónica.
+- Una prueba compara la lista del formulario público con la del servidor, para que no se separen.
+- Tres cosas distintas quedan separadas: geografía válida (esta lista), cobertura comercial (`shipping_coverage`) y localidad aceptada por la transportadora (solo se sabe cuando el proveedor toma el pedido; sin API oficial, no se afirma).
+
+Pendiente de la Entrega 3: sincronización programada y observable de catálogo/precio/existencias con umbral de antigüedad, variantes reales, y consolidar cantidades de líneas con la misma variante.

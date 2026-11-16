@@ -2,10 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento,
+  attachOrderToDeal, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig,
   normalizeGtPhone, outOfStockTitles,
   PAYMENT_GATEWAYS,
 } from './api'
+import { checkMunicipio } from './gt-geo'
 import type { AcceptedTerms } from './order-requests'
 
 // A re-emitted marker (the customer says "gracias" after confirming)
@@ -74,8 +75,13 @@ async function createShopifyOrderLocked(args: {
 
   if (normalizeGtPhone(proposal.phone).replace(/\D/g, '').length < 11) return fail(`teléfono inválido "${proposal.phone}"`)
   if (!departamentoCode(proposal.departamento)) return fail(`departamento desconocido "${proposal.departamento}"`)
-  if (proposal.municipio && !municipioMatchesDepartamento(proposal.municipio, proposal.departamento)) {
-    return fail(`el municipio "${proposal.municipio}" no corresponde al departamento "${proposal.departamento}"`)
+  if (proposal.municipio) {
+    const place = checkMunicipio(proposal.municipio, proposal.departamento)
+    if (!place.ok) {
+      return fail(place.departamentos.length
+        ? `el municipio "${proposal.municipio}" pertenece a ${place.departamentos.join(' o ')}, no a "${proposal.departamento}"; confirme la ubicación con el cliente`
+        : `"${proposal.municipio}" no es un municipio de "${proposal.departamento}" (puede ser una aldea o zona); confirme el municipio con el cliente`)
+    }
   }
   // Checked again here, not only when the request was made: a coverage change
   // after the customer's form also stops the order and the payment link.

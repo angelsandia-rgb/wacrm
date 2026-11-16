@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { coverageVerdict, departamentoCode, loadShopifyConfig, municipioMatchesDepartamento, normalizeGtPhone, outOfStockTitles } from './api'
+import { coverageVerdict, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles } from './api'
+import { checkMunicipio } from './gt-geo'
 import { ORDER_TEMPLATES } from './notify'
 import { runOrderNotificationSweep, type OrderNotification } from './notification-jobs'
 
@@ -69,10 +70,14 @@ export function parseOrderForm(body: unknown): OrderFormInput | { error: string 
   if (normalizeGtPhone(input.phone).replace(/\D/g, '').length !== 11) return { error: 'Escriba un teléfono de 8 dígitos.' }
   if (input.address.length < 5) return { error: 'Escriba su dirección.' }
   if (!departamentoCode(input.departamento)) return { error: 'Elija su departamento.' }
-  if (!input.municipio || !municipioMatchesDepartamento(input.municipio, input.departamento)) {
-    return { error: `Revise el municipio: no corresponde a ${input.departamento}.` }
+  const place = checkMunicipio(input.municipio, input.departamento)
+  if (!place.ok) {
+    return { error: place.departamentos.length
+      ? `${input.municipio} pertenece a ${place.departamentos.join(' o ')}, no a ${input.departamento}. Elija el departamento correcto.`
+      : `Elija su municipio de la lista de ${input.departamento}.` }
   }
-  return input
+  // Stored as the canonical names, whatever the accents or case typed.
+  return { ...input, municipio: place.municipio, departamento: place.departamento }
 }
 
 /** Save the request and ask the customer on WhatsApp. No Shopify order is
