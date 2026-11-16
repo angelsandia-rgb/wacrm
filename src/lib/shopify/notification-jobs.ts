@@ -16,6 +16,8 @@ export interface OrderNotification {
   decision?: { orderId: string; decision: 'confirm' | 'cancel' }
   cart?: { checkoutId: string; contactId: string; phone: string; storeName: string }
   staff?: { userIds: string[]; title: string; body: string; ids?: string[] }
+  /** The form request revision this question belongs to (set by the database). */
+  request?: { id: string }
 }
 
 export async function enqueueOrderNotification(db: SupabaseClient, accountId: string, eventKey: string, payload: OrderNotification) {
@@ -73,6 +75,14 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
           template = cartTemplate(cart)
         }
       }
+      if (payload.request) {
+        // A question about a revision that was edited, cancelled or already
+        // answered must never reach the customer.
+        const { data: asked, error: askedError } = await db.from('shopify_order_requests').select('status')
+          .eq('account_id', job.account_id).eq('id', payload.request.id).maybeSingle()
+        if (askedError) throw askedError
+        skip = asked?.status !== 'pending'
+      }
       if (payload.confirmation) {
         const c = payload.confirmation
         const { data: deal, error: dealError } = await db.from('deals').select('shopify_confirmation_decision, status, stage_id')
@@ -121,6 +131,12 @@ export async function runOrderNotificationSweep(db: SupabaseClient, accountId?: 
       } else {
         status = await notifyCustomer(db, job.account_id, payload.conversationId, text, template) ? 'sent' : 'pending'
         if (status === 'pending') lastError = 'No approved template outside messaging window'
+        // Only a summary that reached WhatsApp can be accepted later.
+        if (status === 'sent' && payload.request) {
+          const { error: deliveredError } = await db.from('shopify_order_requests').update({ ask_delivered_at: new Date().toISOString() })
+            .eq('account_id', job.account_id).eq('id', payload.request.id).is('ask_delivered_at', null)
+          if (deliveredError) throw deliveredError
+        }
       }
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)

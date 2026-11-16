@@ -161,6 +161,9 @@
     }
     function show(kind, text) { msg.className = 'sof-msg ' + kind; msg.textContent = text }
 
+    // One key per opened form: a retry after a network failure, or a double
+    // click, is the same purchase and must not ask twice.
+    var idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12)
     form.addEventListener('submit', function (e) {
       e.preventDefault()
       var data = new FormData(form)
@@ -174,7 +177,7 @@
         body: JSON.stringify({
           items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
           fullName: data.get('fullName'), phone: data.get('phone'), address: data.get('address'), reference: data.get('reference'),
-          departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), payment: data.get('payment'), website: data.get('website'),
+          departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), payment: data.get('payment'), idempotencyKey: idempotencyKey, website: data.get('website'),
         }),
       }).then(function (r) { return r.json().catch(function () { return {} }).then(function (b) { return { ok: r.ok, body: b } }) })
         .then(function (res) {

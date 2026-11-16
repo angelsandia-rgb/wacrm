@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   cart: null as AbandonedCheckout | null,
   updateTags: vi.fn(),
   dealExists: true, dealStatus: 'open', stageName: 'Por confirmar',
+  requestStatus: 'pending', requestUpdates: [] as Record<string, unknown>[],
 }))
 vi.mock('./notify', () => ({ notifyCustomer: m.notify }))
 vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
@@ -32,7 +33,7 @@ function database() {
       const filters: Record<string, unknown> = {}
       const after: Record<string, unknown> = {}
       const c = {
-        select: () => c, limit: () => c,
+        select: () => c, limit: () => c, is: () => c,
         gt: (key: string, value: unknown) => { after[key] = value; return c },
         maybeSingle: async () => {
           if (table === 'shopify_notification_jobs') {
@@ -42,6 +43,7 @@ function database() {
             if (row) Object.assign(row, update)
             return { data: row ?? null, error: null }
           }
+          if (table === 'shopify_order_requests') return { data: { status: m.requestStatus }, error: null }
           return { data: table === 'deals'
           ? m.dealExists ? { shopify_confirmation_decision: m.decision, status: m.dealStatus, stage_id: 'pending' } : null
           : table === 'pipeline_stages' ? { name: m.stageName } : null, error: null }
@@ -60,6 +62,7 @@ function database() {
         },
         then(resolve: (v: unknown) => unknown) {
           if (table === 'messages') return resolve({ data: m.inbound ? [{ id: 'm' }] : [], error: null })
+          if (table === 'shopify_order_requests') { if (update) m.requestUpdates.push(update); return resolve({ error: null }) }
           if (failSave) return resolve({ error: { message: 'db unavailable' } })
           for (const row of jobs.values()) {
             if (Object.entries(filters).every(([k, v]) => row[k] === v)) Object.assign(row, update)
@@ -90,6 +93,7 @@ beforeEach(() => {
   m.updateTags.mockReset().mockResolvedValue(undefined)
   m.dealExists = true; m.dealStatus = 'open'; m.stageName = 'Por confirmar'
   m.tags = []; m.inbound = false; m.muted = false; m.commercialOptOut = false; m.decision = null
+  m.requestStatus = 'pending'; m.requestUpdates = []
   m.cart = {
     id: 'cart', updatedAt: new Date(Date.now() - 2 * 3600_000).toISOString(), completedAt: null,
     abandonedCheckoutUrl: 'https://store/checkouts/recover', customer: null,
@@ -101,6 +105,28 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('durable Shopify notification delivery', () => {
+  it('a form request question is sent while its revision waits, and stamps when it was delivered', async () => {
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'request:r1:ask', { ...payload, request: { id: 'r1' } })
+    expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+    expect(m.notify).toHaveBeenCalledTimes(1)
+    expect(m.requestUpdates).toEqual([{ ask_delivered_at: expect.any(String) }])
+  })
+  it.each(['superseded', 'cancelled', 'processing', 'confirmed'])('the question of a %s revision never reaches the customer', async (status) => {
+    m.requestStatus = status
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'request:r1:ask', { ...payload, request: { id: 'r1' } })
+    expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+    expect(m.notify).not.toHaveBeenCalled()
+    expect(m.requestUpdates).toEqual([])
+  })
+  it('a question that could not be delivered yet is not stamped as delivered', async () => {
+    m.notify.mockResolvedValue(false)
+    const { db } = database()
+    await enqueueOrderNotification(db, 'a', 'request:r1:ask', { ...payload, request: { id: 'r1' } })
+    expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+    expect(m.requestUpdates).toEqual([])
+  })
   it.each(['confirm', 'cancel'] as const)('recovers %s tags after a provider outage without sending a second customer message', async (decision) => {
     const { db, jobs } = database()
     await enqueueOrderNotification(db, 'a', 'o:decision', { ...payload, decision: { orderId: 'o', decision } })
