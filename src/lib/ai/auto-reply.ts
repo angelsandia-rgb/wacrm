@@ -107,6 +107,7 @@ import { teammateRepliedRecently,
   trimTrailingAssistant,
 } from './human-reply'
 import { applySkillGates } from './skills'
+import { openServiceCase } from '@/lib/shopify/service-cases'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -3262,6 +3263,11 @@ async function handOffToHuman(args: {
   // their configured recipient as before.
   if (hotelReceptionPending || (!willAssign && !alreadyAssigned)) {
     await notifyHandoffTeam(db, accountId, conversationId, fullSummary)
+  }
+  // Stores: a real handoff becomes a SAC case with owner and due time.
+  // Transient faults auto-recover, so they open none. No-op elsewhere.
+  if (!transient && !hotelReceptionPending) {
+    await openServiceCase(db, { accountId, conversationId, summary: fullSummary, assigneeId: handoffAgentId })
   }
 }
 

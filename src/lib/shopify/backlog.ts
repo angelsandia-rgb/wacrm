@@ -3,6 +3,7 @@ import { formatCurrency } from '@/lib/currency'
 import { dispatchSystemAlert, resolveSystemAlert } from '@/lib/observability/alerts'
 import { enqueueOrderNotification } from './notification-jobs'
 import { REQUEST_TTL_MS, requestSummary } from './order-requests'
+import { SERVICE_CASE_ESCALATE_MS, SERVICE_CASE_PREFIX } from './service-cases'
 
 /** A "sí" being placed takes seconds; this long means the worker died mid-way. */
 const STUCK_PROCESSING_MS = 15 * 60_000
@@ -12,12 +13,18 @@ const STUCK_JOB_ATTEMPTS = 8
 
 interface JobRow { account_id: string; event_key: string; attempts: number; created_at: string; last_error: string | null }
 interface RequestRow { id: string; account_id: string; decided_at: string | null }
+interface CaseRow { id: string; account_id: string; created_at: string }
+type Stuck = { requests: string[]; jobs: { key: string; error: string | null }[]; cases: string[] }
 
 /** Pure: per account, what is stuck. Deliberate waits (business hours, cart
  *  inactivity) are not stuck — they say so in last_error. */
-export function stuckByAccount(requests: RequestRow[], jobs: JobRow[], now: Date): Map<string, { requests: string[]; jobs: { key: string; error: string | null }[] }> {
-  const out = new Map<string, { requests: string[]; jobs: { key: string; error: string | null }[] }>()
-  const entry = (id: string) => out.get(id) ?? out.set(id, { requests: [], jobs: [] }).get(id)!
+export function stuckByAccount(requests: RequestRow[], jobs: JobRow[], now: Date, cases: CaseRow[] = []): Map<string, Stuck> {
+  const out = new Map<string, Stuck>()
+  const entry = (id: string) => out.get(id) ?? out.set(id, { requests: [], jobs: [], cases: [] }).get(id)!
+  // SAC escalation: a case nobody closed in 24 h.
+  for (const c of cases) {
+    if (now.getTime() - Date.parse(c.created_at) >= SERVICE_CASE_ESCALATE_MS) entry(c.account_id).cases.push(c.id)
+  }
   for (const r of requests) {
     if (now.getTime() - Date.parse(r.decided_at ?? '') >= STUCK_PROCESSING_MS) entry(r.account_id).requests.push(r.id)
   }
@@ -36,8 +43,8 @@ export function stuckByAccount(requests: RequestRow[], jobs: JobRow[], now: Date
  *    dropped) and owners/admins get one notice to follow up by hand. No
  *    automatic customer message: opt-out, hours and WhatsApp limits stay a
  *    person's call.
- * 2. Requests stuck mid-placement and notices that do not go out raise one
- *    platform alert per account; it resolves itself once clear.
+ * 2. Requests stuck mid-placement, notices that do not go out and SAC cases
+ *    open > 24 h raise one platform alert per account; it resolves itself once clear.
  */
 export async function runShopifyBacklogCheck(db: SupabaseClient, now: Date = new Date()): Promise<{ expired: number; stuckAccounts: number }> {
   const res = { expired: 0, stuckAccounts: 0 }
@@ -66,13 +73,15 @@ export async function runShopifyBacklogCheck(db: SupabaseClient, now: Date = new
     res.expired++
   }
 
-  const [{ data: accounts, error: cfgError }, { data: requests, error: reqError }, { data: jobs, error: jobError }] = await Promise.all([
+  const [{ data: accounts, error: cfgError }, { data: requests, error: reqError }, { data: jobs, error: jobError }, { data: cases, error: caseError }] = await Promise.all([
     db.from('shopify_config').select('account_id'),
     db.from('shopify_order_requests').select('id, account_id, decided_at').eq('status', 'processing'),
     db.from('shopify_notification_jobs').select('account_id, event_key, attempts, created_at, last_error').in('status', ['pending', 'processing']),
+    db.from('tasks').select('id, account_id, created_at').eq('status', 'open').like('title', `${SERVICE_CASE_PREFIX}%`),
   ])
-  if (cfgError || reqError || jobError) throw new Error(`Cannot read Shopify backlog: ${(cfgError ?? reqError ?? jobError)!.message}`)
-  const stuck = stuckByAccount((requests ?? []) as RequestRow[], (jobs ?? []) as JobRow[], now)
+  const readError = cfgError ?? reqError ?? jobError ?? caseError
+  if (readError) throw new Error(`Cannot read Shopify backlog: ${readError.message}`)
+  const stuck = stuckByAccount((requests ?? []) as RequestRow[], (jobs ?? []) as JobRow[], now, (cases ?? []) as CaseRow[])
   for (const { account_id: accountId } of accounts ?? []) {
     const dedupKey = `shopify_backlog:${accountId}`
     const s = stuck.get(accountId as string)
@@ -80,8 +89,8 @@ export async function runShopifyBacklogCheck(db: SupabaseClient, now: Date = new
     res.stuckAccounts++
     await dispatchSystemAlert({
       severity: 'warning', source: 'shopify_backlog', dedupKey, accountId: accountId as string, throttleMinutes: 6 * 60,
-      title: `Pedidos Shopify atascados: ${s.requests.length} solicitud(es) sin resultado, ${s.jobs.length} aviso(s) sin entregar`,
-      detail: { requests: s.requests.slice(0, 10), jobs: s.jobs.slice(0, 10) },
+      title: `Tienda con pendientes atascados: ${s.requests.length} solicitud(es) sin resultado, ${s.jobs.length} aviso(s) sin entregar, ${s.cases.length} caso(s) SAC abiertos > 24 h`,
+      detail: { requests: s.requests.slice(0, 10), jobs: s.jobs.slice(0, 10), cases: s.cases.slice(0, 10) },
     })
   }
   return res
