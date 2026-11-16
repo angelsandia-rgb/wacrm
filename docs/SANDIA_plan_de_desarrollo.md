@@ -5784,3 +5784,17 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
   - una solicitud del formulario sin respuesta en 72 h pasa a `expired` (antes solo dejaba de seleccionarse) y owner/admin reciben un aviso para recuperarla a mano. No hay mensaje automático al cliente: opt-out, horario y límites de WhatsApp siguen siendo decisión de una persona;
   - una alerta de plataforma por cuenta (`shopify_backlog:<cuenta>`, como máximo cada 6 h) cuando una solicitud lleva más de 15 min en `processing` o un aviso sigue sin entregarse tras 2 h u 8 intentos. Las esperas deliberadas (horario, carrito inactivo) no cuentan. La alerta se cierra sola cuando se despeja.
 - Siguen pendientes de C7, en PRs aparte: SAC (responsable, acuse, vencimiento, escalamiento) y conciliación programada de pagos, pedidos y envíos.
+
+### 2026-11-15 — Claude Code: Casa Ceiba, C7 parte 2 — casos de SAC
+
+- #386 (`9d60666`) desplegado: migración 182 aplicada antes, health 200 y registros del cron limpios tras la primera corrida.
+- **SAC sobre la tabla `tasks`, sin migración** (PR de esta entrada). En tiendas conectadas (`shopify_config`), cada derivación real a una persona abre un caso: una tarea «Atender chat: <palabras del cliente>». Las fallas transitorias no abren caso porque se recuperan solas. Otras verticales no cambian.
+  - Responsable: `handoff_agent_id`, o el owner si no hay.
+  - Acuse: el que ya envía la derivación («Un asesor revisará su solicitud y continuará por este chat»).
+  - Vencimiento: 4 h; el cron de recordatorios de tareas avisa al responsable.
+  - Escalamiento: si sigue abierto a las 24 h, entra en la alerta `shopify_backlog` de la cuenta.
+  - Estado y resolución: la tarea abierta o hecha (`completed_at`).
+  - Una sola tarea abierta por contacto: una segunda derivación en el mismo chat se agrega a sus notas.
+- Sin cambio: garantías, reembolsos y cancelaciones con el proveedor siguen derivándose a una persona, y la IA no promete acciones que no ejecutó.
+- Simplificaciones marcadas `ponytail:`: el caso se identifica por el prefijo del título (sin columna `kind`) y las 4 h son de reloj, no de horario laboral.
+- Pendiente de C7: conciliación programada de pagos, pedidos y envíos.

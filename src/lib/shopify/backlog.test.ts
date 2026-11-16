@@ -19,9 +19,16 @@ describe('stuckByAccount', () => {
       ],
       now,
     )
-    expect(out.get('a')).toEqual({ requests: ['r-old'], jobs: [{ key: 'old', error: 'No approved template outside messaging window' }] })
-    expect(out.get('b')).toEqual({ requests: [], jobs: [{ key: 'retried', error: 'boom' }] })
+    expect(out.get('a')).toEqual({ cases: [], requests: ['r-old'], jobs: [{ key: 'old', error: 'No approved template outside messaging window' }] })
+    expect(out.get('b')).toEqual({ cases: [], requests: [], jobs: [{ key: 'retried', error: 'boom' }] })
     // A deliberate wait is not stuck.
     expect(out.has('c')).toBe(false)
+  })
+  it('escalates SAC cases open more than 24 h', () => {
+    const out = stuckByAccount([], [], now, [
+      { id: 'old', account_id: 'a', created_at: ago(25 * 60) },
+      { id: 'new', account_id: 'a', created_at: ago(60) },
+    ])
+    expect(out.get('a')?.cases).toEqual(['old'])
   })
 })
