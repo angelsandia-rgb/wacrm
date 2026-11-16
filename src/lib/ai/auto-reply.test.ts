@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   loadPendingOrderConfirmation: vi.fn(),
   resolveOrderConfirmation: vi.fn(),
   loadPendingOrderRequest: vi.fn(),
+  runOrderNotificationSweep: vi.fn(),
+  inboundContext: { value: { at: '2026-01-02T00:00:00.000Z', quotedAt: null } as { at: string; quotedAt: string | null } | null },
   settleOrderRequest: vi.fn(),
   finishOrderRequest: vi.fn(),
   persistCommercialOptOut: vi.fn(),
@@ -178,11 +180,23 @@ vi.mock('@/lib/shopify/order-confirmation', () => ({
   loadPendingOrderConfirmation: h.loadPendingOrderConfirmation,
   resolveOrderConfirmation: h.resolveOrderConfirmation,
 }))
-vi.mock('@/lib/shopify/order-requests', () => ({
-  loadPendingOrderRequest: h.loadPendingOrderRequest,
-  settleOrderRequest: h.settleOrderRequest,
-  finishOrderRequest: h.finishOrderRequest,
-}))
+vi.mock('@/lib/shopify/order-requests', async (orig) => {
+  const real = await orig<typeof import('@/lib/shopify/order-requests')>()
+  return {
+    // The real linking rules run; only the database reads are stubbed.
+    pickAnsweredRequest: real.pickAnsweredRequest,
+    pendingRequestsPrompt: real.pendingRequestsPrompt,
+    loadPendingOrderRequests: async (...args: unknown[]) => {
+      const value = await h.loadPendingOrderRequest(...args)
+      const list = Array.isArray(value) ? value : value ? [value] : []
+      return list.map((r, i) => ({ ref: `REF${i}`, askDeliveredAt: '2026-01-01T00:00:00.000Z', ...r }))
+    },
+    loadInboundContext: async () => h.inboundContext.value,
+    settleOrderRequest: h.settleOrderRequest,
+    finishOrderRequest: h.finishOrderRequest,
+  }
+})
+vi.mock('@/lib/shopify/notification-jobs', () => ({ runOrderNotificationSweep: h.runOrderNotificationSweep }))
 vi.mock('@/lib/observability/alerts', () => ({
   dispatchSystemAlert: h.dispatchSystemAlert,
   resolveSystemAlert: h.resolveSystemAlert,
@@ -673,6 +687,8 @@ beforeEach(() => {
   h.persistCommercialOptOut.mockReset().mockResolvedValue(undefined)
   h.loadPendingOrderConfirmation.mockReset().mockResolvedValue(null)
   h.loadPendingOrderRequest.mockReset().mockResolvedValue(null)
+  h.runOrderNotificationSweep.mockReset()
+  h.inboundContext.value = { at: '2026-01-02T00:00:00.000Z', quotedAt: null }
   h.settleOrderRequest.mockReset().mockResolvedValue(true)
   h.finishOrderRequest.mockReset().mockResolvedValue(undefined)
   h.resolveOrderConfirmation.mockReset().mockResolvedValue('Pedido guardado')
@@ -2518,6 +2534,55 @@ describe('dispatchInboundToAiReply — autonomous send_catalog', () => {
       expect(h.settleOrderRequest).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'req-1', 'cancelled')
       expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
       expect(h.state.updatePayload ?? {}).not.toHaveProperty('ai_autoreply_disabled')
+    })
+
+    // The server links an answer to ONE delivered purchase, or to none.
+    const second = { id: 'req-2', proposal: { ...stored, items: [{ name: 'Sofá Inflable', qty: 1 }] }, summary: '1 x Sofá Inflable', terms }
+    const confirm = (extra: Record<string, unknown> = {}) => h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, orderConfirmation: 'confirm', ...extra })
+    const askedWhich = () => h.sendMessageToConversation.mock.calls.map((c) => String(c[2]?.contentText ?? '')).filter((t) => /Cuál desea confirmar|me confirma con un/.test(t))
+
+    it('two purchases waiting and a bare "sí": neither is placed and the customer is asked which', async () => {
+      h.loadPendingOrderRequest.mockResolvedValue([second, { id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire', terms }])
+      confirm({ shopifyOrderProposal: modelGuess })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).not.toHaveBeenCalled()
+      expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+      expect(askedWhich()).toEqual([expect.stringContaining('1 x Sofá Inflable')])
+    })
+    it('two purchases waiting and the answer names one: only that one is placed', async () => {
+      h.loadPendingOrderRequest.mockResolvedValue([second, { id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire', terms }])
+      confirm({ orderConfirmationRef: 'REF1' })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', 'processing')
+      expect(askedWhich()).toEqual([])
+    })
+    it('a "sí" to a summary that never reached WhatsApp places nothing: the summary is delivered instead', async () => {
+      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: stored, summary: '2 x Freidora de Aire', terms, askDeliveredAt: null })
+      confirm()
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).not.toHaveBeenCalled()
+      expect(h.createShopifyOrderFromChat).not.toHaveBeenCalled()
+      expect(h.runOrderNotificationSweep).toHaveBeenCalledWith(expect.anything(), 'acct-1', 'request:req-1:ask')
+    })
+    it('a "sí" quoting a message older than the current summary is not consent to it', async () => {
+      h.inboundContext.value = { at: '2026-01-02T00:00:00.000Z', quotedAt: '2025-12-31T00:00:00.000Z' }
+      confirm()
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.settleOrderRequest).not.toHaveBeenCalled()
+      expect(askedWhich()).toHaveLength(1)
+    })
+    it('card chosen in the form: a plain "sí" is placed by card, not cash', async () => {
+      h.loadPendingOrderRequest.mockResolvedValue({ id: 'req-1', proposal: { ...stored, payment: 'card' }, summary: '2 x Freidora de Aire', terms })
+      confirm()
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.createShopifyOrderFromChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ proposal: { ...stored, payment: 'card' } }))
+    })
+    it('the purchase changed in the chat and placed there: the form version it replaced is closed', async () => {
+      h.createShopifyOrderFromChat.mockResolvedValue({ id: 'gid://shopify/Order/9', name: '#1009', draft: false, paymentLink: null })
+      h.generateReply.mockResolvedValue({ text: 'Registro su pedido.', handoff: false, markDealWon: false, moveToStageName: null, shopifyOrderProposal: modelGuess })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.createShopifyOrderFromChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ proposal: modelGuess }))
+      expect(h.settleOrderRequest).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'acct-1', 'req-1', 'superseded')
     })
   })
 

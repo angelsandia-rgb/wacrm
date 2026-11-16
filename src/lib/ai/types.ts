@@ -184,6 +184,8 @@ export interface GenerateResult {
   /** The customer's answer to a pending web COD order confirmation
    *  (see `CONFIRM_SHOPIFY_ORDER_SENTINEL`), or undefined. */
   orderConfirmation?: 'confirm' | 'confirm_card' | 'cancel'
+  /** Reference code of the purchase the answer names, when several wait. */
+  orderConfirmationRef?: string
   /** The id of a saved quick reply the model picked to answer with
    *  verbatim (auto-reply mode only), or null — see
    *  `QUICK_REPLY_SENTINEL_PREFIX`. Unlike every other marker here, this

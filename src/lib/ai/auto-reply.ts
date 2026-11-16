@@ -54,7 +54,8 @@ import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
 import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
-import { finishOrderRequest, loadPendingOrderRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
+import { finishOrderRequest, loadInboundContext, loadPendingOrderRequests, pendingRequestsPrompt, pickAnsweredRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
+import { runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 import { describeOrderStatuses, isOrderStateStage, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
@@ -963,6 +964,9 @@ export async function dispatchInboundToAiReply(
     let shopifyOrders = false
     let shopifyOrderStatus: string | null = null
     let pendingOrder: PendingOrder | null = null
+    // Every purchase of this contact waiting for an answer, and — once the
+    // model has read the message — the single one that answer refers to.
+    let pendingRequests: PendingOrderRequest[] = []
     let pendingRequest: PendingOrderRequest | null = null
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
@@ -1008,7 +1012,7 @@ export async function dispatchInboundToAiReply(
         // A web-form request (no Shopify order yet) waits only when no real order does.
         if (!pendingOrder) {
           try {
-            pendingRequest = await loadPendingOrderRequest(db, accountId, contactId)
+            pendingRequests = await loadPendingOrderRequests(db, accountId, contactId)
           } catch (err) {
             console.error('[ai auto-reply] pending order request lookup failed:', err)
           }
@@ -1198,7 +1202,7 @@ export async function dispatchInboundToAiReply(
       shopifyOrders,
       shopifyOrderStatus,
       pendingOrderConfirmation: pendingOrder?.orderName ?? null,
-      pendingOrderRequest: pendingRequest ? pendingRequest.summary + (pendingRequest.proposal.payment === 'card' ? '; they chose to pay BY CARD in the form' : '') : null,
+      pendingOrderRequest: pendingRequestsPrompt(pendingRequests),
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -1433,8 +1437,19 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, orderConfirmation, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, orderConfirmation, orderConfirmationRef, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
+
+    // The server, not the model, decides which purchase a confirm/cancel
+    // answer is about: only a delivered summary, named when several wait.
+    // Null leaves every purchase untouched and the customer is asked.
+    if (orderConfirmation && pendingRequests.length && !pendingOrder) {
+      try {
+        pendingRequest = pickAnsweredRequest(pendingRequests, orderConfirmationRef, await loadInboundContext(db, conversationId))
+      } catch (err) {
+        console.error('[ai auto-reply] could not link the answer to a purchase:', err)
+      }
+    }
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
     // only teaches SEND_CATALOG_SENTINEL / SEND_RESTAURANT_MENU_SENTINEL
@@ -2566,6 +2581,27 @@ For airport transport, record the guest's request in nota on the relevant existi
     // A form request is placed exactly as validated when it was submitted —
     // never from the model's own reading of the chat.
     let requestPlaced = false
+    if (orderConfirmation && shopifyOrders && !pendingOrder && pendingRequests.length && !pendingRequest) {
+      // The answer could not be tied to one delivered summary. Nothing is
+      // placed or cancelled on a guess: deliver any summary still unsent
+      // (the customer just wrote, so the window is open) and ask.
+      requestPlaced = true
+      try {
+        const unsent = pendingRequests.filter((r) => !r.askDeliveredAt)
+        for (const r of unsent) await runOrderNotificationSweep(db, accountId, `request:${r.id}:ask`)
+        if (unsent.length < pendingRequests.length) {
+          await sendMessageToConversation(db, accountId, {
+            conversationId, messageType: 'text', senderType: 'bot',
+            contentText: pendingRequests.length > 1
+              ? `Para no equivocarnos, tiene ${pendingRequests.length} pedidos por confirmar:\n${pendingRequests.map((r) => `• ${r.summary}`).join('\n')}\n¿Cuál desea confirmar?`
+              : `Para registrar su pedido sin errores, ¿me confirma con un *SÍ* este resumen?\n${pendingRequests[0].summary}`,
+          })
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] could not ask which purchase the answer is about:', err)
+      }
+    }
     if (orderConfirmation && pendingRequest && shopifyOrders) {
       requestPlaced = true
       const request = pendingRequest
@@ -2586,7 +2622,8 @@ For airport transport, record the guest's request in nota on the relevant existi
           const order = request.terms
             ? await createShopifyOrderFromChat({
                 db, accountId, contactId, conversationId, configOwnerUserId, accepted: request.terms,
-                proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' ? 'card' : 'cod' },
+                // The method saved with the purchase wins over a generic marker.
+                proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' || request.proposal.payment === 'card' ? 'card' : 'cod' },
                 handoff,
                 sendText: async (contentText) => {
                   await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
@@ -2621,7 +2658,7 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     if (shopifyOrderProposal && shopifyOrders && !(orderConfirmation && pendingOrder) && !requestPlaced) {
       try {
-        await createShopifyOrderFromChat({
+        const placed = await createShopifyOrderFromChat({
           db, accountId, contactId, conversationId, configOwnerUserId, proposal: shopifyOrderProposal,
           handoff: (summary) => handOffToHuman({
             db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
@@ -2633,6 +2670,11 @@ For airport transport, record the guest's request in nota on the relevant existi
             })
           },
         })
+        // The customer changed their form purchase in the chat and accepted
+        // the new summary: the form version it replaced must not stay
+        // acceptable, or a later "sí" would place it as a second order.
+        // ponytail: with several purchases waiting we cannot tell which one the chat replaced; they expire in 72 h. Link chat edits to purchase_id when chat sales move to this contract.
+        if (placed && pendingRequests.length === 1) await settleOrderRequest(db, accountId, pendingRequests[0].id, 'superseded')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_shopify_order failed:', err)

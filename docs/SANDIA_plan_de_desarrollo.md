@@ -5835,3 +5835,35 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
 - **Este PR** (sin migración): el formulario tiene el apartado «Pago» con «Pago contra entrega» (predeterminado) y «Tarjeta de crédito o débito». La elección viaja como `payment` y se guarda en la propuesta. Con tarjeta, el mensaje de confirmación dice «pago con tarjeta» y un «sí» del cliente genera el link de Recurrente (instrucción nueva en el prompt del sistema; el pedido pagado se crea con el webhook verificado, como hasta ahora).
 - Plantilla: fuera de la ventana de 24 h el mensaje sale por plantilla. Para tarjeta se intenta `confirmar_pedido_tarjeta` y, mientras Meta no la apruebe, se usa `confirmar_pedido` (que dice «pago contra entrega»); la IA aclara y envía el link al confirmar. Falta enviar la plantilla nueva a Meta.
 - Pendiente tras el despliegue (tema): botón «Confirmar pedido» del carrito → `/pages/pedido`, quitar el botón de tarjeta por WhatsApp, el selector de municipio previo y el NIT del carrito (ya están en la página).
+
+### 2026-11-16 — Claude Code: plan de autonomía supervisada, Entregas 0 y 1a
+
+Ejecuta `docs/CASA_CEIBA_PLAN_CLAUDE_AUTONOMIA_Y_EXPERIENCIA_2026-11-15.md` por entregas. Angel autorizó avanzar sin pedir permiso en cada paso (16/11).
+
+**Entrega 0 — revalidación (solo lectura, 16/11):**
+
+| Elemento | Estado | Clase |
+| --- | --- | --- |
+| Producción | Contenedor en `3949bd57` = main remoto (#391); `/api/health` ok | Comprobado |
+| Entradas de compra | Portada y producto: botón «Pedir ahora» → formulario. Carrito y drawer: «Confirmar pedido» → `/pages/pedido`. «Comprar ahora» oculto por CSS. Chat: Cesi. `/checkout` nativo sigue existiendo con contra entrega activa y nada lo enlaza | Comprobado en la tienda el 15/11 |
+| Barrera nativa | Ocultar botones no impide llegar a `/checkout` con un enlace directo; un pedido creado ahí entra a Dropi sin confirmación | Riesgo abierto (Entrega 4) |
+| Dropify | Las dos casillas de sincronización marcadas (visto el 15/11 20:40) | Histórico de ayer |
+| Dropi | Saldo y vigencia del token sin verificar: la sesión de app.dropi.gt estaba cerrada | Pendiente del propietario |
+| Aceptación del proveedor | Ningún pedido ha sido aceptado por Dropi (#1004–#1007 rechazados y cancelados) | Histórico |
+| Plantillas | 13 aprobadas; `confirmar_pedido_tarjeta` enviada a Meta el 15/11, pendiente | Comprobado |
+| Avisos | Propietario con 0 dispositivos push | Comprobado el 15/11 |
+| Catálogo | 41 productos activos y enlazados | Comprobado el 15/11 |
+
+Decisiones de arquitectura: la identidad de compra vive en `shopify_order_requests` (no se crea otro sistema); la cotización sigue saliendo del catálogo sincronizado del CRM en el servidor; del proveedor no hay API oficial de órdenes, así que su aceptación se observa por la etiqueta/nota que deja Dropify.
+
+**Entrega 1a — identidad, versiones e idempotencia de la compra del formulario** (este PR, migración `183_shopify_purchase_identity.sql`; se aplica **antes** de desplegar):
+
+- `purchase_id` (identidad estable), `revision` (versiones inmutables), `idempotency_key` y `ask_delivered_at`. La solicitud y su pregunta por WhatsApp se guardan en una sola transacción (`submit_shopify_order_request`).
+- Dos compras del mismo contacto conviven: se quitó el reemplazo por contacto. Una edición nombra la compra que cambia, cierra la versión anterior y crea la siguiente; una compra en creación o ya creada no se edita.
+- Un envío repetido (doble clic, reintento por red) devuelve la misma solicitud y no vuelve a preguntar. El formulario manda una clave por intento.
+- El servidor decide a qué compra corresponde un «sí»: solo un resumen entregado; con varias compras en espera, la respuesta debe nombrar una (`[[ACTION:confirm_shopify_order:CÓDIGO]]`); una respuesta que cita un mensaje anterior al resumen vigente no cuenta. Si no se puede vincular, no se crea ni cancela nada y se le pregunta al cliente.
+- La cola descarta la pregunta de una versión sustituida, cancelada o ya respondida, y anota cuándo se entregó.
+- El método de pago guardado con la compra prevalece sobre el marcador del modelo. Si el cliente cambia el pedido por chat y se crea ahí, la versión del formulario queda cerrada.
+- Pruebas: `scripts/test-shopify-purchase-identity.sh` ejecuta 15 casos de concurrencia contra un Postgres real (doble envío, dos pestañas, dos workers, edición, otra cuenta). Pruebas unitarias de vinculación, marcadores y cola.
+
+**Queda para 1b:** llevar la venta directa por chat al mismo contrato (identidad y condiciones durables) y sustituir el bloqueo por conversación por uno por compra. La edición de una compra desde la página web llega con la Entrega 4 (el servidor ya la admite).

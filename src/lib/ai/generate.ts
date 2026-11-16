@@ -27,9 +27,7 @@ import {
   CREATE_QUOTE_SENTINEL_SUFFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX,
-  CONFIRM_SHOPIFY_ORDER_SENTINEL,
-  CANCEL_SHOPIFY_ORDER_SENTINEL,
-  CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL,
+  SHOPIFY_ORDER_ANSWER_RE,
   QUICK_REPLY_SENTINEL_PREFIX,
   QUICK_REPLY_SENTINEL_SUFFIX,
   RECORD_RESERVATION_SENTINEL_PREFIX,
@@ -244,10 +242,14 @@ export function parseGeneration(
   const shopifyOrderProposal = (shopifyOrderMatch && parseShopifyOrderPayload(shopifyOrderMatch[1])) || undefined
 
   // Cancel wins over confirm: shipping something the customer refused is the costly mistake.
-  const orderConfirmation: GenerateResult['orderConfirmation'] = raw.includes(CANCEL_SHOPIFY_ORDER_SENTINEL)
+  const orderAnswers = [...raw.matchAll(SHOPIFY_ORDER_ANSWER_RE)]
+  const orderAnswer = (kind: string) => orderAnswers.find((m) => m[1] === kind)
+  const orderConfirmation: GenerateResult['orderConfirmation'] = orderAnswer('cancel_shopify_order')
     ? 'cancel'
-    : raw.includes(CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL) ? 'confirm_card'
-    : raw.includes(CONFIRM_SHOPIFY_ORDER_SENTINEL) ? 'confirm' : undefined
+    : orderAnswer('confirm_shopify_order_card') ? 'confirm_card'
+    : orderAnswer('confirm_shopify_order') ? 'confirm' : undefined
+  // The purchase the winning marker names (several can wait at once).
+  const orderConfirmationRef = (orderAnswer('cancel_shopify_order') ?? orderAnswer('confirm_shopify_order_card') ?? orderAnswer('confirm_shopify_order'))?.[2]?.toUpperCase()
 
   const quickReplyMatch = raw.match(
     new RegExp(
@@ -344,9 +346,7 @@ export function parseGeneration(
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(shopifyOrderMatch ? shopifyOrderMatch[0] : '', '')
-    .split(CONFIRM_SHOPIFY_ORDER_SENTINEL).join('')
-    .split(CANCEL_SHOPIFY_ORDER_SENTINEL).join('')
-    .split(CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL).join('')
+    .replace(SHOPIFY_ORDER_ANSWER_RE, '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
     .replace(RESERVATION_MARKER_RE, '') // strips EVERY record_reservation marker, not just the first
     .replace(apptActionMatch ? apptActionMatch[0] : '', '')
@@ -421,6 +421,7 @@ export function parseGeneration(
     quoteProposal,
     shopifyOrderProposal,
     orderConfirmation,
+    orderConfirmationRef,
     quickReplyId,
     reservationProposals,
     appointmentAction,

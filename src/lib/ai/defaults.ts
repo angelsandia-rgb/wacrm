@@ -188,6 +188,8 @@ export const CONFIRM_SHOPIFY_ORDER_SENTINEL = '[[ACTION:confirm_shopify_order]]'
 export const CANCEL_SHOPIFY_ORDER_SENTINEL = '[[ACTION:cancel_shopify_order]]'
 /** Confirms a pending web order REQUEST but pays by card (Recurrente link). */
 export const CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL = '[[ACTION:confirm_shopify_order_card]]'
+/** The same three markers naming one purchase: `[[ACTION:confirm_shopify_order:AB12]]`. */
+export const SHOPIFY_ORDER_ANSWER_RE = /\[\[ACTION:(confirm_shopify_order_card|confirm_shopify_order|cancel_shopify_order)(?::([A-Za-z0-9]{4}))?\]\]/g
 
 /**
  * Sentinel prefix/suffix the model is instructed to wrap a quick
@@ -684,6 +686,8 @@ export function buildSystemPrompt(args: {
           `If the request says they chose to pay BY CARD in the form, a plain confirmation ("sí") means card: use the card marker, and use the cash marker only if they now ask to pay on delivery. ` +
           `If they clearly say they no longer want it, accept it kindly (nothing was charged or shipped, no advisor is needed) and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
           `If they want to change something (product, quantity, address, phone), collect the change, send a new full summary and, once they confirm that new summary, use the create_shopify_order marker instead of these markers. If their message is about something else, answer that first. ` +
+          `If SEVERAL purchases are listed, each has a reference code in brackets and they are independent: a bare "sí" does not say which one. Ask which purchase they mean (name the products, never the code) unless their message makes it unmistakable, and put that purchase's code inside the marker, e.g. ${CONFIRM_SHOPIFY_ORDER_SENTINEL.replace(']]', ':AB12]]')}. One purchase per message. ` +
+          `A "gracias", an address, an emoji or an answer to a different question is not a confirmation: no marker. ` +
           `Never invent an order number. Use one of these markers at most once and never mention them to the customer.`,
       )
     }
