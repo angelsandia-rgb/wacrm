@@ -18,8 +18,9 @@
   var script = document.currentScript
   if (!script) return
   var account = script.getAttribute('data-account')
-  // The store's WhatsApp (digits with country code): where "Continuar por WhatsApp" opens.
-  var whatsapp = (script.getAttribute('data-whatsapp') || '').replace(/\D/g, '')
+  // The store's WhatsApp: the server sends it with the answer; data-whatsapp on
+  // the script tag overrides it.
+  var whatsappOverride = (script.getAttribute('data-whatsapp') || '').replace(/\D/g, '')
   var endpoint = new URL('/api/shopify/order-form?account=' + encodeURIComponent(account || ''), script.src).href
   // Official municipios per departamento (340). A list instead of free text:
   // a mistyped municipio is what Dropi rejects after the order already exists.
@@ -193,6 +194,7 @@
           var ref = res.body.ref ? ' Su referencia es ' + res.body.ref + '.' : ''
           show('sof-ok', 'Guardamos su pedido.' + ref + ' Le enviamos el resumen al ' + String(data.get('phone')).trim() + ' por WhatsApp: acéptelo ahí con un SÍ.')
           submit.style.display = 'none'
+          var whatsapp = whatsappOverride || String(res.body.whatsapp || '').replace(/\D/g, '')
           if (whatsapp) {
             // Opening the chat lets the summary arrive at once, and is the way
             // back if the message does not show up.

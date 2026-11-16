@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   try {
     const result = await submitOrderForm(supabaseAdmin(), accountId, input)
     if ('error' in result) return reply({ error: result.error }, result.status)
-    return reply({ ok: true, ref: result.ref })
+    return reply({ ok: true, ref: result.ref, whatsapp: result.whatsapp })
   } catch (err) {
     console.error(`[order form] account ${accountId} failed:`, err instanceof Error ? err.message : err)
     return reply({ error: 'No pudimos registrar su pedido. Intente de nuevo o escríbanos por WhatsApp.' }, 500)
