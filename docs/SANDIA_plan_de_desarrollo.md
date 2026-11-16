@@ -5880,3 +5880,15 @@ PR apilado sobre el de la Entrega 1a. **Sin migración.**
 - Tres cosas distintas quedan separadas: geografía válida (esta lista), cobertura comercial (`shipping_coverage`) y localidad aceptada por la transportadora (solo se sabe cuando el proveedor toma el pedido; sin API oficial, no se afirma).
 
 Pendiente de la Entrega 3: sincronización programada y observable de catálogo/precio/existencias con umbral de antigüedad, variantes reales, y consolidar cantidades de líneas con la misma variante.
+
+### 2026-11-16 — Claude Code: Entrega 4a, «Continuar por WhatsApp» y recuperación
+
+#392 (Entrega 1a) y #393 (Entrega 3a) fusionados con el «sí» de Angel. **Este PR, sin migración:**
+
+- El botón del formulario dice **«Continuar por WhatsApp»** y una frase explica que falta aceptar el resumen ahí, sin volver a escribir los datos.
+- Al enviar, el cliente ve su **referencia**, el número al que se le escribe, un botón **«Abrir WhatsApp»** (con la referencia en el mensaje) y «¿No es su número? Cambiarlo». El tema pasa el número de la tienda con `data-whatsapp`.
+- **Recuperación:** si el resumen no pudo salir (sin plantilla aprobada fuera de la ventana de 24 h), sale en cuanto el cliente escribe; para eso sirve el botón.
+- **Tarjeta:** se quitó el respaldo a la plantilla de contra entrega. Una compra con tarjeta nunca se describe como pago contra entrega; mientras Meta aprueba `confirmar_pedido_tarjeta`, el resumen espera el primer mensaje del cliente y sale como texto.
+- **Cantidades:** una fracción se rechaza con su explicación (antes se redondeaba en silencio). Dos líneas del mismo producto se suman antes de revisar existencias y el límite.
+
+Pendiente de la Entrega 4: validación campo por campo, resumen con foto y edición inmediata, acceso seguro al pedido sin cuenta, y cerrar la ruta nativa `/checkout`.

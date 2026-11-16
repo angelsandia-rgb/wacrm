@@ -68,7 +68,13 @@ describe('parseOrderForm', () => {
     expect(parseOrderForm({ ...form, municipio: 'Guantemala' })).toEqual({ error: expect.stringContaining('Elija su municipio') })
     // Stored as the canonical names, whatever was typed.
     expect(parseOrderForm({ ...form, municipio: 'san jose pinula', departamento: 'guatemala' })).toMatchObject({ municipio: 'San José Pinula', departamento: 'Guatemala' })
-    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 99 }] })).toEqual({ error: expect.stringContaining('cantidades') })
+    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 99 }] })).toEqual({ error: expect.stringContaining('hasta 20 unidades') })
+    // A fraction is refused with its reason, never rounded down in silence.
+    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 1.5 }] })).toEqual({ error: expect.stringContaining('número entero') })
+    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 0 }] })).toEqual({ error: expect.stringContaining('número entero') })
+    // The same product on two lines is one line; the limit applies to the sum.
+    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 2 }, { variantId: 'gid://shopify/ProductVariant/7', quantity: 3 }] })).toMatchObject({ items: [{ variantId: '7', quantity: 5 }] })
+    expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 15 }, { variantId: '7', quantity: 15 }] })).toEqual({ error: expect.stringContaining('hasta 20 unidades') })
     expect(parseOrderForm({ ...form, items: [{ variantId: 'abc', quantity: 1 }] })).toEqual({ error: expect.stringContaining('productos') })
   })
 })
@@ -76,7 +82,7 @@ describe('parseOrderForm', () => {
 describe('submitOrderForm', () => {
   it('saves a validated request and asks on WhatsApp — no Shopify order is created', async () => {
     const res = await submitOrderForm(db(), 'a1', parseOrderForm(form) as never)
-    expect(res).toEqual({ ok: true })
+    expect(res).toEqual({ ok: true, ref: 'P1' })
     // The request and its WhatsApp question go to the database together.
     expect(m.rpcs).toHaveLength(1)
     expect(m.rpcs[0]).toMatchObject({
@@ -95,15 +101,22 @@ describe('submitOrderForm', () => {
     expect(m.updates).toEqual([])
     expect(sweep).toHaveBeenCalledWith(expect.anything(), 'a1', 'request:r1:ask')
   })
+  it('card chosen: the question says card and never falls back to the cash template', async () => {
+    await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, payment: 'card' }) as never)
+    const ask = m.rpcs[0].p_job_payload as { text: string; template: { names: string[] } }
+    expect(ask.template.names).toEqual(['confirmar_pedido_tarjeta'])
+    expect(ask.text).toContain('pago con tarjeta')
+    expect(ask.text).not.toContain('contra entrega')
+  })
   it('a repeated submit (same key) asks only once', async () => {
     m.rpcResults = [{ data: { id: 'r1', purchaseId: 'p1', revision: 1, created: false }, error: null }]
-    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true })
+    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1' })
     expect(m.rpcs[0]).toMatchObject({ p_idempotency_key: 'abcdef123456' })
     expect(sweep).not.toHaveBeenCalled()
   })
   it('a submit that raced itself is retried once and returns the winner', async () => {
     m.rpcResults = [{ data: null, error: { message: 'Concurrent submit' } }, { data: { id: 'r1', purchaseId: 'p1', revision: 1, created: false }, error: null }]
-    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true })
+    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1' })
     expect(m.rpcs).toHaveLength(2)
   })
   it('an edit names its purchase; one already in creation is refused, not duplicated', async () => {

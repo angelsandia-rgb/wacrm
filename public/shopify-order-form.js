@@ -18,6 +18,8 @@
   var script = document.currentScript
   if (!script) return
   var account = script.getAttribute('data-account')
+  // The store's WhatsApp (digits with country code): where "Continuar por WhatsApp" opens.
+  var whatsapp = (script.getAttribute('data-whatsapp') || '').replace(/\D/g, '')
   var endpoint = new URL('/api/shopify/order-form?account=' + encodeURIComponent(account || ''), script.src).href
   // Official municipios per departamento (340). A list instead of free text:
   // a mistyped municipio is what Dropi rejects after the order already exists.
@@ -63,6 +65,7 @@
     '.sof h3{margin:18px 0 2px;font-size:16px}.sof .sof-note{margin:0 0 8px;font-size:13px}' +
     '.sof .sof-pay{display:flex;align-items:flex-start;gap:10px;margin:0 0 8px;padding:12px;border:1px solid #bbb;border-radius:8px;font-weight:400;cursor:pointer}' +
     '.sof .sof-pay input{width:auto;margin:3px 0 0}.sof .sof-pay b{display:block}.sof .sof-pay small{color:#555}' +
+    '.sof .sof-wa{display:block;margin-top:12px;padding:13px;border-radius:8px;background:#25D366;color:#fff;font-weight:700;text-align:center;text-decoration:none}' +
     '.sof .sof-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}'
 
   function el(tag, attrs, text) {
@@ -108,9 +111,9 @@
     var form = el('form', { novalidate: '' })
     box.appendChild(el('h2', { id: 'sof-title' }, mount ? 'Confirmar pedido' : 'Pedir con pago contra entrega'))
     var title = cartItems ? 'Su carrito (' + cartItems.length + (cartItems.length === 1 ? ' producto)' : ' productos)') : button.getAttribute('data-title') || 'Su pedido'
-    box.appendChild(el('p', {}, title + '. Le escribimos por WhatsApp para confirmarlo con estos mismos datos.'))
+    box.appendChild(el('p', {}, title + '. Falta un paso: le enviamos el resumen por WhatsApp y usted lo acepta ahí. No tiene que volver a escribir sus datos.'))
     if (summary) box.appendChild(summary)
-    if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', value: '1', inputmode: 'numeric', required: '' })
+    if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', step: '1', value: '1', inputmode: 'numeric', required: '' })
     field(form, 'Nombre completo', 'fullName', { autocomplete: 'name', required: '' })
     field(form, 'Teléfono (WhatsApp)', 'phone', { type: 'tel', autocomplete: 'tel-national', inputmode: 'numeric', placeholder: '8 dígitos', required: '' })
     field(form, 'Dirección: casa, calle, colonia o aldea, número', 'address', { autocomplete: 'street-address', required: '' })
@@ -139,7 +142,7 @@
     var hp = el('div', { class: 'sof-hp', 'aria-hidden': 'true' })
     hp.appendChild(el('input', { name: 'website', tabindex: '-1', autocomplete: 'off' }))
     form.appendChild(hp)
-    var submit = el('button', { type: 'submit' }, mount ? 'Confirmar pedido' : 'Enviar pedido')
+    var submit = el('button', { type: 'submit' }, 'Continuar por WhatsApp')
     var close = el('button', { type: 'button', class: 'sof-x' }, 'Cancelar')
     var msg = el('div', { role: 'status', 'aria-live': 'polite' })
     form.appendChild(submit)
@@ -163,7 +166,8 @@
 
     // One key per opened form: a retry after a network failure, or a double
     // click, is the same purchase and must not ask twice.
-    var idempotencyKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12)
+    var newKey = function () { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12) }
+    var idempotencyKey = newKey()
     form.addEventListener('submit', function (e) {
       e.preventDefault()
       var data = new FormData(form)
@@ -175,7 +179,7 @@
       fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
+          items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) }],
           fullName: data.get('fullName'), phone: data.get('phone'), address: data.get('address'), reference: data.get('reference'),
           departamento: data.get('departamento'), municipio: data.get('municipio'), nit: data.get('nit'), payment: data.get('payment'), idempotencyKey: idempotencyKey, website: data.get('website'),
         }),
@@ -184,8 +188,30 @@
           if (!res.ok) { submit.disabled = false; return show('sof-err', res.body.error || 'No pudimos enviar su pedido. Intente de nuevo.') }
           form.querySelectorAll('input,select,button[type=submit]').forEach(function (i) { i.disabled = true })
           close.textContent = 'Cerrar'
+          // The purchase is saved on the server: the cart is no longer needed to recover it.
           if (cartItems) fetch('/cart/clear.js', { method: 'POST' }).catch(function () {})
-          show('sof-ok', '¡Listo! Le escribimos por WhatsApp para confirmar su pedido. Su número de pedido llega al confirmar.')
+          var ref = res.body.ref ? ' Su referencia es ' + res.body.ref + '.' : ''
+          show('sof-ok', 'Guardamos su pedido.' + ref + ' Le enviamos el resumen al ' + String(data.get('phone')).trim() + ' por WhatsApp: acéptelo ahí con un SÍ.')
+          submit.style.display = 'none'
+          if (whatsapp) {
+            // Opening the chat lets the summary arrive at once, and is the way
+            // back if the message does not show up.
+            var openChat = el('a', { class: 'sof-wa', target: '_blank', rel: 'noopener',
+              href: 'https://wa.me/' + whatsapp + '?text=' + encodeURIComponent('Hola, hice un pedido en la tienda' + (res.body.ref ? ' (referencia ' + res.body.ref + ')' : '') + '. Quiero confirmarlo.') }, 'Abrir WhatsApp')
+            msg.parentNode.insertBefore(openChat, msg.nextSibling)
+          }
+          var change = el('button', { type: 'button', class: 'sof-x' }, '¿No es su número? Cambiarlo')
+          change.addEventListener('click', function () {
+            form.querySelectorAll('input,select,button[type=submit]').forEach(function (i) { i.disabled = false })
+            submit.style.display = ''
+            form.querySelectorAll('.sof-wa').forEach(function (a) { a.remove() })
+            change.remove()
+            show('', '')
+            // A corrected number is a new submit; the first one simply expires unanswered.
+            idempotencyKey = newKey()
+            form.querySelector('[name="phone"]').focus()
+          })
+          form.appendChild(change)
         })
         .catch(function () { submit.disabled = false; show('sof-err', 'Sin conexión. Intente de nuevo.') })
     })
