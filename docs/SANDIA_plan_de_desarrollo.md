@@ -5810,3 +5810,13 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
 - Prueba de solo lectura contra producción: 7 pedidos, todos cancelados, sin hallazgos. Al ignorar las cancelaciones solo aparece #1001, una prueba antigua sin negocio, como se esperaba.
 - No cubre (`ponytail:`) un cobro de Recurrente pagado cuyo webhook se pierda del todo: no guardamos el id del checkout. Recurrente reintenta sus webhooks durante días (Svix) y un pago retenido ya alerta. Guardar el id si crece el volumen con tarjeta.
 - Con esto C7 queda cubierto salvo Effi, que sigue sin implementarse por decisión.
+
+### 2026-11-15 (noche) — Claude Code: Casa Ceiba, formulario público, municipio en lista y pedido del carrito
+
+- **Tienda (tema vivo, sin PR):** portada rehecha para vender (`sections/cc-home.liquid`), cobertura «toda Guatemala» en portada, barra, título y política de envío, y la política ya describe el modo actual (el pedido entra a preparación al recibirse). El formulario propio (#381) es **público** desde hoy: se quitó la compuerta `?sandia_form=1`; los botones «Pedir ahora» de la portada y de la página de producto lo abren. Respaldos y fuentes en `output/casa-ceiba-tema/`.
+- **Cesi:** prompt 80/20 (cierre asumido, un rescate ante «lo voy a pensar», dos cierres por objeción). Sigue sin inventar escasez ni reseñas. Respaldo en `docs/prompts/`.
+- **Este PR** (`public/shopify-order-form.js`, sin migración):
+  - El municipio pasa de texto libre a **lista dependiente del departamento** (22 departamentos, 340 municipios oficiales). Un municipio mal escrito era lo que Dropi rechazaba con el pedido ya creado (#1004, #1007).
+  - Un botón con `data-sandia-cart` pide **todo el carrito** (lee `/cart.js`, hasta 10 líneas) y lo vacía al enviarse. Permite quitar contra entrega del checkout nativo sin dejar el carrito sin salida.
+  - Corrección: «San Pedro Sacatepéquez, San Marcos» se rechazaba porque el nombre también existe en Guatemala. Lo encontró la prueba nueva, que comprueba que toda opción de la lista pasa la validación del servidor.
+- Pendiente tras el despliegue: cambiar en el tema el botón «Pagar» del carrito por el formulario, ocultar «Comprar ahora» y desactivar «Pago contra entrega» en Shopify. Sigue sin probarse un pedido real de punta a punta (billetera de Dropi en Q0, token vence el 17/11).

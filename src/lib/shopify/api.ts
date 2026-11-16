@@ -291,7 +291,8 @@ export function municipioMatchesDepartamento(municipio: string, departamento: st
   const key = municipio.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
   if (!GUATEMALA_MUNICIPIOS.has(key)) return true
   const code = departamentoCode(departamento)
-  return code === undefined || code === 'GUA'
+  // San Pedro Sacatepéquez is also a municipio of San Marcos.
+  return code === undefined || code === 'GUA' || (key === 'san pedro sacatepequez' && code === 'SMA')
 }
 
 export function departamentoCode(name: string): string | undefined {

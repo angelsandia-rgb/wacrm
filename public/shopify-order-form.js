@@ -6,7 +6,9 @@
  *   <script src="https://chatsandia.com/shopify-order-form.js" data-account="ACCOUNT_UUID" defer></script>
  *
  * The variant is the one selected in the product form (input name="id"), or
- * data-variant-id on the button. Submitting saves an order REQUEST in the
+ * data-variant-id on the button. A button with data-sandia-cart orders the
+ * whole cart instead (cart page / drawer) and empties it once sent.
+ * Submitting saves an order REQUEST in the
  * CRM, which asks the customer on WhatsApp; the Shopify order is created
  * only after their "sí" (or card payment). No cookies, no tracking.
  */
@@ -15,9 +17,33 @@
   if (!script) return
   var account = script.getAttribute('data-account')
   var endpoint = new URL('/api/shopify/order-form?account=' + encodeURIComponent(account || ''), script.src).href
-  var DEPARTAMENTOS = ['Alta Verapaz', 'Baja Verapaz', 'Chimaltenango', 'Chiquimula', 'El Progreso', 'Escuintla', 'Guatemala',
-    'Huehuetenango', 'Izabal', 'Jalapa', 'Jutiapa', 'Petén', 'Quetzaltenango', 'Quiché', 'Retalhuleu', 'Sacatepéquez',
-    'San Marcos', 'Santa Rosa', 'Sololá', 'Suchitepéquez', 'Totonicapán', 'Zacapa']
+  // Official municipios per departamento (340). A list instead of free text:
+  // a mistyped municipio is what Dropi rejects after the order already exists.
+  var MUNICIPIOS = {
+    'Alta Verapaz': ['Cahabón', 'Chahal', 'Chisec', 'Cobán', 'Fray Bartolomé de las Casas', 'Lanquín', 'Panzós', 'Raxruhá', 'San Cristóbal Verapaz', 'San Juan Chamelco', 'San Pedro Carchá', 'Santa Catalina La Tinta', 'Santa Cruz Verapaz', 'Senahú', 'Tactic', 'Tamahú', 'Tucurú'],
+    'Baja Verapaz': ['Cubulco', 'El Chol', 'Granados', 'Purulhá', 'Rabinal', 'Salamá', 'San Jerónimo', 'San Miguel Chicaj'],
+    'Chimaltenango': ['Acatenango', 'Chimaltenango', 'Comalapa', 'El Tejar', 'Parramos', 'Patzicía', 'Patzún', 'Pochuta', 'San Andrés Itzapa', 'San José Poaquil', 'San Martín Jilotepeque', 'Santa Apolonia', 'Santa Cruz Balanyá', 'Tecpán Guatemala', 'Yepocapa', 'Zaragoza'],
+    'Chiquimula': ['Camotán', 'Chiquimula', 'Concepción Las Minas', 'Esquipulas', 'Ipala', 'Jocotán', 'Olopa', 'Quezaltepeque', 'San Jacinto', 'San José La Arada', 'San Juan Ermita'],
+    'El Progreso': ['El Jícaro', 'Guastatoya', 'Morazán', 'San Agustín Acasaguastlán', 'San Antonio La Paz', 'San Cristóbal Acasaguastlán', 'Sanarate', 'Sansare'],
+    'Escuintla': ['Escuintla', 'Guanagazapa', 'Iztapa', 'La Democracia', 'La Gomera', 'Masagua', 'Nueva Concepción', 'Palín', 'San José', 'San Vicente Pacaya', 'Santa Lucía Cotzumalguapa', 'Sipacate', 'Siquinalá', 'Tiquisate'],
+    'Guatemala': ['Amatitlán', 'Chinautla', 'Chuarrancho', 'Fraijanes', 'Guatemala', 'Mixco', 'Palencia', 'San José del Golfo', 'San José Pinula', 'San Juan Sacatepéquez', 'San Miguel Petapa', 'San Pedro Ayampuc', 'San Pedro Sacatepéquez', 'San Raymundo', 'Santa Catarina Pinula', 'Villa Canales', 'Villa Nueva'],
+    'Huehuetenango': ['Aguacatán', 'Barillas', 'Chiantla', 'Colotenango', 'Concepción Huista', 'Cuilco', 'Huehuetenango', 'Ixtahuacán', 'Jacaltenango', 'La Democracia', 'La Libertad', 'Malacatancito', 'Nentón', 'Petatán', 'San Antonio Huista', 'San Gaspar Ixchil', 'San Juan Atitán', 'San Juan Ixcoy', 'San Mateo Ixtatán', 'San Miguel Acatán', 'San Pedro Necta', 'San Rafael La Independencia', 'San Rafael Petzal', 'San Sebastián Coatán', 'San Sebastián Huehuetenango', 'Santa Ana Huista', 'Santa Bárbara', 'Santa Eulalia', 'Santiago Chimaltenango', 'Soloma', 'Tectitán', 'Todos Santos Cuchumatán', 'Unión Cantinil'],
+    'Izabal': ['El Estor', 'Livingston', 'Los Amates', 'Morales', 'Puerto Barrios'],
+    'Jalapa': ['Jalapa', 'Mataquescuintla', 'Monjas', 'San Carlos Alzatate', 'San Luis Jilotepeque', 'San Manuel Chaparrón', 'San Pedro Pinula'],
+    'Jutiapa': ['Agua Blanca', 'Asunción Mita', 'Atescatempa', 'Comapa', 'Conguaco', 'El Adelanto', 'El Progreso', 'Jalpatagua', 'Jerez', 'Jutiapa', 'Moyuta', 'Pasaco', 'Quesada', 'San José Acatempa', 'Santa Catarina Mita', 'Yupiltepeque', 'Zapotitlán'],
+    'Petén': ['Dolores', 'El Chal', 'Flores', 'La Libertad', 'Las Cruces', 'Melchor de Mencos', 'Poptún', 'San Andrés', 'San Benito', 'San Francisco', 'San José', 'San Luis', 'Santa Ana', 'Sayaxché'],
+    'Quetzaltenango': ['Almolonga', 'Cabricán', 'Cajolá', 'Cantel', 'Coatepeque', 'Colomba', 'Concepción Chiquirichapa', 'El Palmar', 'Flores Costa Cuca', 'Génova', 'Huitán', 'La Esperanza', 'Olintepeque', 'Ostuncalco', 'Palestina de Los Altos', 'Quetzaltenango', 'Salcajá', 'San Carlos Sija', 'San Francisco La Unión', 'San Martín Sacatepéquez', 'San Mateo', 'San Miguel Sigüilá', 'Sibilia', 'Zunil'],
+    'Quiché': ['Canillá', 'Chajul', 'Chicamán', 'Chiché', 'Chichicastenango', 'Chinique', 'Cunén', 'Ixcán', 'Joyabaj', 'Nebaj', 'Pachalum', 'Patzité', 'Sacapulas', 'San Andrés Sajcabajá', 'San Antonio Ilotenango', 'San Bartolomé Jocotenango', 'San Juan Cotzal', 'San Pedro Jocopilas', 'Santa Cruz del Quiché', 'Uspantán', 'Zacualpa'],
+    'Retalhuleu': ['Champerico', 'El Asintal', 'Nuevo San Carlos', 'Retalhuleu', 'San Andrés Villa Seca', 'San Felipe', 'San Martín Zapotitlán', 'San Sebastián', 'Santa Cruz Muluá'],
+    'Sacatepéquez': ['Alotenango', 'Antigua Guatemala', 'Ciudad Vieja', 'Jocotenango', 'Magdalena Milpas Altas', 'Pastores', 'San Antonio Aguas Calientes', 'San Bartolomé Milpas Altas', 'San Lucas Sacatepéquez', 'San Miguel Dueñas', 'Santa Catarina Barahona', 'Santa Lucía Milpas Altas', 'Santa María de Jesús', 'Santiago Sacatepéquez', 'Santo Domingo Xenacoj', 'Sumpango'],
+    'San Marcos': ['Ayutla', 'Catarina', 'Comitancillo', 'Concepción Tutuapa', 'El Quetzal', 'El Rodeo', 'El Tumbador', 'Esquipulas Palo Gordo', 'Ixchiguán', 'La Blanca', 'La Reforma', 'Malacatán', 'Nuevo Progreso', 'Ocós', 'Pajapita', 'Río Blanco', 'San Antonio Sacatepéquez', 'San Cristóbal Cucho', 'San José Ojetenam', 'San Lorenzo', 'San Marcos', 'San Miguel Ixtahuacán', 'San Pablo', 'San Pedro Sacatepéquez', 'San Rafael Pie de la Cuesta', 'Sibinal', 'Sipacapa', 'Tacaná', 'Tajumulco', 'Tejutla'],
+    'Santa Rosa': ['Barberena', 'Casillas', 'Chiquimulilla', 'Cuilapa', 'Guazacapán', 'Nueva Santa Rosa', 'Oratorio', 'Pueblo Nuevo Viñas', 'San Juan Tecuaco', 'San Rafael Las Flores', 'Santa Cruz Naranjo', 'Santa María Ixhuatán', 'Santa Rosa de Lima', 'Taxisco'],
+    'Sololá': ['Concepción', 'Nahualá', 'Panajachel', 'San Andrés Semetabaj', 'San Antonio Palopó', 'San José Chacayá', 'San Juan La Laguna', 'San Lucas Tolimán', 'San Marcos La Laguna', 'San Pablo La Laguna', 'San Pedro La Laguna', 'Santa Catarina Ixtahuacán', 'Santa Catarina Palopó', 'Santa Clara La Laguna', 'Santa Cruz La Laguna', 'Santa Lucía Utatlán', 'Santa María Visitación', 'Santiago Atitlán', 'Sololá'],
+    'Suchitepéquez': ['Chicacao', 'Cuyotenango', 'Mazatenango', 'Patulul', 'Pueblo Nuevo', 'Río Bravo', 'Samayac', 'San Antonio Suchitepéquez', 'San Bernardino', 'San Francisco Zapotitlán', 'San Gabriel', 'San José El Ídolo', 'San José La Máquina', 'San Juan Bautista', 'San Lorenzo', 'San Miguel Panán', 'San Pablo Jocopilas', 'Santa Bárbara', 'Santo Domingo Suchitepéquez', 'Santo Tomás La Unión', 'Zunilito'],
+    'Totonicapán': ['Momostenango', 'San Andrés Xecul', 'San Bartolo', 'San Cristóbal Totonicapán', 'San Francisco El Alto', 'Santa Lucía La Reforma', 'Santa María Chiquimula', 'Totonicapán'],
+    'Zacapa': ['Cabañas', 'Estanzuela', 'Gualán', 'Huité', 'La Unión', 'Río Hondo', 'San Diego', 'San Jorge', 'Teculután', 'Usumatlán', 'Zacapa'],
+  }
+  var DEPARTAMENTOS = Object.keys(MUNICIPIOS)
 
   var css = '.sof-back{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:2147483000}' +
     '@media(min-width:640px){.sof-back{align-items:center}}' +
@@ -45,12 +71,17 @@
     var input = el(attrs.tag || 'input', Object.assign({ id: id, name: name }, attrs.tag ? {} : attrs))
     if (attrs.tag === 'select') {
       input.required = true
-      input.appendChild(el('option', { value: '' }, 'Elija su departamento'))
-      DEPARTAMENTOS.forEach(function (d) { input.appendChild(el('option', { value: d }, d)) })
+      fill(input, attrs.placeholder, attrs.options || [])
     }
     wrap.appendChild(input)
     form.appendChild(wrap)
     return wrap
+  }
+
+  function fill(select, placeholder, options) {
+    select.textContent = ''
+    select.appendChild(el('option', { value: '' }, placeholder))
+    options.forEach(function (o) { select.appendChild(el('option', { value: o }, o)) })
   }
 
   function selectedVariant(button) {
@@ -60,22 +91,28 @@
     return input && input.value
   }
 
-  function open(button) {
-    var variantId = selectedVariant(button)
+  // cartItems: the cart's lines when the button orders the whole cart.
+  function open(button, cartItems) {
+    var variantId = cartItems ? null : selectedVariant(button)
     var back = el('div', { class: 'sof-back' })
     var box = el('div', { class: 'sof', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sof-title' })
     var form = el('form', { novalidate: '' })
     box.appendChild(el('h2', { id: 'sof-title' }, 'Pedir con pago contra entrega'))
-    box.appendChild(el('p', {}, (button.getAttribute('data-title') || 'Su pedido') + '. Le escribimos por WhatsApp para confirmarlo; puede pagar en efectivo al recibir o con tarjeta.'))
-    field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', value: '1', inputmode: 'numeric', required: '' })
+    var title = cartItems ? 'Su carrito (' + cartItems.length + (cartItems.length === 1 ? ' producto)' : ' productos)') : button.getAttribute('data-title') || 'Su pedido'
+    box.appendChild(el('p', {}, title + '. Le escribimos por WhatsApp para confirmarlo; puede pagar en efectivo al recibir o con tarjeta.'))
+    if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', value: '1', inputmode: 'numeric', required: '' })
     field(form, 'Nombre completo', 'fullName', { autocomplete: 'name', required: '' })
     field(form, 'Teléfono (WhatsApp)', 'phone', { type: 'tel', autocomplete: 'tel-national', inputmode: 'numeric', placeholder: '8 dígitos', required: '' })
     field(form, 'Dirección: casa, calle, colonia o aldea, número', 'address', { autocomplete: 'street-address', required: '' })
     field(form, 'Punto de referencia (recomendado)', 'reference', {})
     var row = el('div', { class: 'sof-row' })
     form.appendChild(row)
-    row.appendChild(field(form, 'Departamento', 'departamento', { tag: 'select' }))
-    row.appendChild(field(form, 'Municipio', 'municipio', { required: '' }))
+    row.appendChild(field(form, 'Departamento', 'departamento', { tag: 'select', placeholder: 'Elija su departamento', options: DEPARTAMENTOS }))
+    row.appendChild(field(form, 'Municipio', 'municipio', { tag: 'select', placeholder: 'Elija su municipio' }))
+    var departamento = form.querySelector('[name="departamento"]')
+    departamento.addEventListener('change', function () {
+      fill(form.querySelector('[name="municipio"]'), 'Elija su municipio', MUNICIPIOS[departamento.value] || [])
+    })
     var hp = el('div', { class: 'sof-hp', 'aria-hidden': 'true' })
     hp.appendChild(el('input', { name: 'website', tabindex: '-1', autocomplete: 'off' }))
     form.appendChild(hp)
@@ -88,7 +125,7 @@
     box.appendChild(form)
     back.appendChild(box)
     document.body.appendChild(back)
-    form.querySelector('[name="quantity"]').focus()
+    form.querySelector('input').focus()
 
     function done() { back.remove(); document.removeEventListener('keydown', onKey); button.focus() }
     function onKey(e) { if (e.key === 'Escape') done() }
@@ -101,14 +138,14 @@
       e.preventDefault()
       var data = new FormData(form)
       var missing = ['fullName', 'phone', 'address', 'departamento', 'municipio'].filter(function (k) { return !String(data.get(k) || '').trim() })
-      if (!variantId) return show('sof-err', 'Elija una variante del producto.')
+      if (!cartItems && !variantId) return show('sof-err', 'Elija una variante del producto.')
       if (missing.length) return show('sof-err', 'Complete los campos obligatorios.')
       submit.disabled = true
       show('', 'Enviando…')
       fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
+          items: cartItems || [{ variantId: String(variantId), quantity: Number(data.get('quantity')) || 1 }],
           fullName: data.get('fullName'), phone: data.get('phone'), address: data.get('address'), reference: data.get('reference'),
           departamento: data.get('departamento'), municipio: data.get('municipio'), website: data.get('website'),
         }),
@@ -117,6 +154,7 @@
           if (!res.ok) { submit.disabled = false; return show('sof-err', res.body.error || 'No pudimos enviar su pedido. Intente de nuevo.') }
           form.querySelectorAll('input,select,button[type=submit]').forEach(function (i) { i.disabled = true })
           close.textContent = 'Cerrar'
+          if (cartItems) fetch('/cart/clear.js', { method: 'POST' }).catch(function () {})
           show('sof-ok', '¡Listo! Le escribimos por WhatsApp para confirmar su pedido. Su número de pedido llega al confirmar.')
         })
         .catch(function () { submit.disabled = false; show('sof-err', 'Sin conexión. Intente de nuevo.') })
@@ -128,6 +166,9 @@
     var button = e.target.closest && e.target.closest('[data-sandia-order]')
     if (!button) return
     e.preventDefault()
-    open(button)
+    if (!button.hasAttribute('data-sandia-cart')) return open(button)
+    fetch('/cart.js', { headers: { Accept: 'application/json' } }).then(function (r) { return r.json() }).then(function (cart) {
+      if (cart.items.length) open(button, cart.items.map(function (i) { return { variantId: String(i.variant_id), quantity: i.quantity } }))
+    }).catch(function () {})
   })
 })()
