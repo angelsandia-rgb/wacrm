@@ -165,7 +165,12 @@ describe('delivery municipio', () => {
   it('creates nothing when the municipio belongs to another departamento', async () => {
     await order('Escuintla', 'Villa Nueva')
     expect(m.create).not.toHaveBeenCalled()
-    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('no corresponde al departamento'))
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('pertenece a Guatemala'))
+  })
+  it('creates nothing for a place that is not a municipio (typo, aldea, zona)', async () => {
+    await order('Guatemala', 'Guantemala')
+    expect(m.create).not.toHaveBeenCalled()
+    expect(m.handoff).toHaveBeenCalledWith(expect.stringContaining('no es un municipio'))
   })
 })
 

@@ -74,11 +74,20 @@ describe('helpers', () => {
     expect(departamentoCode('Mixco')).toBe('GUA')
     expect(departamentoCode('Quetzaltenango')).toBe('QUE')
   })
-  it('rejects only a municipio known to belong to another departamento', () => {
+  it('accepts only a municipio that exists in that departamento', () => {
     expect(municipioMatchesDepartamento('Mixco', 'Guatemala')).toBe(true)
     expect(municipioMatchesDepartamento('Villa Nueva', 'Escuintla')).toBe(false)
     expect(municipioMatchesDepartamento('Cobán', 'Alta Verapaz')).toBe(true)
-    expect(municipioMatchesDepartamento('Guantemala', 'Guatemala')).toBe(true) // unknown: Dropi decides, owner is alerted
+    // A typo is refused before the order exists, not by the supplier afterwards (#1004).
+    expect(municipioMatchesDepartamento('Guantemala', 'Guatemala')).toBe(false)
+  })
+  it('a municipio written where the departamento goes settles it only when it is not a homonym', () => {
+    expect(departamentoCode('Cobán')).toBe('AVE')
+    expect(departamentoCode('San Pedro Sacatepéquez')).toBeUndefined()
+  })
+  it('sends the supplier the municipio spelt as in the canonical list', () => {
+    const base = { lines: [{ variantId: 'gid://shopify/ProductVariant/1', quantity: 1, price: 100, title: 'X' }], fullName: 'Ana López', phone: '54852732', address: '4a calle', payment: 'cod' as const, currency: 'GTQ' }
+    expect(JSON.stringify(buildOrderInput({ ...base, departamento: 'alta verapaz', municipio: 'coban' }))).toContain('"city":"Cobán"')
   })
   it('verifies the webhook HMAC', () => {
     const body = '{"id":1}'

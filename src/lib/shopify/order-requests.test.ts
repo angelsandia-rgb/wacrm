@@ -64,7 +64,10 @@ describe('parseOrderForm', () => {
   it('rejects bad phones, unknown departamentos and a capital municipio in another departamento', () => {
     expect(parseOrderForm({ ...form, phone: '123' })).toEqual({ error: expect.stringContaining('teléfono') })
     expect(parseOrderForm({ ...form, departamento: 'Guantemala' })).toEqual({ error: expect.stringContaining('departamento') })
-    expect(parseOrderForm({ ...form, departamento: 'Escuintla' })).toEqual({ error: expect.stringContaining('municipio') })
+    expect(parseOrderForm({ ...form, departamento: 'Escuintla' })).toEqual({ error: expect.stringContaining('Mixco pertenece a Guatemala') })
+    expect(parseOrderForm({ ...form, municipio: 'Guantemala' })).toEqual({ error: expect.stringContaining('Elija su municipio') })
+    // Stored as the canonical names, whatever was typed.
+    expect(parseOrderForm({ ...form, municipio: 'san jose pinula', departamento: 'guatemala' })).toMatchObject({ municipio: 'San José Pinula', departamento: 'Guatemala' })
     expect(parseOrderForm({ ...form, items: [{ variantId: '7', quantity: 99 }] })).toEqual({ error: expect.stringContaining('cantidades') })
     expect(parseOrderForm({ ...form, items: [{ variantId: 'abc', quantity: 1 }] })).toEqual({ error: expect.stringContaining('productos') })
   })
