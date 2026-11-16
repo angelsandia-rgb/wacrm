@@ -5798,3 +5798,15 @@ Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados r
 - Sin cambio: garantías, reembolsos y cancelaciones con el proveedor siguen derivándose a una persona, y la IA no promete acciones que no ejecutó.
 - Simplificaciones marcadas `ponytail:`: el caso se identifica por el prefijo del título (sin columna `kind`) y las 4 h son de reloj, no de horario laboral.
 - Pendiente de C7: conciliación programada de pagos, pedidos y envíos.
+
+### 2026-11-15 — Claude Code: Casa Ceiba, C7 parte 3 — conciliación de pedidos
+
+- #387 (`9d2bd23`, casos de SAC) desplegado: health 200 y registros limpios.
+- **Conciliación por hora** (`src/lib/shopify/reconcile.ts`, en el cron de follow-ups en el minuto 1 de cada hora; sin migración). Por tienda conectada compara los pedidos de Shopify de los últimos 7 días con los negocios del CRM y detecta eventos que nunca llegaron:
+  - pedido sin registro en el CRM tras 30 min: webhook perdido o pedido sin teléfono;
+  - rechazado por Dropi («Dropi Sync Error») y sin resolver tras 6 h;
+  - pedido vivo sin envío tras 72 h: Dropi nunca lo despachó.
+  - Una alerta `shopify_reconcile:<cuenta>` como máximo cada 12 h, que se cierra sola cuando todo cuadra.
+- Prueba de solo lectura contra producción: 7 pedidos, todos cancelados, sin hallazgos. Al ignorar las cancelaciones solo aparece #1001, una prueba antigua sin negocio, como se esperaba.
+- No cubre (`ponytail:`) un cobro de Recurrente pagado cuyo webhook se pierda del todo: no guardamos el id del checkout. Recurrente reintenta sus webhooks durante días (Svix) y un pago retenido ya alerta. Guardar el id si crece el volumen con tarjeta.
+- Con esto C7 queda cubierto salvo Effi, que sigue sin implementarse por decisión.
