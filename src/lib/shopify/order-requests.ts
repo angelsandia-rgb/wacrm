@@ -46,19 +46,30 @@ export interface OrderFormInput {
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '')
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Declared before parseOrderForm uses it.
 const variantGid = (id: string) => (id.startsWith('gid://') ? id : `gid://shopify/ProductVariant/${id}`)
 
 /** Pure: the form body → a clean input, or the reason it is rejected
  *  (shown to the customer, in Spanish). */
 export function parseOrderForm(body: unknown): OrderFormInput | { error: string } {
   const b = (body ?? {}) as Record<string, unknown>
-  const items = (Array.isArray(b.items) ? b.items : []).slice(0, MAX_LINES + 1).map((i) => {
+  const raw = (Array.isArray(b.items) ? b.items : []).slice(0, MAX_LINES + 1).map((i) => {
     const r = (i ?? {}) as Record<string, unknown>
-    return { variantId: String(r.variantId ?? '').trim(), quantity: Math.floor(Number(r.quantity)) }
+    return { variantId: String(r.variantId ?? '').trim(), quantity: Number(r.quantity) }
   })
-  if (!items.length || items.length > MAX_LINES || items.some((i) => !/^(gid:\/\/shopify\/ProductVariant\/)?\d+$/.test(i.variantId) || !(i.quantity >= 1 && i.quantity <= MAX_QTY))) {
+  if (!raw.length || raw.length > MAX_LINES || raw.some((i) => !/^(gid:\/\/shopify\/ProductVariant\/)?\d+$/.test(i.variantId))) {
     return { error: 'Revise los productos y las cantidades.' }
   }
+  // 1.5 is not silently turned into 1: the customer is told.
+  if (raw.some((i) => !Number.isInteger(i.quantity) || i.quantity < 1)) return { error: 'La cantidad debe ser un número entero, de 1 en adelante.' }
+  // The same product twice is one line: stock and the limit are checked on the sum.
+  const items: OrderFormInput['items'] = []
+  for (const i of raw) {
+    const same = items.find((x) => variantGid(x.variantId) === variantGid(i.variantId))
+    if (same) same.quantity += i.quantity
+    else items.push({ ...i })
+  }
+  if (items.some((i) => i.quantity > MAX_QTY)) return { error: `Puede pedir hasta ${MAX_QTY} unidades de cada producto. Para más, escríbanos por WhatsApp.` }
   const input = {
     items, fullName: text(b.fullName, 120), phone: text(b.phone, 30), address: text(b.address, 200),
     reference: text(b.reference, 200), municipio: text(b.municipio, 80), departamento: text(b.departamento, 40),
@@ -82,7 +93,7 @@ export function parseOrderForm(body: unknown): OrderFormInput | { error: string 
 
 /** Save the request and ask the customer on WhatsApp. No Shopify order is
  *  created here: it is created on their "sí" (see the AI order markers). */
-export async function submitOrderForm(db: SupabaseClient, accountId: string, input: OrderFormInput): Promise<{ ok: true } | { error: string; status: number }> {
+export async function submitOrderForm(db: SupabaseClient, accountId: string, input: OrderFormInput): Promise<{ ok: true; ref: string } | { error: string; status: number }> {
   const cfg = await loadShopifyConfig(db, accountId)
   if (!cfg) return { error: 'La tienda no acepta pedidos por este medio.', status: 404 }
   if (coverageVerdict(cfg.shippingCoverage, input.departamento, input.municipio) !== 'ok') {
@@ -149,10 +160,17 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
     }
     throw new Error(`Cannot save order request: ${submitError.message}`)
   }
-  const request = saved as { id: string; created: boolean }
+  const request = saved as { id: string; purchaseId: string; created: boolean }
   // A repeated submit asked already: nothing more to send.
   if (request.created) await runOrderNotificationSweep(db, accountId, `request:${request.id}:ask`)
-  return { ok: true }
+  // The reference the customer keeps: enough to find the purchase from
+  // WhatsApp, not enough to read anyone's data.
+  return { ok: true, ref: purchaseRef(request.purchaseId) }
+}
+
+/** Pure: the short public reference of a purchase. */
+export function purchaseRef(purchaseId: string): string {
+  return String(purchaseId).replace(/-/g, '').slice(0, 4).toUpperCase()
 }
 
 /** Pure: "2 x Lámpara, 1 x Foco" for messages and the AI prompt. */
@@ -180,7 +198,7 @@ export async function loadPendingOrderRequests(db: SupabaseClient, accountId: st
     const proposal = row.proposal as Proposal
     return {
       id: row.id as string, proposal, terms: (row.terms as AcceptedTerms | null) ?? null,
-      ref: String(row.purchase_id).replace(/-/g, '').slice(0, 4).toUpperCase(),
+      ref: purchaseRef(row.purchase_id as string),
       askDeliveredAt: (row.ask_delivered_at as string | null) ?? null,
       summary: `${requestSummary(proposal)}; total ${formatCurrency(Number(row.total), row.currency as string)}; entrega en ${[proposal.address, proposal.municipio, proposal.departamento].filter(Boolean).join(', ')}`,
     }

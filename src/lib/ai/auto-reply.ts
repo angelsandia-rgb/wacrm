@@ -1013,6 +1013,14 @@ export async function dispatchInboundToAiReply(
         if (!pendingOrder) {
           try {
             pendingRequests = await loadPendingOrderRequests(db, accountId, contactId)
+            // A summary still waiting to be delivered (no approved template
+            // outside the 24 h window): the customer just wrote, so it can go
+            // out now — this is what the form's WhatsApp button is for.
+            const unsent = pendingRequests.filter((r) => !r.askDeliveredAt)
+            if (unsent.length) {
+              for (const r of unsent) await runOrderNotificationSweep(db, accountId, `request:${r.id}:ask`)
+              pendingRequests = await loadPendingOrderRequests(db, accountId, contactId)
+            }
           } catch (err) {
             console.error('[ai auto-reply] pending order request lookup failed:', err)
           }
