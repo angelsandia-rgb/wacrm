@@ -6,6 +6,9 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
  *  tried in order; the first one Meta approved is used. */
 export const ORDER_TEMPLATES = {
   confirm: ['confirmar_pedido'], // {{1}} name, {{2}} order, {{3}} total
+  // Card chosen in the order form. Falls back to the cash wording until Meta
+  // approves the card one; the AI then sends the payment link on their "sí".
+  confirmCard: ['confirmar_pedido_tarjeta', 'confirmar_pedido'],
   paid: ['pago_confirmado'], // {{1}} name, {{2}} amount, {{3}} order
   shipped: ['pedido_en_camino', 'pedido_enviado'], // {{1}} name, {{2}} order, {{3}} tracking
   delivered: ['pedido_entregado'], // {{1}} name, {{2}} order

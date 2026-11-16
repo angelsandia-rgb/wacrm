@@ -681,6 +681,7 @@ export function buildSystemPrompt(args: {
         `ORDER REQUEST AWAITING CONFIRMATION: this customer filled the web store's order form (${pendingOrderRequest}) and the system asked them by WhatsApp to confirm it. NO order exists yet and nothing has been sent to the supplier: the order and its number are created only when they confirm. ` +
           `If they clearly confirm it paying cash on delivery ("sí", "confirmo", "está bien"), thank them warmly, say you are registering it and that the order number arrives in a moment, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. ` +
           `If they confirm but want to pay by card, say you are preparing the secure payment link, and append ${CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL} at the very end. ` +
+          `If the request says they chose to pay BY CARD in the form, a plain confirmation ("sí") means card: use the card marker, and use the cash marker only if they now ask to pay on delivery. ` +
           `If they clearly say they no longer want it, accept it kindly (nothing was charged or shipped, no advisor is needed) and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
           `If they want to change something (product, quantity, address, phone), collect the change, send a new full summary and, once they confirm that new summary, use the create_shopify_order marker instead of these markers. If their message is about something else, answer that first. ` +
           `Never invent an order number. Use one of these markers at most once and never mention them to the customer.`,

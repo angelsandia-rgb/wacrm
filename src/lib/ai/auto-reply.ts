@@ -1198,7 +1198,7 @@ export async function dispatchInboundToAiReply(
       shopifyOrders,
       shopifyOrderStatus,
       pendingOrderConfirmation: pendingOrder?.orderName ?? null,
-      pendingOrderRequest: pendingRequest?.summary ?? null,
+      pendingOrderRequest: pendingRequest ? pendingRequest.summary + (pendingRequest.proposal.payment === 'card' ? '; they chose to pay BY CARD in the form' : '') : null,
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
