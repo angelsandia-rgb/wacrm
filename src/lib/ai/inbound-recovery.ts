@@ -156,7 +156,7 @@ export async function recoverUnansweredInbound(
     const isHotel = account?.industry_vertical === 'hotel'
     if (isHotel && isOnlyAcknowledgement(msg.content_text)) continue
     if (!isHotel && age > MAX_AGE_MS) continue
-    if (await contactMutesAi(db, conv.contact_id)) continue
+    if (await contactMutesAi(db, conv.contact_id, conv.account_id)) continue
 
     let staffWindowElapsed = false
     if (isHotel) {

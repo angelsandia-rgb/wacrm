@@ -592,7 +592,7 @@ export async function dispatchInboundToAiReply(
     if (!withinAiAttentionHours(config.autoReplySchedule)) return
     // Staff / personal / supplier contact (tag "Interno", "Personal",
     // "Proveedor" or "Sin IA") — never the bot's conversation.
-    if (await contactMutesAi(db, contactId)) return
+    if (await contactMutesAi(db, contactId, accountId)) return
 
     const conv = await loadConvEligibility(db, accountId, conversationId)
     if (!conv) return
