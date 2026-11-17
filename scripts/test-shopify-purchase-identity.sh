@@ -40,10 +40,10 @@ INSERT INTO conversations(id, account_id, contact_id) VALUES
   ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1'),
   ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c2');
 SQL
-for m in 179_shopify_notification_jobs 180_shopify_order_requests 181_shopify_order_request_outcome 182_shopify_order_request_expired 183_shopify_purchase_identity 183_shopify_purchase_identity; do
+for m in 179_shopify_notification_jobs 180_shopify_order_requests 181_shopify_order_request_outcome 182_shopify_order_request_expired 183_shopify_purchase_identity 183_shopify_purchase_identity 185_shopify_purchase_attempts 185_shopify_purchase_attempts; do
   $PG -d e1t -q -v ON_ERROR_STOP=1 < "supabase/migrations/$m.sql" >/dev/null 2>&1 || fail "migración $m"
 done
-echo "ok   migraciones 179–183 aplicadas (183 dos veces: idempotente)"
+echo "ok   migraciones 179–185 aplicadas (183 y 185 dos veces: idempotentes)"
 
 A="'00000000-0000-0000-0000-0000000000a1'"; C="'00000000-0000-0000-0000-0000000000c1'"; D="'00000000-0000-0000-0000-0000000000d1'"
 # submit <key|NULL> <purchase|NULL> [sleep seconds inside the transaction]
@@ -102,6 +102,19 @@ case "$OTHER" in *"Purchase is not editable"*) ;; *) fail "otro contacto no debe
 OTHER=$($PG -d e1t -qtA 2>&1 -c "SELECT public.submit_shopify_order_request('00000000-0000-0000-0000-0000000000a2', $C, $D, '{}'::jsonb, 1, 'GTQ', '{}'::jsonb, 'K8', NULL, '{}'::jsonb)" || true)
 case "$OTHER" in *"Order conversation not found"*) ;; *) fail "otra cuenta no debe poder usar esta conversación";; esac
 echo "ok   otro contacto u otra cuenta no pueden tocar la compra"
+
+# 8. Order creation locked per purchase (migration 185).
+claim() { $PG -d e1t -qtA -c "BEGIN; SELECT public.claim_shopify_purchase_attempt($A, $D, '$1')->>'acquired'; SELECT pg_sleep(${2:-0}); COMMIT;" 2>&1 | grep -E '^(true|false)$' || true; }
+claim chat:X 2 >/tmp/e1-a.out & sleep 0.5; claim chat:X >/tmp/e1-b.out; wait
+expect "dos workers con la misma compra: solo uno la crea" "$(cat /tmp/e1-a.out /tmp/e1-b.out | sort | tr '
+' ' ')" "false true "
+q "UPDATE shopify_purchase_attempts SET status = 'succeeded' WHERE purchase_key = 'chat:X'" >/dev/null
+expect "la misma compra repetida no se vuelve a crear" "$(claim chat:X)" false
+expect "una compra distinta en el mismo chat sí se crea" "$(claim chat:Y)" true
+q "UPDATE shopify_purchase_attempts SET status = 'blocked' WHERE purchase_key = 'chat:Y'" >/dev/null
+expect "un resultado desconocido bloquea otras compras del chat" "$(claim chat:Z)" false
+q "UPDATE shopify_purchase_attempts SET status = 'failed' WHERE purchase_key = 'chat:Y'" >/dev/null
+expect "un fallo antes de Shopify permite reintentar" "$(claim chat:Z)" true
 
 $PG -q -c "DROP DATABASE e1t" >/dev/null
 echo "TODO OK"

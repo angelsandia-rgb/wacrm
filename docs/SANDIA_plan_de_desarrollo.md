@@ -5932,3 +5932,20 @@ Pendiente de la Entrega 5: que el propietario registre su teléfono para push (a
 ### 2026-11-17 — Claude Code: Entrega 4b, validación del formulario campo por campo
 
 #398 (Entrega 5a) fusionado con el «sí» de Angel. **Este PR, sin migración:** el formulario de pedido valida cada campo al salir de él (cantidad entera de 1 a 20, nombre y apellido, WhatsApp de 8 dígitos con o sin +502, espacios o guiones, dirección, departamento y municipio). El error aparece debajo del campo, se retira en cuanto se corrige, y al enviar el foco va al primer campo con problema; lo válido se conserva. Antes había un único mensaje «Complete los campos obligatorios». Una prueba comprueba que las reglas del navegador aceptan los mismos teléfonos que el servidor.
+
+### 2026-11-17 — Claude Code: Entrega 1b, el pedido se bloquea por compra y no por chat
+
+#399 (Entrega 4b) fusionado y «Pago contra entrega» desactivado en el checkout de Shopify con el «sí» de Angel (comprobado: un enlace directo a `/checkout` muestra «Esta tienda no puede aceptar pagos»; la página `/pages/pedido` sigue funcionando).
+
+Migración `185_shopify_purchase_attempts.sql` **aplicada a producción** (tabla y función nuevas; el código actual sigue usando la anterior hasta el despliegue).
+
+- Antes: un solo pedido por chat cada 30 min (`claim_shopify_order_attempt`, tabla por conversación) más una revisión de `ai_action_log` con la misma ventana. Frenaba duplicados, pero también una segunda compra real en el mismo chat.
+- Ahora el bloqueo es **por compra**. La clave es el id de la solicitud del formulario, o en ventas por chat los productos exactos (resueltos a la variante del catálogo), cantidades, teléfono y forma de pago.
+  - La misma compra reenviada por el modelo (el «gracias» tras confirmar, o la dirección redactada distinto) se crea una sola vez en 24 h.
+  - Una compra distinta en el mismo chat sí se crea.
+  - Un intento con resultado desconocido sigue bloqueando todo el chat hasta que una persona revise Shopify.
+  - Transición: un pedido del bloqueo anterior de los últimos 30 min sigue frenando duplicados en ese chat.
+- Se quitó la revisión de 30 min en `ai_action_log` (la cubre el bloqueo por compra); el registro en `ai_action_log` se mantiene.
+- Pruebas: `scripts/test-shopify-purchase-identity.sh` suma 5 casos del bloqueo por compra contra Postgres real; pruebas unitarias de reenvío, segunda compra, cuarentena y clave del formulario.
+
+Pendiente de la 1b: guardar las condiciones (precios del catálogo) de una venta por chat en el mismo registro que el formulario.
