@@ -120,6 +120,37 @@ describe('durable Shopify notification delivery', () => {
     expect(m.notify).not.toHaveBeenCalled()
     expect(m.requestUpdates).toEqual([])
   })
+  describe('reminder for a form request with no answer', () => {
+    const reminder = { ...payload, request: { id: 'r1', reminder: { contactId: 'ct', since: '2026-11-13T12:00:00Z' } } }
+    it('is sent once while the purchase still waits, without touching the delivery stamp', async () => {
+      const { db } = database()
+      await enqueueOrderNotification(db, 'a', 'request:r1:reminder', reminder)
+      await enqueueOrderNotification(db, 'a', 'request:r1:reminder', reminder)
+      expect((await runOrderNotificationSweep(db)).sent).toBe(1)
+      expect(m.notify).toHaveBeenCalledTimes(1)
+      expect(m.requestUpdates).toEqual([])
+    })
+    it.each([
+      ['the customer already wrote back', () => { m.inbound = true }],
+      ['the contact muted the assistant', () => { m.muted = true }],
+      ['the contact opted out of commercial messages', () => { m.commercialOptOut = true }],
+      ['the purchase was accepted meanwhile', () => { m.requestStatus = 'confirmed' }],
+    ])('is not sent when %s', async (_case, arrange) => {
+      arrange()
+      const { db } = database()
+      await enqueueOrderNotification(db, 'a', 'request:r1:reminder', reminder)
+      expect((await runOrderNotificationSweep(db)).skipped).toBe(1)
+      expect(m.notify).not.toHaveBeenCalled()
+    })
+    it('waits for business hours instead of writing at night', async () => {
+      vi.setSystemTime(new Date('2026-11-13T05:00:00Z')) // 23:00 in Guatemala
+      const { db, jobs } = database()
+      await enqueueOrderNotification(db, 'a', 'request:r1:reminder', reminder)
+      expect((await runOrderNotificationSweep(db)).pending).toBe(1)
+      expect(jobs.get('a:request:r1:reminder')?.last_error).toBe('Waiting for business hours')
+      expect(m.notify).not.toHaveBeenCalled()
+    })
+  })
   it('a question that could not be delivered yet is not stamped as delivered', async () => {
     m.notify.mockResolvedValue(false)
     const { db } = database()

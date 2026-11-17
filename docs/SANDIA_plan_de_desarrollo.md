@@ -5892,3 +5892,15 @@ Pendiente de la Entrega 3: sincronización programada y observable de catálogo/
 - **Cantidades:** una fracción se rechaza con su explicación (antes se redondeaba en silencio). Dos líneas del mismo producto se suman antes de revisar existencias y el límite.
 
 Pendiente de la Entrega 4: validación campo por campo, resumen con foto y edición inmediata, acceso seguro al pedido sin cuenta, y cerrar la ruta nativa `/checkout`.
+
+### 2026-11-16 — Claude Code: recordatorio de solicitudes sin respuesta y prompt de Cesi consolidado
+
+#394 (Entrega 4a) fusionado con el «sí» de Angel y desplegado (`ec51e3c4`).
+
+**Auditoría de compra y de prompt (16/11), hallazgos principales:** los recordatorios de carrito abandonado ya no se disparan (dependían del checkout de Shopify, al que ya no se llega); quien llenaba el formulario y no respondía no recibía nada (solo caducaba a las 72 h); `/checkout` nativo sigue abierto con contra entrega; el formulario valida solo al enviar; el prompt de Cesi tenía 23,208 caracteres con cuatro bloques de venta superpuestos y un párrafo desactualizado sobre pedidos web.
+
+**Este PR, sin migración:** un solo recordatorio por WhatsApp cuando el resumen de una compra del formulario lleva 3 h entregado sin respuesta. Lo encola `runShopifyBacklogCheck` (cron de follow-ups) y lo envía la cola existente, que no lo manda si el cliente ya escribió, si silenció a la IA o los mensajes comerciales, si la compra ya no está pendiente, o fuera de 8:00–20:00. Fuera de la ventana de 24 h usa la plantilla aprobada `recordatorio_confirmacion`, cuya promesa («no lo enviaremos hasta que lo confirme») es cierta para una solicitud: el pedido no existe hasta el «sí».
+
+**Prompt de Cesi (configuración de Casa Ceiba, con el «sí» de Angel):** consolidado de 23,208 a 12,006 caracteres en `docs/prompts/casa-ceiba-system-prompt-2026-11-16.md`; respaldo del anterior en `docs/prompts/casa-ceiba-prompt-backup-2026-11-16.md`. Un solo bloque de ventas (enganche antes del precio, cierre asumido, dos intentos ante objeción, un rescate ante «lo voy a pensar», un aumento de pedido), el párrafo de pedidos web corregido (un pedido de la página no existe hasta el «sí»), el municipio debe ser real, y ofrece la tienda cuando el cliente pide otra forma de comprar. Probado con 11 conversaciones simuladas en el playground: cierra con pregunta de avance, respeta el «no», deriva reclamos con el marcador y pregunta el municipio de una aldea.
+
+Pendiente: carritos abandonados en la página de pedido (no hay teléfono hasta que se envía el formulario) y agregar `data-whatsapp` al script del tema (el editor de Shopify se congeló en dos intentos).
