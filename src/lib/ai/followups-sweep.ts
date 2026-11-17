@@ -359,7 +359,7 @@ async function evaluateConversation(
   if (isClosingMessage(lcRow.content_text as string | null)) return null;
 
   // Staff / personal / supplier contact — never nudged.
-  if (await contactMutesAi(admin, args.contactId)) return null;
+  if (await contactMutesAi(admin, args.contactId, args.accountId)) return null;
   if (await contactMutesCommercial(admin, args.accountId, args.contactId)) return null;
 
   // Our last reply asked nothing (a farewell, "aquí estamos para lo que

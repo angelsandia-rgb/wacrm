@@ -5972,3 +5972,13 @@ el token o corregir datos). Además Dropify reemplaza la nota del pedido con la 
 rechazarlo y borraba la del CRM (origen, NIT): esa nota se guarda también como
 atributo del pedido «Chat Sandía» (pedido y borrador). Validado: typecheck, eslint,
 build, 3 183 pruebas.
+
+### 2026-11-17 — Claude Code: interruptor «IA solo para contactos de prueba»
+
+Pedido del dueño de Casa Ceiba para probar el flujo real de WhatsApp sin que la IA
+atienda a los clientes. Nuevo flag por empresa `ai_test_contacts_only` (se activa en
+/admin, sin migración): con él encendido, la IA (respuesta automática, seguimientos y
+recuperación de entrantes perdidos) solo atiende a contactos con la etiqueta
+«Prueba IA»; las etiquetas de silencio («Sin IA», etc.) siguen ganando. Los avisos de
+pedidos (confirmación, envío) no cambian. Validado: typecheck, eslint, build, 3 185
+pruebas.
