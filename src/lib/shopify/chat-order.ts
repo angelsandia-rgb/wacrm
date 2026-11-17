@@ -6,6 +6,7 @@ import {
   normalizeGtPhone, outOfStockTitles,
   PAYMENT_GATEWAYS,
 } from './api'
+import { recordCardCheckout } from './card-payments'
 import { checkMunicipio } from './gt-geo'
 import type { AcceptedTerms } from './order-requests'
 
@@ -204,10 +205,13 @@ async function createShopifyOrderLocked(args: {
     // never completed automatically. A person sends the link if appropriate.
     if (cfg.recurrenteSecretKey && cfg.ordersLive) {
       try {
-        paymentLink = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
+        const checkout = await createRecurrenteCheckout(cfg.recurrenteSecretKey, {
           // The customer sees this on Recurrente's page — the items, not a draft "#D3".
           title: label.slice(0, 120), total: order.total, currency, orderId: order.id,
         })
+        paymentLink = checkout.url
+        // Remembered so a paid link is found even if its webhook never arrives.
+        if (checkout.id) await recordCardCheckout(db, accountId, { checkoutId: checkout.id, draftId: order.id, conversationId, amount: order.total, currency })
       } catch (err) {
         console.error('[shopify] recurrente checkout failed:', err instanceof Error ? err.message : err)
       }

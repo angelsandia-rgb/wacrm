@@ -5907,3 +5907,14 @@ Pendiente: carritos abandonados en la página de pedido (no hay teléfono hasta 
 ### 2026-11-16 (noche) — Claude Code: botón «Abrir WhatsApp» sin depender del tema
 
 El editor de código de Shopify congeló Chrome cuatro veces al intentar agregar `data-whatsapp` al script del tema. **Este PR, sin migración:** el endpoint del formulario devuelve el número público de WhatsApp de la tienda (`whatsapp_config.public_phone_number` del número principal) y el script lo usa para el botón «Abrir WhatsApp». `data-whatsapp` en el tema sigue funcionando como reemplazo si se agrega. Sin número configurado, el botón simplemente no aparece.
+### 2026-11-16 (noche) — Claude Code: Entrega 2a, links de pago con tarjeta conciliables
+
+Migración `184_shopify_card_checkouts.sql` (tabla nueva, aditiva) **aplicada a producción** vía Supabase MCP; RLS con lectura de miembros, escritura solo `service_role` (se revocó el `INSERT` que dejaban los privilegios por defecto a `authenticated`).
+
+- Cada link de Recurrente que emite el chat se registra al crearse (`shopify_card_checkouts`: id del cobro, borrador, conversación, importe, moneda, estado). Si no se puede registrar, alerta crítica: el link ya existe y puede pagarse.
+- `createRecurrenteCheckout` devuelve el id del cobro (del cuerpo o, si falta, de la URL `…/checkout-session/ch_…`).
+- El trabajo del webhook pasó a `processPaidCheckout` (`src/lib/shopify/card-payments.ts`) sin cambiar su lógica (estado leído de Recurrente, importe y moneda contra el borrador, compra abierta, existencias, pausa de ventas, retención con aviso). El webhook y la conciliación lo comparten y anotan el resultado.
+- **Conciliación independiente del webhook** en el cron de follow-ups: cada link abierto de los últimos 7 días se consulta en Recurrente cada ~30 min. Pagado → mismo camino que el webhook (idempotente: reutiliza el pedido completado y los avisos con clave). Vencido → se cierra. Error de Recurrente → cuenta y alerta, el link sigue abierto para la siguiente vuelta.
+- Límite conocido: los links emitidos antes de este cambio no están registrados; si alguno se pagó sin webhook, solo lo encuentra una revisión manual en Recurrente.
+
+Pendiente de la Entrega 2: cotización única (descuentos, envío e impuestos explícitos), condiciones durables para la venta directa por chat y recuperación de una creación de link con respuesta desconocida.

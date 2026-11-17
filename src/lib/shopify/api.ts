@@ -716,9 +716,12 @@ export async function createRecurrenteCheckout(secretKey: string, args: { title:
     }),
     signal: AbortSignal.timeout(15_000),
   })
-  const json = (await res.json().catch(() => null)) as { checkout_url?: string; message?: string } | null
+  const json = (await res.json().catch(() => null)) as { id?: string; checkout_url?: string; message?: string } | null
   if (!res.ok || !json?.checkout_url) throw new ShopifyError(`Recurrente: ${json?.message ?? `HTTP ${res.status}`}`, 502)
-  return json.checkout_url
+  // The id is what the checkout is read back by. Recurrente returns it; the
+  // checkout URL also carries it (…/checkout-session/ch_…) as a fallback.
+  const id = json.id ?? json.checkout_url.match(/\/(ch_[A-Za-z0-9]+)/)?.[1] ?? null
+  return { id, url: json.checkout_url }
 }
 
 // ------------------------------------------------- Recurrente paid → order

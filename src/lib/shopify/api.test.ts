@@ -126,12 +126,16 @@ describe('card orders', () => {
   it('asks Recurrente for the exact total in cents', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'ch_1', checkout_url: 'https://app.recurrente.com/checkout/ch_1' }), { status: 201 }))
     vi.stubGlobal('fetch', fetchMock)
-    const url = await createRecurrenteCheckout('sk_test_1', { title: 'Pedido #D9', total: 458, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/9' })
-    expect(url).toBe('https://app.recurrente.com/checkout/ch_1')
+    const link = await createRecurrenteCheckout('sk_test_1', { title: 'Pedido #D9', total: 458, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/9' })
+    // The id is kept: the link is read back by it if its webhook never arrives.
+    expect(link).toEqual({ id: 'ch_1', url: 'https://app.recurrente.com/checkout/ch_1' })
     const [endpoint, init] = fetchMock.mock.calls[0]
     expect(endpoint).toBe('https://app.recurrente.com/api/checkouts')
     expect(init.headers['X-SECRET-KEY']).toBe('sk_test_1')
     expect(JSON.parse(init.body).items).toEqual([{ name: 'Pedido #D9', currency: 'GTQ', amount_in_cents: 45800, quantity: 1 }])
+    // Without an id in the body, the checkout URL still carries it.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ checkout_url: 'https://app.recurrente.com/checkout-session/ch_x9' }), { status: 201 }))
+    expect((await createRecurrenteCheckout('sk_test_1', { title: 'x', total: 1, currency: 'GTQ', orderId: 'd' })).id).toBe('ch_x9')
   })
 })
 

@@ -89,14 +89,16 @@ describe('Recurrente payments', () => {
     expect(await (await paid()).json()).toMatchObject({ held: expect.stringContaining('ya no está abierta') })
     expect(m.complete).toHaveBeenCalledWith(expect.anything(), 'gid://shopify/DraftOrder/1', 300, 'GTQ', false)
     expect(m.enqueue).toHaveBeenCalledWith(expect.anything(), ACCOUNT, 'ch_1:payment-held', expect.anything())
-    expect(m.updates).toEqual([])
+    // No deal moved: only the card link is recorded as held for a person.
+    expect(m.updates).toEqual([expect.objectContaining({ status: 'held', resolved_at: expect.any(String) })])
   })
   it('holds a payment whose draft total or currency does not match', async () => {
     m.complete.mockResolvedValue({ held: 'el borrador no existe o su importe/moneda no coincide con lo cobrado' })
     await paid()
     expect(m.complete).toHaveBeenCalledWith(expect.anything(), 'gid://shopify/DraftOrder/1', 300, 'GTQ', true)
     expect(m.alert).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('importe/moneda') }))
-    expect(m.updates).toEqual([])
+    // No deal moved: only the card link is recorded as held for a person.
+    expect(m.updates).toEqual([expect.objectContaining({ status: 'held', resolved_at: expect.any(String) })])
   })
   it('completes the draft as paid for the exact amount and currency read back from Recurrente', async () => {
     const res = await paid()
