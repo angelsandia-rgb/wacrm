@@ -33,7 +33,7 @@ function db() {
       update: (row: Record<string, unknown>) => { op = 'update'; m.updates.push({ table, ...row }); return c },
       insert: (row: Record<string, unknown>) => { op = 'insert'; m.inserts.push({ table, ...row }); return c },
       single: async () => ({ data: { id: 'r1' }, error: null }),
-      maybeSingle: async () => ({ data: table === 'accounts' ? { default_currency: 'GTQ' } : op === 'update' ? m.settled : null, error: null }),
+      maybeSingle: async () => ({ data: table === 'accounts' ? { default_currency: 'GTQ' } : table === 'whatsapp_config' ? { public_phone_number: '+502 4288 3689' } : op === 'update' ? m.settled : null, error: null }),
       then: (ok: (v: unknown) => unknown) => ok({
         data: table === 'products' ? [{ name: 'Lámpara', price: 199, shopify_variant_id: 'gid://shopify/ProductVariant/7' }] : null, error: null,
       }),
@@ -82,7 +82,7 @@ describe('parseOrderForm', () => {
 describe('submitOrderForm', () => {
   it('saves a validated request and asks on WhatsApp — no Shopify order is created', async () => {
     const res = await submitOrderForm(db(), 'a1', parseOrderForm(form) as never)
-    expect(res).toEqual({ ok: true, ref: 'P1' })
+    expect(res).toEqual({ ok: true, ref: 'P1', whatsapp: '50242883689' })
     // The request and its WhatsApp question go to the database together.
     expect(m.rpcs).toHaveLength(1)
     expect(m.rpcs[0]).toMatchObject({
@@ -110,13 +110,13 @@ describe('submitOrderForm', () => {
   })
   it('a repeated submit (same key) asks only once', async () => {
     m.rpcResults = [{ data: { id: 'r1', purchaseId: 'p1', revision: 1, created: false }, error: null }]
-    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1' })
+    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1', whatsapp: '50242883689' })
     expect(m.rpcs[0]).toMatchObject({ p_idempotency_key: 'abcdef123456' })
     expect(sweep).not.toHaveBeenCalled()
   })
   it('a submit that raced itself is retried once and returns the winner', async () => {
     m.rpcResults = [{ data: null, error: { message: 'Concurrent submit' } }, { data: { id: 'r1', purchaseId: 'p1', revision: 1, created: false }, error: null }]
-    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1' })
+    expect(await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, idempotencyKey: 'abcdef123456' }) as never)).toEqual({ ok: true, ref: 'P1', whatsapp: '50242883689' })
     expect(m.rpcs).toHaveLength(2)
   })
   it('an edit names its purchase; one already in creation is refused, not duplicated', async () => {

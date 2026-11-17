@@ -93,7 +93,7 @@ export function parseOrderForm(body: unknown): OrderFormInput | { error: string 
 
 /** Save the request and ask the customer on WhatsApp. No Shopify order is
  *  created here: it is created on their "sí" (see the AI order markers). */
-export async function submitOrderForm(db: SupabaseClient, accountId: string, input: OrderFormInput): Promise<{ ok: true; ref: string } | { error: string; status: number }> {
+export async function submitOrderForm(db: SupabaseClient, accountId: string, input: OrderFormInput): Promise<{ ok: true; ref: string; whatsapp?: string } | { error: string; status: number }> {
   const cfg = await loadShopifyConfig(db, accountId)
   if (!cfg) return { error: 'La tienda no acepta pedidos por este medio.', status: 404 }
   if (coverageVerdict(cfg.shippingCoverage, input.departamento, input.municipio) !== 'ok') {
@@ -163,9 +163,14 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
   const request = saved as { id: string; purchaseId: string; created: boolean }
   // A repeated submit asked already: nothing more to send.
   if (request.created) await runOrderNotificationSweep(db, accountId, `request:${request.id}:ask`)
+  // The store's public WhatsApp, for the form's "Abrir WhatsApp" button (no
+  // theme setting needed). A missing number only hides the button.
+  const { data: wa } = await db.from('whatsapp_config').select('public_phone_number')
+    .eq('account_id', accountId).eq('is_default', true).maybeSingle()
+  const whatsapp = String(wa?.public_phone_number ?? '').replace(/\D/g, '')
   // The reference the customer keeps: enough to find the purchase from
   // WhatsApp, not enough to read anyone's data.
-  return { ok: true, ref: purchaseRef(request.purchaseId) }
+  return { ok: true, ref: purchaseRef(request.purchaseId), ...(whatsapp && { whatsapp }) }
 }
 
 /** Pure: the short public reference of a purchase. */
