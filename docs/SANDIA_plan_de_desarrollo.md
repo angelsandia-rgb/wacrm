@@ -5918,3 +5918,13 @@ Migración `184_shopify_card_checkouts.sql` (tabla nueva, aditiva) **aplicada a 
 - Límite conocido: los links emitidos antes de este cambio no están registrados; si alguno se pagó sin webhook, solo lo encuentra una revisión manual en Recurrente.
 
 Pendiente de la Entrega 2: cotización única (descuentos, envío e impuestos explícitos), condiciones durables para la venta directa por chat y recuperación de una creación de link con respuesta desconocida.
+
+### 2026-11-16 (noche) — Claude Code: Entrega 5a, avisos de la tienda que nadie lee llegan por correo
+
+#395, #396 y #397 fusionados con el «sí» de Angel y desplegados (`221e1d2e`, health 200).
+
+**Hallazgo:** los avisos de excepción de la tienda (pago retenido, Dropi rechazó, cliente cancela, solicitud vencida…) llegan solo al panel y por push; el propietario tiene cero dispositivos push, así que en la práctica nadie se entera si no abre el CRM.
+
+**Este PR, sin migración:** `src/lib/shopify/escalation.ts`, en el cron de follow-ups. Un aviso de la tienda sin leer 30 min después de enviarse se manda **por correo** (Gmail de soporte, ya configurado en producción) a cada persona a quien iba dirigido, **una sola vez** (reclamo atómico en `shopify_notification_jobs` con clave `…:email`). Un aviso ya leído en la app no se envía. Avisos de más de 24 h no se persiguen (los cubre la alerta de pendientes atascados). Un correo que no sale queda registrado y genera alerta de plataforma `store_notice_email`.
+
+Pendiente de la Entrega 5: que el propietario registre su teléfono para push (acción suya), responsable/sustituto por severidad y acuse humano del caso.
