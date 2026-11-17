@@ -8,6 +8,7 @@ import { runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 import { runShopifyBacklogCheck } from '@/lib/shopify/backlog'
 import { runShopifyReconciliation } from '@/lib/shopify/reconcile'
 import { runCardCheckoutReconciliation } from '@/lib/shopify/card-payments'
+import { runNoticeEscalation } from '@/lib/shopify/escalation'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { describeError } from '@/lib/observability/describe-error'
 
@@ -69,6 +70,11 @@ export async function GET(request: Request) {
       console.error('[followups/cron] card checkout reconciliation failed:', describeError(err))
       return null
     })
+    // Store exception notices nobody read in 30 min also go out by email.
+    const escalation = await runNoticeEscalation(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] notice escalation failed:', describeError(err))
+      return null
+    })
     await recordHeartbeat('followups_cron', {
       detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
         (carts ? `; carts sent ${carts.sent}, pending ${carts.pending}, failed ${carts.failed}` : '') +
@@ -76,9 +82,10 @@ export async function GET(request: Request) {
         `; order notifications sent ${orderNotifications.sent}, pending ${orderNotifications.pending}` +
         (backlog ? `; requests expired ${backlog.expired}, stuck accounts ${backlog.stuckAccounts}` : '') +
         (reconcile ? `; reconciled ${reconcile.accounts}, flagged ${reconcile.flagged}` : '') +
-        (cards ? `; card links checked ${cards.checked}, completed ${cards.completed}, held ${cards.held}, failed ${cards.failed}` : ''),
+        (cards ? `; card links checked ${cards.checked}, completed ${cards.completed}, held ${cards.held}, failed ${cards.failed}` : '') +
+        (escalation ? `; notices emailed ${escalation.emailed}, failed ${escalation.failed}` : ''),
     })
-    return NextResponse.json({ ...result, carts, confirmations, orderNotifications, backlog, reconcile, cards })
+    return NextResponse.json({ ...result, carts, confirmations, orderNotifications, backlog, reconcile, cards, escalation })
   } catch (err) {
     const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)
