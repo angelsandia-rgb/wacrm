@@ -5955,3 +5955,10 @@ Pendiente de la 1b: guardar las condiciones (precios del catálogo) de una venta
 #400 (Entrega 1b) fusionado y desplegado (`7c29acdc`). A pedido de Angel, el botón del formulario de pedido dice **«Comprar ahora»** (antes «Continuar por WhatsApp») y debajo una línea: «Le llegará un mensaje por WhatsApp para confirmar su pedido». Se quitó la frase previa que explicaba el paso. Sin migración.
 
 Primer pedido de prueba (17/11 01:10 UTC, referencia DB45, 1 × Luces Solares de Exterior, Q400, contra entrega, Villa Canales): solicitud guardada con clave de idempotencia, resumen enviado por la plantilla `confirmar_pedido` a las 01:11. Al revisar no había respuesta del cliente; el pedido se crea con su «SÍ».
+### 2026-11-17 — Claude Code: consultas ambiguas de conversación → cuenta
+
+#401 (botón «Comprar ahora») fusionado con el «sí» de Angel.
+
+Al revisar el pedido de prueba se vio en los logs `PGRST201 Could not embed because more than one relationship was found for 'conversations' and 'accounts'` cada 5 min en `conversations/cron`. PostgREST trata `shopify_order_attempts` (PK `account_id, conversation_id`, migración 179 del 14/11) como tabla puente entre conversaciones y cuentas, así que `accounts(...)` incrustado desde `conversations` dejó de ser único. Afectaba: la recuperación de respuestas perdidas de la IA (`src/lib/ai/inbound-recovery.ts`, vertical hotel) y el detalle del aviso push de asignación (`src/lib/push/assignment-details.ts`). **Este PR** usa la relación explícita `accounts!conversations_account_id_fkey(...)`; ambas consultas se probaron contra producción en solo lectura. Sin migración.
+
+Pedido de prueba (referencia DB45): Zernio muestra la plantilla `confirmar_pedido` en estado «sent» (Meta la aceptó pero no confirmó entrega al …2732) y ningún mensaje entrante en esa conversación; el «SÍ» del propietario no llegó a la API de WhatsApp. Pendiente aclarar en qué teléfono lo vio y respondió.
