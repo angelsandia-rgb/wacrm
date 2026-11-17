@@ -2629,7 +2629,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           }
           const order = request.terms
             ? await createShopifyOrderFromChat({
-                db, accountId, contactId, conversationId, configOwnerUserId, accepted: request.terms,
+                db, accountId, contactId, conversationId, configOwnerUserId, accepted: request.terms, requestId: request.id,
                 // The method saved with the purchase wins over a generic marker.
                 proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' || request.proposal.payment === 'card' ? 'card' : 'cod' },
                 handoff,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
@@ -9,10 +10,6 @@ import {
 import { recordCardCheckout } from './card-payments'
 import { checkMunicipio } from './gt-geo'
 import type { AcceptedTerms } from './order-requests'
-
-// A re-emitted marker (the customer says "gracias" after confirming)
-// must never place a second order.
-const DUPLICATE_WINDOW_MS = 30 * 60_000
 
 /**
  * The `create_shopify_order` marker → a Shopify order (or draft order,
@@ -38,6 +35,8 @@ async function createShopifyOrderLocked(args: {
    *  the customer accepted. Any difference from the current catalog → no
    *  order, no link; a person re-quotes. */
   accepted?: AcceptedTerms
+  /** The form request being placed: its id is the purchase's lock key. */
+  requestId?: string
 }, lifecycle: {
   starting: () => void
   created: (order: { id: string; name: string; draft: boolean }) => Promise<void>
@@ -55,20 +54,8 @@ async function createShopifyOrderLocked(args: {
   }
   if (!cfg) return
 
-  const { data: recent, error: recentError } = await db
-    .from('ai_action_log')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('action', 'create_shopify_order')
-    .contains('input', { conversation_id: conversationId })
-    .gte('created_at', new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString())
-    .limit(1)
-  if (recentError) throw new Error(`Cannot verify previous orders: ${recentError.message}`)
-  if (recent?.length) {
-    console.warn('[shopify] create_shopify_order: order already created for this chat in the last 30 min, skipping')
-    if (byAgent) await handoff('Ya se creó un pedido para este chat hace menos de 30 minutos')
-    return
-  }
+  // A duplicate of the same purchase is stopped by the per-purchase claim in
+  // createShopifyOrderFromChat; a different purchase in this chat goes ahead.
 
   const fail = (reason: string) => byAgent
     ? handoff(reason)
@@ -250,19 +237,53 @@ async function createShopifyOrderLocked(args: {
   return { id: order.id, name: order.name, draft: order.draft, paymentLink }
 }
 
-/** Serialize AI/manual creation across processes before contacting Shopify.
- * A known success retains the existing 30-minute duplicate window. Unknown
- * outcomes remain blocked instead of blindly placing another real order. */
+/** Pure: the lock key of a chat sale — the exact products (resolved to
+ *  catalog variants when known), quantities, phone and payment. A marker the
+ *  model re-emits for the same purchase ("gracias" after confirming, a
+ *  reworded address) gets the same key; a different purchase gets another. */
+export function chatPurchaseKey(
+  proposal: Pick<NonNullable<GenerateResult['shopifyOrderProposal']>, 'items' | 'phone' | 'payment'>,
+  variantOf: (name: string) => string | undefined,
+): string {
+  const items = new Map<string, number>()
+  for (const i of proposal.items) {
+    const id = variantOf(i.name) ?? `name:${i.name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()}`
+    items.set(id, (items.get(id) ?? 0) + i.qty)
+  }
+  const body = [...items].sort(([a], [b]) => a.localeCompare(b)).map(([id, qty]) => `${id}x${qty}`).join(',') +
+    `|${normalizeGtPhone(proposal.phone)}|${proposal.payment}`
+  return `chat:${createHash('sha256').update(body).digest('hex').slice(0, 32)}`
+}
+
+async function purchaseKeyFor(args: Parameters<typeof createShopifyOrderLocked>[0]): Promise<string> {
+  if (args.requestId) return `request:${args.requestId}`
+  const { data: products, error } = await args.db.from('products').select('name, shopify_variant_id')
+    .eq('account_id', args.accountId).eq('is_active', true).not('shopify_variant_id', 'is', null)
+  if (error) throw new Error(`Cannot read products: ${error.message}`)
+  const byName = new Map((products ?? []).map((p) => [String(p.name).trim().toLowerCase(), p.shopify_variant_id as string]))
+  return chatPurchaseKey(args.proposal, (name) => byName.get(name.trim().toLowerCase()))
+}
+
+/** Serialize AI/manual creation across processes before contacting Shopify,
+ * per PURCHASE: the same purchase is never placed twice within 24 h, a
+ * different purchase in the same chat is allowed, and an attempt with an
+ * unknown outcome keeps the whole chat blocked until a person checks Shopify. */
 export async function createShopifyOrderFromChat(args: Parameters<typeof createShopifyOrderLocked>[0]) {
   const { db, accountId, conversationId } = args
-  const { data, error } = await db.rpc('claim_shopify_order_attempt', {
-    p_account_id: accountId, p_conversation_id: conversationId,
+  let purchaseKey: string
+  try {
+    purchaseKey = await purchaseKeyFor(args)
+  } catch (err) {
+    return args.handoff(`No se pudo identificar la compra; no se envió a Shopify: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const { data, error } = await db.rpc('claim_shopify_purchase_attempt', {
+    p_account_id: accountId, p_conversation_id: conversationId, p_purchase_key: purchaseKey,
   })
   if (error) return args.handoff(`No se pudo bloquear la creación del pedido; no se envió a Shopify. Reintente cuando se recupere el servicio: ${error.message}`)
   const claim = data as { acquired: boolean; token?: string; status: string; orderName?: string | null } | null
   if (!claim?.acquired || !claim.token) {
     if (claim?.status === 'succeeded') {
-      if (args.actor === 'agent') await args.handoff(`Ya se creó un pedido para este chat hace menos de 30 minutos${claim.orderName ? `: ${claim.orderName}` : ''}`)
+      if (args.actor === 'agent') await args.handoff(`Este mismo pedido ya se creó en las últimas 24 horas${claim.orderName ? `: ${claim.orderName}` : ''}`)
     } else if (claim?.status === 'processing') {
       // Another worker owns it. Keep the first worker's conversation eligible;
       // an ordinary overlap must not turn into a human takeover.
@@ -274,10 +295,10 @@ export async function createShopifyOrderFromChat(args: Parameters<typeof createS
   }
   const progress: { started: boolean; created: { id: string; name: string; draft: boolean } | null } = { started: false, created: null }
   const saveAttempt = async (status: 'succeeded' | 'failed' | 'blocked', lastError: string | null = null) => {
-    const { data: saved, error: saveError } = await db.from('shopify_order_attempts').update({
+    const { data: saved, error: saveError } = await db.from('shopify_purchase_attempts').update({
       status, last_error: lastError,
       ...(progress.created ? { order_id: progress.created.id, order_name: progress.created.name, draft: progress.created.draft } : {}),
-    }).eq('account_id', accountId).eq('conversation_id', conversationId).eq('attempt_token', claim.token)
+    }).eq('account_id', accountId).eq('purchase_key', purchaseKey).eq('attempt_token', claim.token)
       .select('attempt_token').maybeSingle()
     if (saveError || !saved) throw new Error(`Cannot save order attempt: ${saveError?.message || 'attempt no longer owned'}`)
   }

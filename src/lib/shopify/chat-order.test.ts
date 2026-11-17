@@ -15,11 +15,15 @@ import { createShopifyOrderFromChat } from './chat-order'
 function database() {
   const attempts = new Map<string, Record<string, unknown>>()
   const db = {
-  rpc: async (_name: string, params: { p_account_id: string; p_conversation_id: string }) => {
-    const key = `${params.p_account_id}:${params.p_conversation_id}`
+  // Mirrors claim_shopify_purchase_attempt (migration 185): one row per
+  // purchase; a blocked attempt quarantines the whole conversation.
+  rpc: async (_name: string, params: { p_account_id: string; p_conversation_id: string; p_purchase_key: string }) => {
+    const key = `${params.p_account_id}:${params.p_purchase_key}`
+    const blockedHere = [...attempts.entries()].some(([k, r]) => k !== key && r.conversation === params.p_conversation_id && r.status === 'blocked')
+    if (blockedHere) return { data: { acquired: false, status: 'blocked' }, error: null }
     const row = attempts.get(key)
     if (row && row.status !== 'failed') return { data: { acquired: false, status: row.status, orderName: row.order_name }, error: null }
-    attempts.set(key, { status: 'processing', attempt_token: key })
+    attempts.set(key, { status: 'processing', attempt_token: key, conversation: params.p_conversation_id })
     return { data: { acquired: true, token: key, status: 'processing' }, error: null }
   },
   from(table: string) {
@@ -32,7 +36,7 @@ function database() {
       maybeSingle: async () => {
         if (table === 'accounts') return { data: { default_currency: 'GTQ' }, error: null }
         if (m.failSave) return { data: null, error: { message: 'database write unavailable' } }
-        const row = attempts.get(`${filters.account_id}:${filters.conversation_id}`)
+        const row = attempts.get(`${filters.account_id}:${filters.purchase_key}`)
         if (row && row.attempt_token === filters.attempt_token) Object.assign(row, update)
         return { data: row ?? null, error: null }
       },
@@ -45,6 +49,8 @@ function database() {
   return { db, attempts }
 }
 let fixture = database()
+/** The single purchase attempt these tests create. */
+const only = () => { const rows = [...fixture.attempts.values()]; expect(rows).toHaveLength(1); return rows[0] }
 beforeEach(() => {
   vi.clearAllMocks()
   fixture = database()
@@ -76,6 +82,31 @@ describe('order inventory safety', () => {
 })
 
 describe('shared order creation guard', () => {
+  it('the same purchase re-emitted (even with the address reworded) is placed once', async () => {
+    await run()
+    await run({ proposal: { items: [{ name: ' producto ', qty: 1 }], fullName: 'Ana López', phone: '4288 3689', address: 'Mixco, zona 1', departamento: 'Guatemala', payment: 'cod' } })
+    expect(m.create).toHaveBeenCalledTimes(1)
+  })
+  it('a second, different purchase in the same chat is placed too', async () => {
+    await run()
+    await run({ proposal: { items: [{ name: 'Producto', qty: 2 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'cod' } })
+    expect(m.create).toHaveBeenCalledTimes(2)
+  })
+  it('an attempt with an unknown result keeps the whole chat blocked, other purchases included', async () => {
+    m.create.mockRejectedValueOnce(new Error('connection interrupted after request'))
+    await run()
+    await run({ proposal: { items: [{ name: 'Producto', qty: 3 }], fullName: 'Ana', phone: '50242883689', address: 'Mixco', departamento: 'Guatemala', payment: 'cod' } })
+    expect(m.create).toHaveBeenCalledTimes(1)
+    expect(m.handoff).toHaveBeenLastCalledWith(expect.stringContaining('resultado pendiente de verificar'))
+  })
+  it('a form request is locked by its own id', async () => {
+    const calls: string[] = []
+    const db = fixture.db as unknown as { rpc: (n: string, p: { p_purchase_key: string }) => unknown }
+    const rpc = db.rpc
+    db.rpc = (n, p) => { calls.push(p.p_purchase_key); return rpc(n, p as never) }
+    await run({ requestId: 'req-9', accepted: { lines: [{ variantId: 'gid://shopify/ProductVariant/1', quantity: 1, price: 300 }], currency: 'GTQ', total: 300 } })
+    expect(calls).toEqual(['request:req-9'])
+  })
   it('allows only one Shopify request when AI and a manual order overlap', async () => {
     let finish!: (order: unknown) => void
     m.create.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
@@ -87,7 +118,7 @@ describe('shared order creation guard', () => {
     finish({ id: 'gid://shopify/Order/1', name: '#1001', draft: false, total: 300 })
     await first
     expect(m.send).toHaveBeenCalledTimes(1)
-    expect(fixture.attempts.get('a:conv')).toMatchObject({ status: 'succeeded', order_id: 'gid://shopify/Order/1' })
+    expect(only()).toMatchObject({ status: 'succeeded', order_id: 'gid://shopify/Order/1' })
     await run()
     expect(m.create).toHaveBeenCalledTimes(1)
   })
@@ -104,7 +135,7 @@ describe('shared order creation guard', () => {
   it('never blindly repeats a mutation with an ambiguous network result', async () => {
     m.create.mockRejectedValueOnce(new Error('connection interrupted after request'))
     await run()
-    expect(fixture.attempts.get('a:conv')?.status).toBe('blocked')
+    expect(only()?.status).toBe('blocked')
     await run()
     expect(m.create).toHaveBeenCalledTimes(1)
     expect(m.handoff).toHaveBeenLastCalledWith(expect.stringContaining('resultado pendiente de verificar'))
@@ -119,10 +150,10 @@ describe('shared order creation guard', () => {
   it('allows a retry after a failure before sending any create request', async () => {
     m.stock.mockRejectedValueOnce(new Error('stock unavailable'))
     await run()
-    expect(fixture.attempts.get('a:conv')?.status).toBe('failed')
+    expect(only()?.status).toBe('failed')
     await run()
     expect(m.create).toHaveBeenCalledTimes(1)
-    expect(fixture.attempts.get('a:conv')?.status).toBe('succeeded')
+    expect(only()?.status).toBe('succeeded')
   })
 })
 
