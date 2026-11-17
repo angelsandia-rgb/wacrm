@@ -347,6 +347,7 @@ export function buildOrderInput(req: OrderRequest) {
     tags: req.payment === 'card' ? [ORDER_TAG, CARD_TAG] : [ORDER_TAG],
     sourceName: ORDER_TAG,
     note: req.note,
+    customAttributes: crmAttributes(req.note),
   }
 }
 
@@ -391,6 +392,7 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
         shippingLine: { title: 'Envío gratis', priceWithCurrency: { amount: '0.00', currencyCode: req.currency } },
         tags: input.tags,
         note: [`Pago: ${PAYMENT_GATEWAYS[req.payment]}`, req.note].filter(Boolean).join('\n'),
+        customAttributes: input.customAttributes,
       },
     },
   )
@@ -561,6 +563,19 @@ export function hasDropiSyncError(tags: string | null | undefined): boolean {
 export function dropiSyncReason(note: string | null | undefined): string {
   const m = (note ?? '').match(/Nota Dropi:\s*(?:\d+:\s*)?([\s\S]*?)(?:\s*--\s*|$)/i)
   return (m?.[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+/** Pure: the owner's next step for a Dropi rejection, by its reason. */
+export function dropiFixHint(reason: string): string {
+  if (/saldo|wallet|billetera/i.test(reason)) return 'Recargue la wallet de Dropi y reenvíe el pedido desde Dropify.'
+  if (/token|autoriz|credencial|sesi[oó]n/i.test(reason)) return 'Renueve el token de Dropi en Dropify y reenvíe el pedido.'
+  return 'Corrija los datos en Shopify y reenvíelo desde Dropify, o cancélelo si ya no procede.'
+}
+
+/** Pure: the CRM's note (origin, NIT) also as an order attribute — Dropify
+ *  overwrites the note with its own when Dropi rejects the order. */
+function crmAttributes(note: string | undefined) {
+  return note ? [{ key: 'Chat Sandía', value: note }] : []
 }
 
 /** Shopify signs webhooks with base64 HMAC-SHA256 of the raw body. */

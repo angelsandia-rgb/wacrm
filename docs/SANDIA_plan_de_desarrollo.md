@@ -5962,3 +5962,13 @@ Primer pedido de prueba (17/11 01:10 UTC, referencia DB45, 1 × Luces Solares de
 Al revisar el pedido de prueba se vio en los logs `PGRST201 Could not embed because more than one relationship was found for 'conversations' and 'accounts'` cada 5 min en `conversations/cron`. PostgREST trata `shopify_order_attempts` (PK `account_id, conversation_id`, migración 179 del 14/11) como tabla puente entre conversaciones y cuentas, así que `accounts(...)` incrustado desde `conversations` dejó de ser único. Afectaba: la recuperación de respuestas perdidas de la IA (`src/lib/ai/inbound-recovery.ts`, vertical hotel) y el detalle del aviso push de asignación (`src/lib/push/assignment-details.ts`). **Este PR** usa la relación explícita `accounts!conversations_account_id_fkey(...)`; ambas consultas se probaron contra producción en solo lectura. Sin migración.
 
 Pedido de prueba (referencia DB45): Zernio muestra la plantilla `confirmar_pedido` en estado «sent» (Meta la aceptó pero no confirmó entrega al …2732) y ningún mensaje entrante en esa conversación; el «SÍ» del propietario no llegó a la API de WhatsApp. Pendiente aclarar en qué teléfono lo vio y respondió.
+
+### 2026-11-17 — Claude Code: aviso de rechazo de Dropi según el motivo + nota del CRM protegida
+
+Primer pedido real de punta a punta (#1008, Casa Ceiba): Dropi lo rechazó por saldo
+insuficiente en la wallet y el aviso al dueño decía «Corrija los datos en Shopify».
+Ahora `dropiFixHint` da el paso correcto según el motivo (recargar la wallet, renovar
+el token o corregir datos). Además Dropify reemplaza la nota del pedido con la suya al
+rechazarlo y borraba la del CRM (origen, NIT): esa nota se guarda también como
+atributo del pedido «Chat Sandía» (pedido y borrador). Validado: typecheck, eslint,
+build, 3 183 pruebas.
