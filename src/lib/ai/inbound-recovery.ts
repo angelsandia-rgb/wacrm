@@ -78,7 +78,7 @@ export async function recoverUnansweredInbound(
       .order('last_message_at', { ascending: true })
       .limit(MAX_PER_RUN * 3),
     db.from('conversations')
-      .select('id, account_id, contact_id, last_message_at, accounts!inner(industry_vertical)')
+      .select('id, account_id, contact_id, last_message_at, accounts!conversations_account_id_fkey!inner(industry_vertical)')
       .eq('accounts.industry_vertical', 'hotel')
       .eq('status', 'open')
       .or('ai_autoreply_disabled.is.null,ai_autoreply_disabled.is.false')
@@ -89,7 +89,7 @@ export async function recoverUnansweredInbound(
     // PR #271 created automatic whole-thread pauses. Recover only those
     // identified by our pending summary; manually paused chats are excluded.
     db.from('conversations')
-      .select('id, account_id, contact_id, last_message_at, accounts!inner(industry_vertical)')
+      .select('id, account_id, contact_id, last_message_at, accounts!conversations_account_id_fkey!inner(industry_vertical)')
       .eq('accounts.industry_vertical', 'hotel')
       .eq('status', 'open')
       .eq('ai_autoreply_disabled', true)
