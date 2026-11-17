@@ -67,6 +67,7 @@
     '.sof .sof-pay{display:flex;align-items:flex-start;gap:10px;margin:0 0 8px;padding:12px;border:1px solid #bbb;border-radius:8px;font-weight:400;cursor:pointer}' +
     '.sof .sof-pay input{width:auto;margin:3px 0 0}.sof .sof-pay b{display:block}.sof .sof-pay small{color:#555}' +
     '.sof .sof-wa{display:block;margin-top:12px;padding:13px;border-radius:8px;background:#25D366;color:#fff;font-weight:700;text-align:center;text-decoration:none}' +
+    '.sof .sof-ferr{display:block;margin-top:4px;color:#8a1c1c;font-size:13px}.sof [aria-invalid="true"]{border-color:#c0392b;background:#fff8f7}' +
     '.sof .sof-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}'
 
   function el(tag, attrs, text) {
@@ -165,6 +166,36 @@
     }
     function show(kind, text) { msg.className = 'sof-msg ' + kind; msg.textContent = text }
 
+    // Field-by-field checks: the message sits under the field, appears when
+    // the customer leaves it and disappears as soon as it is fixed.
+    var RULES = {
+      quantity: function (v) { return /^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 20 ? '' : 'Escriba una cantidad entera, de 1 a 20.' },
+      fullName: function (v) { return v.trim().split(/\s+/).length >= 2 ? '' : 'Escriba su nombre y apellido.' },
+      // 8 digits, with or without +502, spaces or dashes.
+      phone: function (v) { return /^(\+?502)?\d{8}$/.test(v.replace(/[\s-]/g, '')) ? '' : 'Escriba su WhatsApp de 8 dígitos, por ejemplo 4288 3689.' },
+      address: function (v) { return v.trim().length >= 5 ? '' : 'Escriba su dirección: casa, calle, colonia o aldea y número.' },
+      departamento: function (v) { return v ? '' : 'Elija su departamento.' },
+      municipio: function (v) { return v ? '' : 'Elija su municipio.' },
+    }
+    function check(input) {
+      var rule = RULES[input.name]
+      if (!rule) return true
+      var wrap = input.parentNode
+      var old = wrap.querySelector('.sof-ferr')
+      var error = rule(String(input.value || ''))
+      if (old) old.remove()
+      input.removeAttribute('aria-invalid')
+      if (!error) return true
+      input.setAttribute('aria-invalid', 'true')
+      var note = el('span', { class: 'sof-ferr', id: 'sof-err-' + input.name, role: 'alert' }, error)
+      input.setAttribute('aria-describedby', note.id)
+      wrap.appendChild(note)
+      return false
+    }
+    form.addEventListener('focusout', function (e) { if (e.target.name && e.target.value) check(e.target) })
+    form.addEventListener('input', function (e) { if (e.target.getAttribute && e.target.getAttribute('aria-invalid')) check(e.target) })
+    form.addEventListener('change', function (e) { if (e.target.tagName === 'SELECT') check(e.target) })
+
     // One key per opened form: a retry after a network failure, or a double
     // click, is the same purchase and must not ask twice.
     var newKey = function () { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12) }
@@ -172,9 +203,15 @@
     form.addEventListener('submit', function (e) {
       e.preventDefault()
       var data = new FormData(form)
-      var missing = ['fullName', 'phone', 'address', 'departamento', 'municipio'].filter(function (k) { return !String(data.get(k) || '').trim() })
       if (!cartItems && !variantId) return show('sof-err', 'Elija una variante del producto.')
-      if (missing.length) return show('sof-err', 'Complete los campos obligatorios.')
+      var invalid = Object.keys(RULES).map(function (k) { return form.querySelector('[name="' + k + '"]') })
+        .filter(function (i) { return i && !check(i) })
+      if (invalid.length) {
+        // Straight to the first field to fix; everything valid is kept.
+        invalid[0].focus()
+        return show('sof-err', invalid.length === 1 ? 'Revise el campo marcado.' : 'Revise los ' + invalid.length + ' campos marcados.')
+      }
+      show('', '')
       submit.disabled = true
       show('', 'Enviando…')
       fetch(endpoint, {

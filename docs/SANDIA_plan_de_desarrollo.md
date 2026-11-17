@@ -5928,3 +5928,7 @@ Pendiente de la Entrega 2: cotización única (descuentos, envío e impuestos ex
 **Este PR, sin migración:** `src/lib/shopify/escalation.ts`, en el cron de follow-ups. Un aviso de la tienda sin leer 30 min después de enviarse se manda **por correo** (Gmail de soporte, ya configurado en producción) a cada persona a quien iba dirigido, **una sola vez** (reclamo atómico en `shopify_notification_jobs` con clave `…:email`). Un aviso ya leído en la app no se envía. Avisos de más de 24 h no se persiguen (los cubre la alerta de pendientes atascados). Un correo que no sale queda registrado y genera alerta de plataforma `store_notice_email`.
 
 Pendiente de la Entrega 5: que el propietario registre su teléfono para push (acción suya), responsable/sustituto por severidad y acuse humano del caso.
+
+### 2026-11-17 — Claude Code: Entrega 4b, validación del formulario campo por campo
+
+#398 (Entrega 5a) fusionado con el «sí» de Angel. **Este PR, sin migración:** el formulario de pedido valida cada campo al salir de él (cantidad entera de 1 a 20, nombre y apellido, WhatsApp de 8 dígitos con o sin +502, espacios o guiones, dirección, departamento y municipio). El error aparece debajo del campo, se retira en cuanto se corrige, y al enviar el foco va al primer campo con problema; lo válido se conserva. Antes había un único mensaje «Complete los campos obligatorios». Una prueba comprueba que las reglas del navegador aceptan los mismos teléfonos que el servidor.
