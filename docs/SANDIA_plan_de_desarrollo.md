@@ -5949,3 +5949,9 @@ Migración `185_shopify_purchase_attempts.sql` **aplicada a producción** (tabla
 - Pruebas: `scripts/test-shopify-purchase-identity.sh` suma 5 casos del bloqueo por compra contra Postgres real; pruebas unitarias de reenvío, segunda compra, cuarentena y clave del formulario.
 
 Pendiente de la 1b: guardar las condiciones (precios del catálogo) de una venta por chat en el mismo registro que el formulario.
+
+### 2026-11-17 — Claude Code: botón del formulario «Comprar ahora»
+
+#400 (Entrega 1b) fusionado y desplegado (`7c29acdc`). A pedido de Angel, el botón del formulario de pedido dice **«Comprar ahora»** (antes «Continuar por WhatsApp») y debajo una línea: «Le llegará un mensaje por WhatsApp para confirmar su pedido». Se quitó la frase previa que explicaba el paso. Sin migración.
+
+Primer pedido de prueba (17/11 01:10 UTC, referencia DB45, 1 × Luces Solares de Exterior, Q400, contra entrega, Villa Canales): solicitud guardada con clave de idempotencia, resumen enviado por la plantilla `confirmar_pedido` a las 01:11. Al revisar no había respuesta del cliente; el pedido se crea con su «SÍ».

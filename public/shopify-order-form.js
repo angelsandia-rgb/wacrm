@@ -68,6 +68,7 @@
     '.sof .sof-pay input{width:auto;margin:3px 0 0}.sof .sof-pay b{display:block}.sof .sof-pay small{color:#555}' +
     '.sof .sof-wa{display:block;margin-top:12px;padding:13px;border-radius:8px;background:#25D366;color:#fff;font-weight:700;text-align:center;text-decoration:none}' +
     '.sof .sof-ferr{display:block;margin-top:4px;color:#8a1c1c;font-size:13px}.sof [aria-invalid="true"]{border-color:#c0392b;background:#fff8f7}' +
+    '.sof .sof-wanote{margin:8px 0 0;text-align:center;font-size:13px;color:#555}' +
     '.sof .sof-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}'
 
   function el(tag, attrs, text) {
@@ -113,7 +114,7 @@
     var form = el('form', { novalidate: '' })
     box.appendChild(el('h2', { id: 'sof-title' }, mount ? 'Confirmar pedido' : 'Pedir con pago contra entrega'))
     var title = cartItems ? 'Su carrito (' + cartItems.length + (cartItems.length === 1 ? ' producto)' : ' productos)') : button.getAttribute('data-title') || 'Su pedido'
-    box.appendChild(el('p', {}, title + '. Falta un paso: le enviamos el resumen por WhatsApp y usted lo acepta ahí. No tiene que volver a escribir sus datos.'))
+    box.appendChild(el('p', {}, title + '.'))
     if (summary) box.appendChild(summary)
     if (!cartItems) field(form, 'Cantidad', 'quantity', { type: 'number', min: '1', max: '20', step: '1', value: '1', inputmode: 'numeric', required: '' })
     field(form, 'Nombre completo', 'fullName', { autocomplete: 'name', required: '' })
@@ -144,10 +145,13 @@
     var hp = el('div', { class: 'sof-hp', 'aria-hidden': 'true' })
     hp.appendChild(el('input', { name: 'website', tabindex: '-1', autocomplete: 'off' }))
     form.appendChild(hp)
-    var submit = el('button', { type: 'submit' }, 'Continuar por WhatsApp')
+    var submit = el('button', { type: 'submit' }, 'Comprar ahora')
+    // Said once, under the button: the purchase is accepted on WhatsApp.
+    var waNote = el('p', { class: 'sof-wanote' }, 'Le llegará un mensaje por WhatsApp para confirmar su pedido.')
     var close = el('button', { type: 'button', class: 'sof-x' }, 'Cancelar')
     var msg = el('div', { role: 'status', 'aria-live': 'polite' })
     form.appendChild(submit)
+    form.appendChild(waNote)
     if (!mount) form.appendChild(close)
     form.appendChild(msg)
     box.appendChild(form)
@@ -231,6 +235,7 @@
           var ref = res.body.ref ? ' Su referencia es ' + res.body.ref + '.' : ''
           show('sof-ok', 'Guardamos su pedido.' + ref + ' Le enviamos el resumen al ' + String(data.get('phone')).trim() + ' por WhatsApp: acéptelo ahí con un SÍ.')
           submit.style.display = 'none'
+          waNote.style.display = 'none'
           var whatsapp = whatsappOverride || String(res.body.whatsapp || '').replace(/\D/g, '')
           if (whatsapp) {
             // Opening the chat lets the summary arrive at once, and is the way
@@ -243,6 +248,7 @@
           change.addEventListener('click', function () {
             form.querySelectorAll('input,select,button[type=submit]').forEach(function (i) { i.disabled = false })
             submit.style.display = ''
+            waNote.style.display = ''
             form.querySelectorAll('.sof-wa').forEach(function (a) { a.remove() })
             change.remove()
             show('', '')
