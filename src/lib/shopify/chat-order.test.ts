@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
-  stock: vi.fn(), create: vi.fn(), attach: vi.fn(), handoff: vi.fn(), send: vi.fn(), checkout: vi.fn(), failSave: false,
+  stock: vi.fn(), create: vi.fn(), attach: vi.fn(), handoff: vi.fn(), send: vi.fn(), checkout: vi.fn(), record: vi.fn(), failSave: false,
   cfg: { shop: 'store', token: 't' } as Record<string, unknown>,
 }))
+vi.mock('./card-payments', () => ({ recordCardCheckout: m.record }))
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   loadShopifyConfig: async () => m.cfg,
@@ -49,7 +50,8 @@ beforeEach(() => {
   fixture = database()
   m.failSave = false
   m.cfg = { shop: 'store', token: 't' }
-  m.checkout.mockResolvedValue('https://pay.example/c1')
+  m.checkout.mockResolvedValue({ id: 'ch_c1', url: 'https://pay.example/c1' })
+  m.record.mockReset()
   m.stock.mockResolvedValue([])
   m.create.mockResolvedValue({ id: 'gid://shopify/Order/1', name: '#1001', draft: false, total: 300 })
 })
@@ -139,6 +141,8 @@ describe('card payment links follow the sales switch', () => {
   it('emits the link for the exact total once sales are live', async () => {
     await card(true)
     expect(m.checkout).toHaveBeenCalledWith('sk_live_x', expect.objectContaining({ total: 300, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/1' }))
+    // Recorded so the payment is found even if its webhook never arrives.
+    expect(m.record).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({ checkoutId: 'ch_c1', draftId: 'gid://shopify/DraftOrder/1', amount: 300, currency: 'GTQ' }))
     expect(m.send).toHaveBeenCalledWith(expect.stringContaining('https://pay.example/c1'))
   })
 })

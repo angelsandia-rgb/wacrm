@@ -7,6 +7,7 @@ import { runConfirmationReminderSweep } from '@/lib/shopify/confirmation-reminde
 import { runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 import { runShopifyBacklogCheck } from '@/lib/shopify/backlog'
 import { runShopifyReconciliation } from '@/lib/shopify/reconcile'
+import { runCardCheckoutReconciliation } from '@/lib/shopify/card-payments'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { describeError } from '@/lib/observability/describe-error'
 
@@ -62,15 +63,22 @@ export async function GET(request: Request) {
         return null
       })
       : null
+    // Card links read back from Recurrente: a paid link whose webhook never
+    // arrived is still completed or held. Each link is rechecked ~30 min apart.
+    const cards = await runCardCheckoutReconciliation(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] card checkout reconciliation failed:', describeError(err))
+      return null
+    })
     await recordHeartbeat('followups_cron', {
       detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
         (carts ? `; carts sent ${carts.sent}, pending ${carts.pending}, failed ${carts.failed}` : '') +
         (confirmations ? `; confirmations reminded ${confirmations.reminded}, escalated ${confirmations.escalated}` : '') +
         `; order notifications sent ${orderNotifications.sent}, pending ${orderNotifications.pending}` +
         (backlog ? `; requests expired ${backlog.expired}, stuck accounts ${backlog.stuckAccounts}` : '') +
-        (reconcile ? `; reconciled ${reconcile.accounts}, flagged ${reconcile.flagged}` : ''),
+        (reconcile ? `; reconciled ${reconcile.accounts}, flagged ${reconcile.flagged}` : '') +
+        (cards ? `; card links checked ${cards.checked}, completed ${cards.completed}, held ${cards.held}, failed ${cards.failed}` : ''),
     })
-    return NextResponse.json({ ...result, carts, confirmations, orderNotifications, backlog, reconcile })
+    return NextResponse.json({ ...result, carts, confirmations, orderNotifications, backlog, reconcile, cards })
   } catch (err) {
     const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)
