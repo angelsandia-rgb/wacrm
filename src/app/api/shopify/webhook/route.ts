@@ -8,7 +8,7 @@ import { formatCurrency } from '@/lib/currency'
 import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import {
   attachOrderToDeal, CONFIRM_STAGE_NAME, DELIVERED_STAGE_NAME, isCashOnDelivery, loadShopifyConfig, normalizeGtPhone, ORDER_TAG,
-  orderFullyDelivered, pickForwardStage, hasDropiSyncError, dropiSyncReason, SHIPPED_STAGE_NAME, shopifyGraphql, TO_CONFIRM_TAG, trackingSentence, updateOrderTags,
+  orderFullyDelivered, pickForwardStage, hasDropiSyncError, dropiSyncReason, dropiFixHint,SHIPPED_STAGE_NAME, shopifyGraphql, TO_CONFIRM_TAG, trackingSentence, updateOrderTags,
   verifyShopifyHmac,
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
@@ -184,7 +184,7 @@ async function handleDropiSyncError(db: SupabaseClient, accountId: string, order
       staff: {
         userIds: recipients.map((r) => r.user_id as string),
         title: `Pedido ${order.name} no llegó a Dropi`,
-        body: `⚠️ Dropi rechazó el pedido ${order.name}: ${reason}. Corrija los datos en Shopify y reenvíelo desde Dropify, o cancélelo si ya no procede.`,
+        body: `⚠️ Dropi rechazó el pedido ${order.name}: ${reason}. ${dropiFixHint(reason)}`,
       },
     })
     await runOrderNotificationSweep(db, accountId, eventKey)

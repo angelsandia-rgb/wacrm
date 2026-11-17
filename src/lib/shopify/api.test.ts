@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, CARD_TAG, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
-  completePaidDraftOrder, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, dropiFixHint, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -47,6 +47,9 @@ describe('buildOrderInput', () => {
       departamento: 'Sacatepéquez', payment: 'cod', currency: 'GTQ',
     })
     expect(input.financialStatus).toBe('PENDING')
+    expect(input.customAttributes).toEqual([])
+    expect(buildOrderInput({ lines: [], fullName: 'Ana', phone: '55551234', address: 'Z1', departamento: 'Guatemala', payment: 'cod', currency: 'GTQ', note: 'NIT: 123' }).customAttributes)
+      .toEqual([{ key: 'Chat Sandía', value: 'NIT: 123' }])
     expect(input.tags).toEqual(['chat-sandia'])
     expect(input.phone).toBe('+50255551234')
     expect(input.shippingAddress).toMatchObject({ firstName: 'Ana María', lastName: 'López', provinceCode: 'SAC', countryCode: 'GT' })
@@ -326,6 +329,11 @@ describe('Dropi rejections written by Dropify', () => {
   it('extracts the reason from the order note', () => {
     expect(dropiSyncReason(' - Nota Dropi: 3: La ciudad no existe. CIUDAD: X -- ')).toBe('La ciudad no existe. CIUDAD: X')
     expect(dropiSyncReason('Cliente pidió llamar antes')).toBe('')
+  })
+  it('gives the owner the fix that matches the reason', () => {
+    expect(dropiFixHint(dropiSyncReason(' - Nota Dropi: No posee saldo suficiente en la wallet, monto mínimo requerido: 39.68 -- '))).toMatch(/Recargue la wallet/)
+    expect(dropiFixHint('Token inválido')).toMatch(/Renueve el token/)
+    expect(dropiFixHint('La ciudad no existe')).toMatch(/Corrija los datos/)
   })
 })
 
