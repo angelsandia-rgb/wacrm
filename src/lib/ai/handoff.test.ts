@@ -24,6 +24,11 @@ describe('buildHandoffSummary', () => {
     expect(summary).toContain('después de 1 respuesta.')
   })
 
+  it('does not say "sin responder" when the handoff turn itself answered', () => {
+    expect(buildHandoffSummary({ messages: [{ role: 'user', content: 'llegó dañado' }], replyCount: 0, answered: true }))
+      .toContain('transfirió la conversación después de responderle.')
+  })
+
   it('says "sin responder" when the bot bailed on the first inbound', () => {
     const summary = buildHandoffSummary({
       messages: [{ role: 'user', content: 'agent please' }],

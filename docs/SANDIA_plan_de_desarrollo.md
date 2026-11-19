@@ -5982,3 +5982,15 @@ recuperación de entrantes perdidos) solo atiende a contactos con la etiqueta
 «Prueba IA»; las etiquetas de silencio («Sin IA», etc.) siguen ganando. Los avisos de
 pedidos (confirmación, envío) no cambian. Validado: typecheck, eslint, build, 3 185
 pruebas.
+
+### 2026-11-18 — Claude Code: casos de garantía para Dropi + nota de traspaso corregida
+
+Un reclamo por producto dañado, defectuoso o equivocado que la IA deriva abre el caso
+de servicio (tarea con dueño y vencimiento de 4 h, ya existente) como **garantía**:
+título «Atender chat: Garantía #1010 — …» y, en las notas, el texto listo para pegar en
+Dropi → Garantías (pedido y guía leídos de Shopify —solo los del propio cliente, por
+teléfono—, el problema en palabras del cliente, la evidencia en el chat y el paso de
+escalar a soporte si el proveedor no responde en 72 h). El trámite dentro de Dropi
+sigue siendo manual: Dropi no tiene API pública de garantías. Además, la nota interna
+del traspaso decía «sin responder» aunque el mismo turno sí le respondió al cliente;
+ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 190 pruebas.
