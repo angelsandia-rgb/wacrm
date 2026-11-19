@@ -1788,6 +1788,7 @@ For airport transport, record the guest's request in nota on the relevant existi
       // pause, routing and internal note. A failed acknowledgment must not
       // skip the handoff itself.
       const handoffAckText = shopifyOrders ? ECOMMERCE_HANDOFF_ACK_TEXT : HUMAN_HANDOFF_ACK_TEXT
+      let ackSent = false
       try {
         await sendMessageToConversation(db, accountId, {
           conversationId,
@@ -1797,6 +1798,7 @@ For airport transport, record the guest's request in nota on the relevant existi
             ? 'Recibimos su solicitud de cancelación. Un asesor revisará el pedido y continuará por este chat.'
             : explicitHumanAsk ? handoffAckText : outboundText || handoffAckText,
         })
+        ackSent = true
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
@@ -1806,6 +1808,7 @@ For airport transport, record the guest's request in nota on the relevant existi
       const summary = cancellationFailure ?? buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
+        answered: ackSent,
       })
       await handOffToHuman({
         db,
