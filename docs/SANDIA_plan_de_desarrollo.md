@@ -6025,3 +6025,15 @@ escalar a soporte si el proveedor no responde en 72 h). El trámite dentro de Dr
 sigue siendo manual: Dropi no tiene API pública de garantías. Además, la nota interna
 del traspaso decía «sin responder» aunque el mismo turno sí le respondió al cliente;
 ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 190 pruebas.
+
+### 2026-11-21 — Claude Code (Casa Ceiba: catálogo bloqueado tras oferta condicional)
+
+- **Bug:** la IA ofreció «Si quiere, le mando el catálogo completo.» (sin «¿?»),
+  el cliente respondió «Si mandenelo» y el filtro `customerRequestedCatalog`
+  suprimió el envío («model sent the catalog unrequested»). El cliente recibió
+  «aquí se lo envío» sin enlace.
+- **Fix:** `BOT_OFFERED_CATALOG_RE` reconoce también ofertas condicionales
+  («si gusta/quiere/desea/le parece … catálogo»). Una simple mención del
+  catálogo por el bot sigue sin contar como oferta.
+- Validación: typecheck, eslint, 3210 pruebas, `package-lock.json` sin cambios.
+  Sin migraciones.

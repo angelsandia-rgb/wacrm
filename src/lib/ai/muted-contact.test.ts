@@ -29,6 +29,16 @@ describe('catalog requests (Casa Ceiba 2026-11-07)', () => {
       { role: 'user', content: 'Si' },
     ])).toBe(true)
   })
+  it('"Si mandenelo" to a conditional offer without "¿?" counts (Casa Ceiba 2026-11-21)', () => {
+    const offer = 'Manejamos varios productos 😊 Por ejemplo: Freidora de Aire (Q500). Si quiere, le mando el catálogo completo.'
+    expect(customerRequestedCatalog([{ role: 'assistant', content: offer }, { role: 'user', content: 'Si mandenelo' }])).toBe(true)
+  })
+  it('a plain catalog mention by the bot is still not an offer', () => {
+    expect(customerRequestedCatalog([
+      { role: 'assistant', content: 'Todos los precios del catálogo incluyen envío.' },
+      { role: 'user', content: '¿Cuánto cuesta la freidora?' },
+    ])).toBe(false)
+  })
 })
 
 describe('catalog ask survives a failed turn (Casa Ceiba 2026-11-07)', () => {
