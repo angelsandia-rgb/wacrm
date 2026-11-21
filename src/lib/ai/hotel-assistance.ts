@@ -12,7 +12,8 @@ const BARE_DAY_ANSWER = /^(?:(?:el|para el|dia|el dia)\s+)?(?:0?[1-9]|[12]\d|3[0
 const DEPARTURE_WITH_DATE = /\b(?:salir|salgo|salimos|me retiro|nos retiramos|me voy|nos vamos)\s+(?:el\s+)?(?:0?[1-9]|[12]\d|3[01]|hoy|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/
 
 function isRecentBotQuestion(question: ChatMessage, answer: ChatMessage): boolean {
-  if (question.role !== 'assistant' || question.senderType === 'agent' || !/[?¿]/.test(question.content)) return false
+  if (question.role !== 'assistant' || question.senderType === 'agent'
+    || !(/[?¿]/.test(question.content) || /\b(?:indiqueme|compartame|confirme|digame)\b/.test(normalize(question.content)))) return false
   const gap = Date.parse(answer.createdAt ?? '') - Date.parse(question.createdAt ?? '')
   return !Number.isFinite(gap) || (gap >= 0 && gap <= 24 * 60 * 60_000)
 }
@@ -23,7 +24,7 @@ function isIntakeDateAnswer(text: string): boolean {
 
 export const HOTEL_RECEPTION_PENDING_PREFIX = '🤝 Pendiente de recepción.'
 
-export const HOTEL_FAMILY_LODGING_POLICY = 'FAMILY LODGING PRIORITY: Headcount alone, including more than six guests or several rooms, does not make an inquiry a group/event quotation. Continue ordinary family lodging intake. Use dates and child ages already provided; clarify alternative adult counts such as six or seven and the desired room distribution before estimating. Offer suitable room combinations only from approved rates and published capacities. The hotel confirms availability and the final price within the authorized window. Negotiated group rates, corporate agreements, events, payments and existing booking/quote changes still follow their reception rules. Do not reopen an already handed-off message without a new customer inbound.'
+export const HOTEL_FAMILY_LODGING_POLICY = 'FAMILY LODGING PRIORITY: Headcount alone, including more than six guests or several rooms, does not make an inquiry a group/event quotation. Continue ordinary family lodging intake. Use dates and child ages already provided; clarify alternative adult counts such as six or seven and the desired room distribution before estimating. Read a short range such as 14-15 noviembre as arrival November 14 and departure November 15. Departure verbs such as me retiro, salgo and salimos specify checkout. Reuse explicit dates rather than asking again. If dates conflict, state your interpretation and ask for one confirmation instead of repeating an open-ended date question. Offer suitable room combinations only from approved rates and published capacities. The hotel confirms availability and the final price within the authorized window. Negotiated group rates, corporate agreements, events, payments and existing booking/quote changes still follow their reception rules. Do not reopen an already handed-off message without a new customer inbound.'
 
 /** Only application-created reception notes qualify; manual takeovers use a different summary. */
 export function isHotelReceptionPending(summary: string | null | undefined): boolean {
@@ -138,6 +139,10 @@ export function hasUnconfirmedStayDuration(messages: ChatMessage[]): boolean {
   const current = messages.slice(start)
   const users = current.filter((m) => m.role === 'user').map((m) => normalize(m.content))
   const dates = users.join(' ')
+  // Short ranges and departure verbs are explicit lengths, too. Do not
+  // mistake a single calendar date (14-11-2026) for a two-day interval.
+  if (/\b(\d{1,2})\s*-\s*(\d{1,2})\s+(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.test(dates)
+    || /\b(?:me retiro|nos retiramos|salgo|salimos|salir|saliendo|retiro)\s+(?:el\s+)?(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}\b)/.test(dates)) return false
   const explicit = /\b(?:\d+|una|un|dos|tres|one|two|three)\s+(?:noches?|nights?)\b|\b(?:salida|check.?out|departure)\b|\b(?:del|desde|from)\s+.{0,35}\b(?:al|hasta|to)\s+\d|\b(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+(?:a|al|hasta)\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(dates)
   if (explicit || DEPARTURE_WITH_DATE.test(dates)) return false
   // A short answer such as "El 22" has meaning only in the context of the

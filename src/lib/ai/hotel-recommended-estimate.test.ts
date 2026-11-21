@@ -20,6 +20,20 @@ function dbFor(patch: Record<string, unknown> = {}, rateRows: unknown[] = rates)
 }
 const args = { accountId: 'hotel', conversationId: 'richard', roomNames: ['Suite Master Deluxe', 'Suite Premium'], modelText: 'Una buena opcion es la Suite Master Deluxe, o la Suite Premium.', todayISO: '2026-10-17', currency: 'GTQ' }
 describe('suggested room estimates without customer selection', () => {
+  it('uses the 3-adult tariff even when the model names a different occupancy', async () => {
+    const { db } = dbFor({ guests: 3, check_in: '2026-11-14', check_out: '2026-11-15' }, [
+      { day_of_week: 'sat', occupancy: 'group', price: 1125, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'quad', price: 1500, date_from: null, date_to: null },
+      { day_of_week: 'sat', occupancy: 'child', price: 200, date_from: null, date_to: null },
+    ])
+    const result = await loadRecommendedRoomEstimate({ ...args, db,
+      modelText: 'La opción que se ajusta es la Suite Master Deluxe con tarifa Q1500 para 5 personas.',
+      messages: [{ role: 'user', content: 'Buen día precio hospedaje 3 adultos' }, { role: 'user', content: '14-15 noviembre' }],
+    })
+    expect(result?.total).toBe(1125)
+    expect(result?.text).toContain('3 personas')
+    expect(result?.text).not.toContain('5 personas')
+  })
   it('prices Richard two nights using the published nightly tariffs without selecting a room', async () => {
     const { db, scopes } = dbFor()
     const result = await loadRecommendedRoomEstimate({ ...args, db })

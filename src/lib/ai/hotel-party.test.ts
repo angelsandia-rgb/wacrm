@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { repairHotelPartyFields } from './hotel-party'
 
 describe('child ages omitted from the reservation marker', () => {
+  it('preserves explicitly stated adults when the model omits the split', () => {
+    expect(repairHotelPartyFields({ personas: '3' }, [{ role: 'user', content: 'Hospedaje para 3 adultos' }])).toEqual({ personas: '3', adultos: '3' })
+  })
+  it.each(['Somos 3 personas', 'Somos 3 adultos y un niño', 'Somos 3 adultos y una niña', 'Somos 2 adultos'])('does not invent an adult-only party: %s', content => {
+    expect(repairHotelPartyFields({ personas: '3' }, [{ role: 'user', content }])).toEqual({ personas: '3' })
+  })
   it('recovers Mery’s five-year-old from the explicit note, despite ninos=0', () => {
     expect(repairHotelPartyFields({ adultos: '4', personas: '5', ninos: '0', nota: '1 nino de 5 anos' }))
       .toEqual({ adultos: '4', personas: '5', edades_ninos: '5', nota: '1 nino de 5 anos' })

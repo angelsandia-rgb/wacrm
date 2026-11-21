@@ -1,6 +1,21 @@
+import type { ChatMessage } from './types'
+
+/** Use only an explicit adult-only party, never turn an unspecified headcount
+ * into adults. The most recent headcount statement must account for everyone. */
+export function explicitAdultOnlyParty(messages: ChatMessage[], guests: number): number | null {
+  const party = messages.filter(m => m.role === 'user').map(m => m.content.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase())
+    .findLast(text => /\b(?:personas?|adultos?|nin[oa]s?|menor(?:es)?|bebes?|hij[oa]s?)\b/.test(text))
+  if (!party || /\b(?:nin[oa]s?|menor(?:es)?|bebes?|hij[oa]s?)\b/.test(party)) return null
+  const count = party.match(/\b(\d+)\s+adultos\b/)
+  return count && Number(count[1]) === guests ? guests : null
+}
+
 /** Repair an omitted child-age field only when the marker's own explicit
  * note accounts for every guest. Never infer ages from prices or capacity. */
-export function repairHotelPartyFields(fields: Record<string, string>): Record<string, string> {
+export function repairHotelPartyFields(fields: Record<string, string>, messages: ChatMessage[] = []): Record<string, string> {
+  if (!fields.adultos && !fields.edades_ninos?.trim() && explicitAdultOnlyParty(messages, Number(fields.personas))) {
+    fields = { ...fields, adultos: fields.personas }
+  }
   if (fields.edades_ninos?.trim() || !fields.nota) return fields
   const adults = Number(fields.adultos)
   const guests = Number(fields.personas)
