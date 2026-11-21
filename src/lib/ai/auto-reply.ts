@@ -192,8 +192,10 @@ export function claimsOrderRegistration(text: string): boolean {
 /** The bot's previous reply OFFERED the catalog as a question ("¿Le
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
  *  answers next is a reply to that offer. A message that merely mentions
- *  the catalog (e.g. the sent link itself) doesn't count. */
-const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?|\b(?:le|te)\s+(?:puedo|podemos)\s+(?:mostrar|enviar|compartir|mandar)\s+(?:el|nuestro)\s+cat[aá]logo\b/i
+ *  the catalog (e.g. the sent link itself) doesn't count. A conditional
+ *  offer without "¿?" ("Si quiere, le mando el catálogo completo.") counts
+ *  too (Casa Ceiba 2026-11-21: "Si mandenelo" got the catalog suppressed). */
+const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?|\b(?:le|te)\s+(?:puedo|podemos)\s+(?:mostrar|enviar|compartir|mandar)\s+(?:el|nuestro)\s+cat[aá]logo\b|\bsi\s+(?:gusta|quiere|desea|lo\s+desea|le\s+parece)\b[^.?!]*\bcat[aá]logo\b/i
 
 /**
  * The full catalog only goes out when the customer asked for it — in
