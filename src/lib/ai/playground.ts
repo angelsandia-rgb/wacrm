@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadAiConfig } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
-import { loadCatalogContext } from '@/lib/ai/catalog-context'
+import { catalogQueryFromMessages, loadCatalogContext } from '@/lib/ai/catalog-context'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { describeNowInZone, describeUpcomingWeekdaysInZone } from '@/lib/timezone'
@@ -49,7 +49,7 @@ export async function runPlaygroundTurn(db: SupabaseClient, accountId: string, r
 
   const knowledge = await retrieveKnowledge(db, accountId, config, latestUserMessage(messages))
   const metrics = await loadBusinessMetrics(db, accountId)
-  const catalog = await loadCatalogContext(db, accountId)
+  const catalog = await loadCatalogContext(db, accountId, catalogQueryFromMessages(messages))
   const { data: account } = await db
     .from('accounts')
     .select('timezone, industry_vertical, catalog_delivery_mode, restaurant_menu_url')

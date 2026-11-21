@@ -7,7 +7,7 @@ export async function enrichAssignment<T extends { type: string; title?: string;
   if (row.type !== 'conversation_assigned' || !row.conversation_id || /^(?:Motivo: |Cliente necesita atención por: )/.test(row.body || '')) return row
   try {
     const { data: conversation, error } = await db.from('conversations')
-      .select('id,ai_handoff_summary,contacts(name,phone),accounts(industry_vertical)').eq('account_id', row.account_id).eq('id', row.conversation_id).maybeSingle()
+      .select('id,ai_handoff_summary,contacts(name,phone),accounts!conversations_account_id_fkey(industry_vertical)').eq('account_id', row.account_id).eq('id', row.conversation_id).maybeSingle()
     if (error || !conversation) return row
     const { data: messages, error: messageError } = await db.from('messages')
       .select('sender_type,content_type,content_text,created_at,conversations!inner(account_id)')

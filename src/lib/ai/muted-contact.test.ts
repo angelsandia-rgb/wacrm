@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isAiMuteTag } from './muted-contact'
+import { aiSilencedByTags, isAiMuteTag } from './muted-contact'
 import { isSpecialRateTalk } from './hotel-media-intent'
 import { claimsOrderRegistration, customerRequestedCatalog } from './auto-reply'
 
@@ -55,5 +55,27 @@ describe('order claimed without the order marker (Casa Ceiba 2026-11-07)', () =>
   it('ignores the summary and normal replies', () => {
     expect(claimsOrderRegistration('¿Me confirma para registrarlo?')).toBe(false)
     expect(claimsOrderRegistration('El masajeador cuesta GTQ 199.')).toBe(false)
+  })
+})
+
+describe('catalog offer without question marks (Casa Ceiba 2026-11-08)', () => {
+  it('"Si desea, le puedo mostrar el catálogo" + "Si" asks for the catalog', () => {
+    expect(customerRequestedCatalog([
+      { role: 'assistant', content: 'Por ahora no tengo una lista de ofertas navideñas. Si desea, le puedo mostrar el catálogo de productos disponibles 😊' },
+      { role: 'user', content: 'Si' },
+    ])).toBe(true)
+  })
+})
+
+describe('IA solo para contactos de prueba (Casa Ceiba 2026-11-17)', () => {
+  it('with the switch on, only "Prueba IA" contacts get the AI; mute tags still win', () => {
+    expect(aiSilencedByTags(['Cliente'], true)).toBe(true)
+    expect(aiSilencedByTags([], true)).toBe(true)
+    expect(aiSilencedByTags([' prueba ía '], true)).toBe(false)
+    expect(aiSilencedByTags(['Prueba IA', 'Sin IA'], true)).toBe(true)
+  })
+  it('with the switch off nothing changes', () => {
+    expect(aiSilencedByTags([], false)).toBe(false)
+    expect(aiSilencedByTags(['Proveedor'], false)).toBe(true)
   })
 })

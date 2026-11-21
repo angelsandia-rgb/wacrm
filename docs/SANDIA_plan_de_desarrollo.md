@@ -34,6 +34,14 @@ completo antes de tocar código.
 
 ## Estado actual
 
+**2026-11-14 — Cesi, enganches humanos y catálogo por intención (Codex).** Prompt operativo de Casa Ceiba actualizado y verificado con enganche por beneficio real de cada producto, estilo comercial 70/30 y SAC preservado. Once casos de modelo aprobados sin efectos externos. Se prepara un PR para buscar productos nombrados fuera de los primeros 50, conservarlos tras respuestas «sí» y dar hasta 300 caracteres de ficha a tiendas, sin cambiar límites de hoteles. El prompt está activo; la mejora de catálogo sigue pendiente de publicación. Ver `docs/CASA_CEIBA_ENGANCHES_Y_CATALOGO_2026-11-14.md`.
+
+**2026-11-14 — Casa Ceiba: revisión de #372–375 y refuerzo de ventas/SAC preparado (Codex).** #371 y migración 179 ya están publicados; #372–374 corrigen pagos, estados y municipio, y #375 documenta el modo autónomo activado. La lectura actual confirmó `orders_live=true`; falta el recorrido externo completo hasta entrega. Nueva rama `fix/casa-ceiba-sales-and-service`: venta consultiva sin presión, prioridad SAC, traspaso directo, confirmación sin promesa de retención, cancelación compatible con handoff y baja persistente para seguimientos/carritos. Prompt propio de Casa Ceiba preparado con política comercial vigente, sin modificar aún la configuración viva. Publicación pendiente de pruebas finales, PR y sí explícito de merge. Ver `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md` para riesgos pendientes de pagos tardíos, alertas, conciliación y SAC operativo. Las entradas antiguas de estado siguientes son históricas.
+
+**2026-11-13 — Continuación del PR #371 (Codex), código pendiente de publicación.** Los pedidos consecutivos de un contacto ya no sobrescriben su trato anterior ni heredan su confirmación/cancelación. Los carritos utilizan la cola de reintentos, recuperan fallos anteriores dentro de su vigencia y se verifican de nuevo en Shopify antes de enviar. Ajuste operativo ya aplicado: se sincronizó `pedido_enviado` a APPROVED según Zernio; la cuenta tiene `pedido_enviado` y `pedido_recibido` aprobadas y 11 plantillas pendientes, sin forzar aprobaciones. Sigue siendo necesario aplicar la migración 179 antes de desplegar el PR.
+
+**2026-11-12 — Correcciones de seguridad operativa de Shopify preparadas por Codex, pendientes de publicación.** El formulario de pedidos reinicia los datos de entrega por cliente; un error de inventario impide crear pedidos o enlaces de pago. Los avisos de pedido usan una cola persistente con reintentos y reservas entre workers. Las decisiones de confirmar/cancelar se guardan localmente y excluyen recordatorios pendientes. Antes de publicar este cambio, aplicar la migración 179; ver `docs/SHOPIFY_NOTIFICATION_RECOVERY.md`. Esta entrada no afirma que los cambios estén desplegados.
+
 **(actualizado 2026-08-15, última sesión: Claude Code)**
 
 **Bloque 1 (múltiples números de WhatsApp por empresa) está completo en
@@ -5498,3 +5506,522 @@ lint sin errores y build de producción correcto. La suite completa usa
 `--testTimeout=30000` por el tiempo del análisis de traducciones en Windows.
 `package-lock.json` sin cambios. `graphify update .` no pudo arrancar por
 su entorno uv local roto.
+
+### 2026-11-11 — Claude Code (Casa Ceiba: pedidos autónomos de punta a punta)
+
+- **#355 Flujo de pedidos autónomo (Shopify + Dropi + Recurrente + WhatsApp).**
+  El cliente recibe siempre su número de pedido real por WhatsApp: los pedidos
+  web (`orders/create`) con texto dentro de 24 h o con la plantilla
+  `pedido_recibido` fuera de ella; los del chat con el número real en vez del
+  borrador "#D". El webhook atiende `orders/updated` (el "Actualización de
+  pedido" del panel de Shopify) y `fulfillments/*`: cuando Dropify escribe el
+  envío de Dropi, el negocio pasa a Enviado/Entregado (`pickForwardStage`,
+  sin avisos repetidos) y el cliente recibe su guía (plantilla
+  `pedido_enviado` fuera de 24 h). Recurrente también confirma pagos por
+  transferencia. Nueva tarjeta "Pedidos Shopify" en el panel del contacto
+  (estado de pago, preparación y guía) con "Crear pedido"
+  (`POST /api/shopify/orders`, rol agente), mismo camino que la IA.
+- **Merge sin CI:** GitHub Actions dejó de crear ejecuciones desde el 9/11
+  (sin incidente reportado). Con autorización de Angel se quitó
+  temporalmente el check obligatorio de `protect-main`, se fusionó y se
+  restauró de inmediato. Validado localmente: typecheck, lint, build,
+  2902/2902 pruebas.
+- **Cesi como vendedor:** sección "Cómo vendes" en su prompt (menú
+  comprar/ya compré, una recomendación con razón, cierre con pregunta,
+  objeciones: envío gratis y pago al recibir).
+- **Pendiente del dueño:** activar "Crear pedidos reales" + plantilla
+  `pedido_recibido`; aprobación de Meta de ambas plantillas.
+
+### 2026-11-12 / 13 — Claude Code (Casa Ceiba: pruebas en vivo, confirmación contra entrega, carritos y plantillas)
+
+- **#358 La IA conserva el chat al cerrar un pedido** (`keepChat`, sin traspaso
+  al confirmar), montos `Q1,199` sin espacio (`currency.ts`) y trato de usted
+  en todos los avisos de pedido.
+- **#359 / #360 "¿Cómo va mi pedido?" con borradores:** `loadOrderStatuses`
+  lee también `DraftOrder` y dice si espera el pago con tarjeta o la
+  confirmación contra entrega, sin inventar número de pedido.
+- **#362 Existencias antes de vender:** `outOfStockTitles` revisa el stock de
+  Shopify (que Dropify sincroniza de Dropi) antes de crear el pedido o mandar
+  el link de Recurrente; sin existencias, se disculpa y pasa a un asesor.
+  Opción A del pago con tarjeta en la web: botón "Pagar con tarjeta por
+  WhatsApp" en el carrito (`layout/theme.liquid`), checkout solo contra
+  entrega.
+- **#363 / #364 Catálogo = tienda Shopify:** con Shopify conectado, el
+  catálogo que manda la IA es el dominio principal de la tienda
+  (`shopifyStoreUrl`), y catálogo, menú y cotización que manda la IA se guardan
+  como `bot`, no `agent` (antes bloqueaban la recuperación de traspasos
+  temporales).
+- **#365 Cesi confirma los pedidos web contra entrega:** etapa nueva **"Por
+  confirmar"** en el tablero Pedidos de Casa Ceiba (creada por SQL), etiqueta
+  `por-confirmar` y mensaje con resumen y "Responda SÍ". Marcadores
+  `confirm_shopify_order` / `cancel_shopify_order`: confirma → "Pedido
+  creado" + `confirmado-whatsapp` + notificación; cancela → `cliente-cancela`
+  + traspaso a asesor (nunca cancela solo). Probado en vivo con #1002
+  (confirmar) y #1003 (cancelar), con Dropify en pausa; ambos cancelados.
+- **#366 Carritos abandonados por WhatsApp:** `runAbandonedCartSweep` en el
+  cron de seguimientos; una hora después (máx. 24 h, 8–20 h) un solo
+  recordatorio con productos, total y link de recuperación. Migración **178**
+  `shopify_cart_reminders` (aplicada a mano).
+- **#367 Plantillas fuera de la ventana de 24 h:** `src/lib/shopify/notify.ts`
+  usa la primera plantilla APROBADA por Meta (confirmar_pedido,
+  pago_confirmado, pedido_en_camino/pedido_enviado, pedido_entregado). Corrige
+  el webhook de Recurrente, que fallaba con clientes fuera de la ventana.
+- **#368 Recordatorio de pedidos sin confirmar:** a las 3 h sin respuesta un
+  recordatorio (plantilla `recordatorio_confirmacion` fuera de la ventana); a
+  las 24 h aviso al equipo. Etiquetas `recordatorio-confirmacion` y
+  `sin-confirmar-24h`.
+- **Plantillas enviadas a Meta (Zernio), todas PENDING al cierre:**
+  confirmar_pedido, recordatorio_confirmacion, pago_confirmado,
+  recordatorio_pago, pedido_en_camino, pedido_entregado, novedad_entrega,
+  pedido_cancelado, carrito_abandonado, seguimiento_compra, opinion_compra
+  (más pedido_recibido y pedido_enviado del 12/11, >2 días en revisión).
+- **Tienda:** entrega pareja "2 a 3 días hábiles" (checkout y 19
+  descripciones de producto corregidas en el admin de Shopify).
+- **Pendiente:** aprobación de Meta (si sigue igual, soporte de Zernio);
+  cambiar el seguimiento de 24 h a `seguimiento_compra` al aprobarse; primer
+  pedido real con "Crear pedidos reales" para ver qué devuelve Dropify;
+  novedades de Dropi (no hay API pública; Dropi tiene MCP oficial y token de
+  integración).
+- **Zernio (13/11, después de #369):** el webhook "WPP OFICIAL"
+  (→ `/api/whatsapp/webhook/zernio`) **no tenía activado**
+  `whatsapp.template.status_updated`, así que una aprobación de Meta nunca
+  habría llegado a `message_templates` y `notify.ts` jamás habría usado las
+  plantillas. Activado, junto con `whatsapp.account.status_updated`,
+  `whatsapp.account.name_status_updated` y `whatsapp.account.alert_received`
+  (el código los ignora sin error). El número +502 4288 3689 aparece en
+  Zernio como **"Sending limited"** y con nombre visible **"Demo"**; probable
+  causa de que las plantillas sigan en PENDING. Se escribió a soporte de
+  Zernio (chat del panel). Pendiente: revisar el estado directo en Zernio
+  (`listZernioTemplates`) por si alguna se aprobó antes de activar el evento.
+
+## 2026-11-12 — Codex: correcciones de la auditoría de Shopify
+
+- Se corrigió la reutilización de dirección, departamento y forma de pago al cambiar de cliente o abrir un nuevo pedido. Los errores de red muestran el aviso de fallo del formulario.
+- La creación de pedidos y enlaces de pago se detiene si no se puede consultar el inventario o si la variante no existe.
+- Migración 179: cola de avisos por cuenta y evento, reservas con SKIP LOCKED y vencimiento, y decisión de confirmación en deals. Avisos de creación, envío, entrega y pago se conservan y reintentan con el cron existente. Las alertas internas usan IDs estables para reintentos.
+- Los recordatorios ya no se etiquetan como enviados antes de enviarse; se descartan ante confirmación, cancelación solicitada, despacho o respuesta del cliente. Se respeta el horario de atención en los reintentos de recordatorios y alertas.
+- Recurrente recupera el pedido pagado al reintentar un borrador ya completado para continuar su registro y aviso sin volver a completarlo.
+- Pruebas: 250 archivos y 2,940 pruebas aprobadas, incluidos inventario, persistencia, concurrencia, plantillas pendientes y cancelaciones. TypeScript y ESLint sin errores; compilación normal de producción con Turbopack aprobada y 143 páginas generadas; package-lock.json sin cambios. Migración ejecutada dos veces en PostgreSQL embebido (PGlite 0.5.16), con comprobaciones de claves por cuenta, reservas y recuperación, workers anteriores, trabajos enviados, permisos y restricción de decisiones aprobadas.
+- Graphify se intentó consultar y actualizar, pero el ejecutable falla con `uv trampoline failed to canonicalize script path`; no se pudo regenerar el grafo.
+- Pendiente de publicación: aplicar la migración 179 antes del despliegue, obtener aprobación del merge y ejecutar la prueba integral en una cuenta de pruebas. No se enviaron mensajes ni se crearon pedidos o cobros reales durante esta corrección. Procedimiento y límites: docs/SHOPIFY_NOTIFICATION_RECOVERY.md.
+
+## 2026-11-13 — Codex: pedidos repetidos, recuperación de carritos y plantillas
+
+- Cada ID de pedido conserva su propio trato y su respuesta. Un segundo pedido del mismo contacto crea otro trato o utiliza uno sin pedido; las repeticiones del mismo ID recuperan el existente. La asignación de un trato vacío compara su estado antes de actualizarlo.
+- Los recordatorios de carritos pasan a shopify_notification_jobs. Se excluyen los éxitos del registro anterior y se recuperan los fallos aún vigentes. Los reintentos consultan el checkout actual por Node: no envían si ya se completó, venció o cambió el teléfono; esperan ante actividad reciente y respetan el horario y los contactos excluidos.
+- Sincronización operativa aplicada a la cuenta de Casa Ceiba: pedido_enviado pasó de PENDING a APPROVED al comprobar el estado real de Zernio. Verificación posterior: pedido_enviado y pedido_recibido aprobadas, 11 pendientes. No se modificaron contenidos ni se forzaron aprobaciones. Copia previa de estados en tmp/zernio-template-status-before-sync.json.
+- Pruebas: 252 archivos y 2,957 pruebas aprobadas. Se añadieron casos de compras repetidas tras confirmación/cancelación, aislamiento por cuenta, recuperación de carritos fallidos, plantillas pendientes, compra completada durante la espera y cambios de teléfono. ESLint sin errores; package-lock.json sin cambios. La compilación final y CI se registran en el PR.
+- El código sigue en el PR #371 y no se ha desplegado. La migración 179 no cambió respecto de la versión validada en PostgreSQL embebido. Mantener el orden: migración, despliegue y comprobación en una cuenta de pruebas.
+### 13/11/2026 — Auditoría VSR: fechas, eventos y precios por ocupación
+
+- Auditoría de producción de solo lectura: siete días completos, 72 chats y
+  1,453 mensajes; 38 respuestas de IA y tres fotografías con entrega/lectura.
+  Se mantienen el horario autorizado 20:00–08:00, las pausas manuales y los
+  seguimientos comerciales desactivados. No se enviaron pruebas a huéspedes.
+- Se reprodujeron y corrigieron localmente las preguntas repetidas de salida:
+  «El 22», «El domingo 22» y «llego jueves y me retiro sábado». La guarda
+  reconoce respuestas a una pregunta reciente del bot y partidas explícitas;
+  no reutiliza fechas antiguas ni una pregunta del personal.
+- El triage de eventos reconoce «Nueva solicitud» y una cotización solicitada
+  que el cliente sigue esperando; conserva la derivación de gestiones previas
+  y la aclaración ante respuestas ambiguas.
+- Las recomendaciones de habitaciones verifican también los precios ya
+  presentes en el borrador. Se reutiliza la calculadora de tarifas: Junior
+  para tres adultos del 14 al 15/11 se estima en Q1,125, sin seleccionar
+  habitación, guardar una reserva ni sustituir acuerdos del personal.
+- Las correcciones son independientes de la cola de notificaciones de
+  Shopify y de su migración. No se aplicaron cambios de datos a producción.
+- Validación: regresiones reproducidas antes del cambio, 451 pruebas
+  focalizadas, suite completa de 247 archivos y 2,940 pruebas, TypeScript y
+  ESLint. Build registrado en el PR antes de solicitar su merge explícito.
+
+### 2026-11-13 — Codex: auditoría conjunta y preparación de autonomía
+
+- Se auditó producción de Villa San Ricardo y Casa Ceiba, sin enviar mensajes a clientes ni crear pedidos o cobros de prueba. La salud HTTP y los 14 heartbeats estaban correctos. El estado operativo no equivale a una prueba completa de venta y despacho.
+- Cambios operativos aplicados con respaldo y control de concurrencia: teléfono público de Casa Ceiba alineado con Zernio y el escaparate, comprobado en el widget; política de niños y mascotas de VSR alineada con el prompt vigente e indexada con búsqueda semántica y por texto. Se preservaron las exclusiones Sin IA, horarios y pausas manuales.
+- La migración 179 ahora incluye dos tablas y tres RPC: cola de avisos, registro de intentos de pedido, decisiones con todos sus efectos locales en una transacción y bloqueo compartido entre IA y agentes. Un resultado remoto indeterminado exige reconciliación; no se vuelve a crear el pedido a ciegas. Los recordatorios revalidan el estado actual y los workers renuevan su reserva antes de procesar cada trabajo.
+- Se propagan fallos al crear/enlazar un trato para recuperar el webhook; se conserva un trato por pedido. El contexto de productos admite hasta 50 entradas para cubrir los 32 productos activos observados. Se integraron las correcciones del hotel de fechas, triage y precio por ocupación.
+- Validación del conjunto: 252 archivos y 2,996 pruebas aprobadas, TypeScript y ESLint sin errores, build normal de producción con Turbopack aprobado, package-lock.json sin cambios. La prueba PostgreSQL embebida pasó con doble aplicación, atomicidad, rollback, aislamiento, permisos, concurrencia ordinaria y resultados inciertos. Cinco pruebas secas con modelos reales pasaron sin ejecutar acciones.
+- Pendiente antes del despliegue: aplicar/verificar la migración 179 y obtener el sí explícito para el merge del PR #371. El acceso administrativo local de Supabase devolvió 401; se solicitó iniciar sesión. Meta se revisará después por decisión del dueño.
+- Casa Ceiba conserva pedidos reales desactivados: faltan plantillas aprobadas, adaptar el seguimiento fuera de ventana y verificar el proceso de Dropify para pedidos aún sin confirmar. El pedido web revisado tenía un municipio inválido, sin evidencia de despacho; su dirección necesita validación. No se declara autonomía completa ni se alteraron pedidos existentes.
+
+### 2026-11-13 (noche) — Claude Code: Casa Ceiba, dinero y estados de pedido (plan ecommerce, fase A/B)
+
+- Estado comprobado antes de cambiar nada (lectura, 14/11 04:30 UTC): main =
+  `2dbf4758` (#371), salud 200; tienda `x0rkkg-b4` = Casa Ceiba (primario
+  `casaceibagt.myshopify.com`, GTQ); `orders_live=false`; **13 plantillas
+  aprobadas** (antes 3); **la clave de Recurrente es live**; #1004 sin cambios
+  (PENDING/UNFULFILLED, `Dropi Sync Error`, ciudad «Guantemala»); cola de
+  avisos vacía; 4 borradores abiertos. Dropify: ambas sincronizaciones
+  desmarcadas, guardado y verificado tras recargar.
+- Proveedor (fase A3): Dropify solo ofrece 4 casillas, sin filtro por
+  etiqueta; Dropi no publica una API oficial de órdenes. Prepago puede usar la
+  regla nativa «sincronizar pagadas» (pendiente de prueba externa); contra
+  entrega confirmada **no tiene vía automática documentada**: bloqueado hasta
+  que Dropi entregue acceso oficial. Detalle en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md`.
+- Código (este PR): pago real con venta pausada o importe/moneda distintos →
+  retenido con alerta crítica; sin enlaces de cobro mientras `orders_live` está
+  apagado; COD solo si la pasarela lo dice; «Entregado» solo con todos los
+  paquetes; cancelación en Shopify cierra el negocio sin prometer reembolso;
+  carritos paginados.
+- Validación: suite completa 253 archivos / 3,011 pruebas, ESLint de los
+  archivos tocados sin errores, TypeScript de `src/` limpio, build de
+  producción aprobado en worktree limpio con `npm ci`, `package-lock.json` sin
+  cambios. Consultas GraphQL nuevas validadas en solo lectura contra la tienda.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, merge #372, cancelación de #1004 y avisos de excepción
+
+- #372 fusionado con el «sí» del propietario (`28f9776f`) y desplegado: el
+  contenedor reporta `GIT_SHA=28f9776f`, healthy; `/api/health` 200.
+- #1004 cancelado en Shopify a solicitud explícita del propietario (prueba
+  suya): sin reembolso (COD sin pago), reposición de inventario, sin aviso al
+  cliente. **Evidencia real del código de #372:** el webhook cerró el negocio
+  como «perdido» a los 2 s, sin mensajes ni avisos en cola
+  (`outputs/cancelacion-pedido-1004-2026-11-14.json`).
+- Validación «¿autónomo sin API?»: sí, con la confirmación web como control
+  posterior y el propietario atendiendo excepciones (diseño en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §2.1). No se activa: el propietario
+  pidió no hacer pruebas reales aún. Falta confirmar en Dropi el tiempo de
+  despacho.
+- PR nuevo: aviso al dueño cuando Dropi rechaza un pedido («Dropi Sync
+  Error», con el motivo de la nota de Dropify), y el recordatorio de
+  confirmación deja de prometer «no lo enviaremos» cuando el proveedor importa
+  solo. Suite 253 archivos / 3,018 pruebas, ESLint sin errores, build en
+  worktree limpio aprobado, lockfile sin cambios.
+
+### 2026-11-14 (cont.) — Claude Code: #373 en producción, por qué #1004 no avisó, municipio en pedidos por WhatsApp
+
+- #373 fusionado con el «sí» del propietario (`8a38eff6`); contenedor
+  `GIT_SHA=8a38eff6`, healthy, `/api/health` 200.
+- **Por qué #1004 no mandó WhatsApp** (lectura de Shopify, CRM y plantillas):
+  el pedido entró el 14/11 00:00 UTC. A esa hora el CRM todavía tenía
+  `confirmar_pedido` como no aprobada (se sincronizó como APPROVED a las 01:32
+  UTC). El cliente no tenía la ventana de 24 h abierta y la versión en
+  producción era anterior a #371, sin cola de reintentos, así que el aviso se
+  descartó. El negocio y la conversación sí se crearon (00:00:05–07). Hoy las
+  13 plantillas están aprobadas y la cola (#371) reintenta cada 15 min hasta
+  poder enviar. El **correo** de confirmación de Shopify sí salió (historial
+  del pedido, 00:00:01). Los correos de envío de Shopify dependen de que
+  Dropify cree el envío con aviso al cliente: verificable en el primer envío
+  real.
+- PR nuevo: el pedido por WhatsApp lleva el **municipio real** a Shopify y
+  Dropi (antes la ciudad era el departamento). La IA lo pide, va como 7º campo
+  opcional del marcador, el formulario manual del inbox lo incluye, y un
+  municipio de la capital con otro departamento se detiene antes de crear el
+  pedido. Suite 253 / 3,022, ESLint sin errores, build en worktree limpio
+  aprobado, lockfile sin cambios.
+
+### 2026-11-14 (06:00–06:10 UTC) — Claude Code: Casa Ceiba, #374 en producción y modo autónomo activado
+
+- #374 (municipio en pedidos por WhatsApp) fusionado con el «sí» del
+  propietario (`f6424518`); contenedor `GIT_SHA=f6424518`, healthy,
+  `/api/health` 200.
+- **Activación por decisión explícita del propietario** («después del merge
+  del PR nuevo»):
+  - `orders_live=true` para Casa Ceiba, con cambio mínimo y lectura antes y
+    después (`outputs/activacion-orders-live-2026-11-14.json`).
+  - Dropify con ambas sincronizaciones marcadas, guardado y verificado tras
+    recargar.
+  - Comprobación previa: cero pedidos abiertos sin despachar, cero avisos
+    pendientes y cero intentos bloqueados.
+- Efecto: pedidos web y de WhatsApp a Shopify y Dropi sin intervención.
+  Excepciones con aviso al propietario. Enlaces de pago reales habilitados.
+- **Pausa:** desmarcar las dos casillas en Dropify y apagar «Crear pedidos
+  reales».
+- Sin evidencia real todavía: el primer pedido real se revisa de punta a punta.
+  Pendiente del propietario: tiempo de despacho de Dropi. Estado completo en
+  `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §0.
+
+### 2026-11-14 — Codex: auditoría del modo autónomo y mejoras de venta y SAC
+
+- Verificado #375 fusionado, main `213edcfd`, CI aprobado y salud de producción HTTP 200; configuración de Casa Ceiba con IA y `orders_live` activos. No se certificó una compra real completa ni la versión exacta del contenedor con salud HTTP.
+- Prompt vivo: cierre forzado en cada turno y «sin riesgo». Se preparó una versión de venta consultiva, objeciones con hechos, negativas respetadas y SAC prioritario, conservando cobertura/precios/política de siete días.
+- Código preparado: prioridad de ecommerce sin alterar hotel/clínica, petición clara de humano directa, acuse sin plazo inventado, no prometer retención web, cancelación con handoff sin perder decisión y recuperación de errores de confirmación.
+- Baja comercial real: etiqueta por cuenta/contacto, sin borrar otras; detener seguimientos y carritos, revalidando antes del envío. No cubre todavía broadcasts/flows personalizados; los avisos de compra siguen disponibles.
+- Veinte casos con el modelo real pasaron sin enviar mensajes ni ejecutar propuestas. Pruebas de operaciones guardadas y fallos son simuladas. Snapshot limpio de código `d1ef601a`: TypeScript, ESLint, 255 archivos / 3,068 pruebas y build normal Next/Turbopack aprobados, sin cambio del lockfile. El informe documenta los límites y la preparación de publicación.
+- No se modificó en producción el prompt, los pedidos, el proveedor ni los cobros. El script de aplicación del prompt tiene plan por defecto, respaldo y compare-and-set; usar después del despliegue y su aprobación.
+- Graphify sigue fallando con `uv trampoline failed to canonicalize script path`; se revisaron fuentes directamente.
+- Próximos riesgos: pago tardío sobre compra cancelada/revisión, tarea durable de pago retenido y aviso al dueño, alertas Dropi nocturnas/reabiertas, resumen aceptado versionado, conciliación y seguimiento de casos SAC.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, Effi como segundo proveedor (diseño)
+
+- Revisión de solo lectura de la cuenta de Effi del propietario. Hallazgos:
+  - 9,366 artículos de dropshipping en quetzales y 97 convenios con bodegas en Guatemala.
+  - API oficial con `idempotency_key`: crea remisiones de venta con `convenio_dropshipping` y guías con recaudo (CAEX, Gintracom).
+  - Webhooks firmados de cambios de estado y novedades de guía.
+- Decisión: **no** usar el conector Shopify de Effi, porque importaría todos los pedidos y los mezclaría con Dropify. El CRM enrutará cada pedido según el proveedor de sus productos.
+- Sin código todavía. Pendientes del propietario y técnicos en `docs/CASA_CEIBA_ECOMMERCE_ESTADO.md` §8.
+- Segunda investigación (solo lectura) en la cuenta de Effi:
+  - Los convenios confirman que despacha el proveedor, la guía la crea el distribuidor y liquida Efficommerce. Las entregas fracasadas las paga el distribuidor.
+  - En Guatemala la única transportadora es CAEX, y está habilitada.
+  - Plan desde Q330/mes.
+  - Firma de webhooks no documentada: se resuelve con cabecera propia más relectura por API.
+  - Dropify rechaza los productos que no son de Dropi (según foros).
+  - Pendientes del propietario en §8.3.
+
+### 2026-11-14 — Codex: enganches de Cesi y continuidad del catálogo ampliado
+
+- Por instrucción del propietario, aplicado el prompt de enganches humanos por producto: beneficio cotidiano real, precio y cierre, conservando estilo 70/30 y SAC. Once casos de modelo aprobados; no se fabrican rankings ni se ejecutaron propuestas. Snapshot en `docs/prompts/casa-ceiba-system-prompt-2026-11-14-enganches.md`; configuración leída de nuevo con coincidencia exacta.
+- Código preparado en rama para nombres relevantes fuera del corte inicial de 50, conservando el producto tras «sí/lo quiero» mediante contexto reciente. Búsqueda y prompt limitados, cuenta/activos obligatorios, descripción dropshipping hasta 300 caracteres y límites/reglas del hotel conservados.
+- Pruebas enfocadas: 352 aprobadas. Validación completa de código `11011199`: TypeScript, ESLint, 255 archivos / 3,078 pruebas y build Next/Turbopack de 143 páginas aprobados en copia limpia, lockfile sin cambios. Búsqueda validada además contra la base real en solo lectura. Graphify mantiene el error conocido de uv; fuentes revisadas directamente.
+- El prompt está activo. El código requiere PR y sí explícito para su merge; la autorización del #376 no cubre este nuevo PR. No se cambió el diseño de proveedor Effi ni el enrutamiento de compras.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, pagos tardíos y avisos operativos (#379)
+
+- Fusionado con el «sí» del propietario (`73682aba`); contenedor `GIT_SHA=73682aba`, healthy, `/api/health` 200. Sin migración.
+- Cierra los puntos 1–3 de «Hallazgos operativos todavía pendientes» de `docs/CASA_CEIBA_AUDITORIA_VENTAS_SAC_2026-11-14.md`:
+  - Pago con tarjeta: antes de completar el borrador se exige compra abierta en el CRM y existencias al momento del pago; si no, se retiene sin liberar nada a Dropi.
+  - Pago retenido: aviso guardado al dueño/admins (con push) antes de responder 200; si no se guarda, 500 y Recurrente reintenta. Un borrador sin contacto solo genera la alerta de plataforma.
+  - Avisos al equipo (rechazo de Dropi, 24 h sin confirmar) a cualquier hora; el horario 08–20 queda para mensajes comerciales. Un rechazo con otro motivo, o el mismo tras limpiarse la etiqueta, vuelve a avisar.
+- Sin evidencia real: no ha habido cobros ni pedidos desde la activación.
+- Abierto: el prompt vivo de Casa Ceiba cambió el 14/11 a las 12:18 UTC fuera de esta sesión y aún dice «sin riesgo» y obliga a cerrar con pregunta; pendiente de confirmar con el propietario.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, formulario de pedido propio (#381)
+
+- Fusionado con el «sí» del propietario (`a579c3ab`). Migración `180_shopify_order_requests.sql` aplicada a producción vía Supabase MCP (RLS + lectura de miembros + GRANT verificados).
+- El pedido web nace al confirmar por WhatsApp, sin app de terceros:
+  - `public/shopify-order-form.js` (botón `data-sandia-order` + script con `data-account`) envía a `POST /api/shopify/order-form`. Se valida producto, existencias, teléfono y municipio↔departamento, y se guarda una **solicitud** en `shopify_order_requests`. No se crea nada en Shopify, así que nada llega a Dropify/Dropi.
+  - Se pregunta al cliente con la plantilla `confirmar_pedido`. «Sí» crea el pedido COD con la propuesta guardada por el servidor (no la que lea el modelo); «con tarjeta» envía el link de Recurrente; «no» cierra sin handoff. Liquidación atómica: un doble «sí» crea un solo pedido. Vigencia 72 h; una solicitud nueva reemplaza a la anterior del contacto.
+  - Antiabuso: honeypot y límites por IP (8/h), teléfono (3/día) y tienda (200/día).
+- Prompt vivo sin tocar (el propietario pidió dejarlo así). Pasos pendientes, cada uno con su «sí»: instalar botón y script en el tema vivo, prueba controlada con el número de QA (confirmar que Dropi recibe COD), y luego quitar COD del checkout nativo de Shopify.
+
+### 2026-11-14 — Claude Code: Casa Ceiba, botón en el tema, prueba #1005 y etapas de pedido (#383)
+
+- Botón «Pedir, pago contra entrega» instalado en `layout/theme.liquid` del tema vivo, **visible solo con `?sandia_form=1`** (se guarda en sessionStorage) mientras se prueba. Sin el parámetro la tienda no cambia. Prueba del formulario: pendiente del propietario.
+- Prueba de venta por chat con el número de QA (+502 4284 5157): la IA creó el pedido #1005 (COD, Q400, municipio Villa Canales resuelto bien). **Dropi lo rechazó**: «No posee saldo suficiente en la wallet, monto mínimo requerido: 39.68». El aviso del CRM (#379) llegó 6 min después. Falta comprobar que Dropi recibe COD con saldo en la billetera. #1005 cancelado en Shopify (sin aviso al cliente); la oportunidad pasó sola a perdida.
+- Hallazgo: la oportunidad del chat quedó en «Pago confirmado» sin pago, porque la IA movía leads a etapas del tablero «Pedidos». **#383** (`b6070d8`): en ese tablero la IA ya no puede mover a Por confirmar, Pedido creado, Pago confirmado, Enviado ni Entregado; solo el código de pedidos. Otros embudos sin cambio. Sin migración.
+- Pendientes, cada uno con su «sí»: el propietario prueba el formulario; recargar la billetera de Dropi y validar COD; hacer público el botón; quitar COD del checkout nativo; texto del aviso para errores de saldo (hoy dice «corrige los datos»).
+
+### 2026-11-14 (noche) — Claude Code: Casa Ceiba, revisión de Codex (C1–C6)
+
+Lectura de `docs/REVISION_CODEX_PARA_CLAUDE_CASA_CEIBA_2026-11-14.md`; estados revalidados contra main `fad36003` y producción (≈04:30 UTC del 15/11).
+
+- **C1 — #1007 (Q700, COD, abierto, sin despacho, Por confirmar; sin cancelar).** Origen: checkout normal de la tienda (Online Store), a nombre de «Angel Simon», con el correo y el teléfono de pruebas del propietario. No es pedido de Chat Sandía. Nadie editó la dirección después: la ciudad se tecleó tal cual, con formato de lista de Dropi: «62671 - Villa Canales (Santa Inés Petapa) | CAEX». Dropify la envía tal cual y Dropi la rechaza («La ciudad no existe en el departamento»). Con «Villa Canales» a secas, Dropi sí valida la ciudad (#1005 falló por saldo, #1006 por stock). Nuestro código nunca escribe ese formato. Pendiente: el propietario decide si se cancela; no se toca hasta entonces.
+  - #1006 «Producto no posee stock en ninguna de sus bodegas»: en Dropi ambos productos tienen stock y están disponibles en Guatemala (2676 Masajeador de pies: 99; 19122 Cortador de pelo: 696). Los enlaces de Dropify coinciden con los productos de Shopify. La causa no se ve en el panel. La billetera está en Q0.00 y Dropi no tiene ningún pedido en 7 días. Dropify tiene **dos integraciones** (tokens «prueba1» y «prueba2»). Pendiente de confirmar con soporte de Dropi o con saldo.
+- **C2 — avisos.** Los avisos de #1006/#1007 llegan al usuario correcto (login «Casa Ceiba», owner) y siguen sin leer. Ese usuario tiene **0 dispositivos push**, así que solo se ven en el panel. Pendiente del propietario: activar las notificaciones en su teléfono y hacer una prueba acordada. El título genérico de la alerta `push_delivery` ya no dice «hotel».
+- **C3–C6** (PR de esta entrada, migración `181_shopify_order_request_outcome.sql`; se aplica **antes** de desplegar):
+  - C3: la solicitud del formulario guarda `terms` (variantes, cantidades, precios, moneda y total aceptados). Al confirmar, el pedido se crea con esos precios y solo si el catálogo sigue igual. Si sube o baja el precio, cambia la moneda o un artículo ya no existe: no hay pedido ni link, se avisa al cliente y un asesor recotiza.
+  - C4: `pending → processing → confirmed` (con `order_id`/`order_name`) o `held` (con `outcome_note`): otro pedido en el chat, cambio de condiciones o resultado desconocido. Nunca vuelve a `pending` y siempre hay un aviso a una persona.
+  - C5: `shopify_config.shipping_coverage` (NULL = sin restricción; las demás empresas no cambian). Se valida al recibir el formulario y otra vez antes de crear el pedido o el link. Lo excluido o ambiguo da cero pedido y motivo visible. **La lista de Casa Ceiba falta cargarla**: el prompt dice «Escuintla y Sacatepéquez» y no aclara si son departamentos completos o municipios; lo confirma el propietario.
+  - C6: un pago de Recurrente retenido sin cliente vinculado ahora también avisa al dueño (sin conversación, con referencias del cobro y del borrador). Sin owner/admin, la escalación es la alerta crítica de plataforma.
+- C7 sigue pendiente: alerta de solicitudes atascadas en `processing`/`held`, caducidad visible y conciliación programada.
+
+### 2026-11-15 — Claude Code: Casa Ceiba, cierre de C1–C6 y primera parte de C7
+
+- **Estado tras #385** (`eab9862`, desplegado, health 200): #1007 cancelado en Shopify (sin aviso al cliente) por pedido del propietario. Migración 181 aplicada. Cobertura de Casa Ceiba = **todo el país** (22 departamentos con `"*"`), decisión del propietario. En el prompt de Cesi se cambió solo la línea de cobertura (hash verificado `f9be1427…` → `fce5e40b…`): «enviamos a todo el país». Envío gratis y estimado de 2–3 días hábiles sin cambio, confirmados por el propietario.
+- **Dropi** (consultado en el panel, sin crear orden): flete de Q27–28 (capital ≈ Petén), comisión de plataforma ≈ 3.6 % de lo recaudado, y Gintracom sin COD en Flores (Petén). **El token de la integración vence el martes 17/11**; lo renueva el propietario en Dropify. Siguen abiertos con soporte de Dropi: el rechazo «sin stock» de #1006, la comisión y plazo de retiro, y si COD exige saldo.
+- **C7, primera parte** (PR de esta entrada, migración `182_shopify_order_request_expired.sql`; se aplica **antes** de desplegar). `src/lib/shopify/backlog.ts` corre en el cron de follow-ups, antes del barrido de avisos:
+  - una solicitud del formulario sin respuesta en 72 h pasa a `expired` (antes solo dejaba de seleccionarse) y owner/admin reciben un aviso para recuperarla a mano. No hay mensaje automático al cliente: opt-out, horario y límites de WhatsApp siguen siendo decisión de una persona;
+  - una alerta de plataforma por cuenta (`shopify_backlog:<cuenta>`, como máximo cada 6 h) cuando una solicitud lleva más de 15 min en `processing` o un aviso sigue sin entregarse tras 2 h u 8 intentos. Las esperas deliberadas (horario, carrito inactivo) no cuentan. La alerta se cierra sola cuando se despeja.
+- Siguen pendientes de C7, en PRs aparte: SAC (responsable, acuse, vencimiento, escalamiento) y conciliación programada de pagos, pedidos y envíos.
+
+### 2026-11-15 — Claude Code: Casa Ceiba, C7 parte 2 — casos de SAC
+
+- #386 (`9d60666`) desplegado: migración 182 aplicada antes, health 200 y registros del cron limpios tras la primera corrida.
+- **SAC sobre la tabla `tasks`, sin migración** (PR de esta entrada). En tiendas conectadas (`shopify_config`), cada derivación real a una persona abre un caso: una tarea «Atender chat: <palabras del cliente>». Las fallas transitorias no abren caso porque se recuperan solas. Otras verticales no cambian.
+  - Responsable: `handoff_agent_id`, o el owner si no hay.
+  - Acuse: el que ya envía la derivación («Un asesor revisará su solicitud y continuará por este chat»).
+  - Vencimiento: 4 h; el cron de recordatorios de tareas avisa al responsable.
+  - Escalamiento: si sigue abierto a las 24 h, entra en la alerta `shopify_backlog` de la cuenta.
+  - Estado y resolución: la tarea abierta o hecha (`completed_at`).
+  - Una sola tarea abierta por contacto: una segunda derivación en el mismo chat se agrega a sus notas.
+- Sin cambio: garantías, reembolsos y cancelaciones con el proveedor siguen derivándose a una persona, y la IA no promete acciones que no ejecutó.
+- Simplificaciones marcadas `ponytail:`: el caso se identifica por el prefijo del título (sin columna `kind`) y las 4 h son de reloj, no de horario laboral.
+- Pendiente de C7: conciliación programada de pagos, pedidos y envíos.
+
+### 2026-11-15 — Claude Code: Casa Ceiba, C7 parte 3 — conciliación de pedidos
+
+- #387 (`9d2bd23`, casos de SAC) desplegado: health 200 y registros limpios.
+- **Conciliación por hora** (`src/lib/shopify/reconcile.ts`, en el cron de follow-ups en el minuto 1 de cada hora; sin migración). Por tienda conectada compara los pedidos de Shopify de los últimos 7 días con los negocios del CRM y detecta eventos que nunca llegaron:
+  - pedido sin registro en el CRM tras 30 min: webhook perdido o pedido sin teléfono;
+  - rechazado por Dropi («Dropi Sync Error») y sin resolver tras 6 h;
+  - pedido vivo sin envío tras 72 h: Dropi nunca lo despachó.
+  - Una alerta `shopify_reconcile:<cuenta>` como máximo cada 12 h, que se cierra sola cuando todo cuadra.
+- Prueba de solo lectura contra producción: 7 pedidos, todos cancelados, sin hallazgos. Al ignorar las cancelaciones solo aparece #1001, una prueba antigua sin negocio, como se esperaba.
+- No cubre (`ponytail:`) un cobro de Recurrente pagado cuyo webhook se pierda del todo: no guardamos el id del checkout. Recurrente reintenta sus webhooks durante días (Svix) y un pago retenido ya alerta. Guardar el id si crece el volumen con tarjeta.
+- Con esto C7 queda cubierto salvo Effi, que sigue sin implementarse por decisión.
+
+### 2026-11-15 (noche) — Claude Code: Casa Ceiba, formulario público, municipio en lista y pedido del carrito
+
+- **Tienda (tema vivo, sin PR):** portada rehecha para vender (`sections/cc-home.liquid`), cobertura «toda Guatemala» en portada, barra, título y política de envío, y la política ya describe el modo actual (el pedido entra a preparación al recibirse). El formulario propio (#381) es **público** desde hoy: se quitó la compuerta `?sandia_form=1`; los botones «Pedir ahora» de la portada y de la página de producto lo abren. Respaldos y fuentes en `output/casa-ceiba-tema/`.
+- **Cesi:** prompt 80/20 (cierre asumido, un rescate ante «lo voy a pensar», dos cierres por objeción). Sigue sin inventar escasez ni reseñas. Respaldo en `docs/prompts/`.
+- **Este PR** (`public/shopify-order-form.js`, sin migración):
+  - El municipio pasa de texto libre a **lista dependiente del departamento** (22 departamentos, 340 municipios oficiales). Un municipio mal escrito era lo que Dropi rechazaba con el pedido ya creado (#1004, #1007).
+  - Un botón con `data-sandia-cart` pide **todo el carrito** (lee `/cart.js`, hasta 10 líneas) y lo vacía al enviarse. Permite quitar contra entrega del checkout nativo sin dejar el carrito sin salida.
+  - Corrección: «San Pedro Sacatepéquez, San Marcos» se rechazaba porque el nombre también existe en Guatemala. Lo encontró la prueba nueva, que comprueba que toda opción de la lista pasa la validación del servidor.
+- Pendiente tras el despliegue: cambiar en el tema el botón «Pagar» del carrito por el formulario, ocultar «Comprar ahora» y desactivar «Pago contra entrega» en Shopify. Sigue sin probarse un pedido real de punta a punta (billetera de Dropi en Q0, token vence el 17/11).
+
+### 2026-11-15 (noche, 2) — Claude Code: Casa Ceiba, página de pedido propia y NIT
+
+- **Contexto:** el propietario pidió un checkout «como el de Anacate» (carrito → «Confirmar pedido») y, además, atar el pedido a la respuesta del cliente por WhatsApp. Con el checkout nativo eso no es posible: Shopify crea el pedido al terminar el checkout y Dropify lo importa en ese momento, sin opción de espera. La única forma es que el pedido nazca con el «sí», que es lo que hace el formulario propio (#381).
+- Por decisión del propietario se **reactivó** «Pago contra entrega» en el checkout nativo (se había desactivado horas antes) y el carrito volvió al checkout de Shopify, con selector de departamento/municipio previo, botón «Confirmar pedido» y campo NIT opcional (atributo `NIT` del carrito). No hay recogida en tienda.
+- **Este PR** (sin migración): `public/shopify-order-form.js` puede mostrarse **como página** en un elemento `data-sandia-order-page` (resumen del carrito con total, datos, municipio en lista, NIT opcional y «Confirmar pedido»). El NIT del formulario se guarda en la propuesta y llega a la nota del pedido de Shopify (`NIT: …`).
+- Pendiente: publicar la página `/pages/pedido` en el tema, que el propietario la vea, y solo con su visto bueno cambiar el botón del carrito para que lleve ahí.
+
+### 2026-11-15 (noche, 3) — Claude Code: Casa Ceiba, forma de pago en la página de pedido
+
+- #390 fusionado y desplegado (`85be942c`). La página `/pages/pedido` funciona en la tienda (resumen del carrito, datos, municipio en lista, NIT) y el propietario la aprobó.
+- Pedido del propietario: quitar el botón «Pagar con tarjeta por WhatsApp» del carrito y poner la elección de pago **dentro de la página**, en un apartado «Pago», para que WhatsApp use los datos ya llenados y de ahí siga el link de pago.
+- **Este PR** (sin migración): el formulario tiene el apartado «Pago» con «Pago contra entrega» (predeterminado) y «Tarjeta de crédito o débito». La elección viaja como `payment` y se guarda en la propuesta. Con tarjeta, el mensaje de confirmación dice «pago con tarjeta» y un «sí» del cliente genera el link de Recurrente (instrucción nueva en el prompt del sistema; el pedido pagado se crea con el webhook verificado, como hasta ahora).
+- Plantilla: fuera de la ventana de 24 h el mensaje sale por plantilla. Para tarjeta se intenta `confirmar_pedido_tarjeta` y, mientras Meta no la apruebe, se usa `confirmar_pedido` (que dice «pago contra entrega»); la IA aclara y envía el link al confirmar. Falta enviar la plantilla nueva a Meta.
+- Pendiente tras el despliegue (tema): botón «Confirmar pedido» del carrito → `/pages/pedido`, quitar el botón de tarjeta por WhatsApp, el selector de municipio previo y el NIT del carrito (ya están en la página).
+
+### 2026-11-16 — Claude Code: plan de autonomía supervisada, Entregas 0 y 1a
+
+Ejecuta `docs/CASA_CEIBA_PLAN_CLAUDE_AUTONOMIA_Y_EXPERIENCIA_2026-11-15.md` por entregas. Angel autorizó avanzar sin pedir permiso en cada paso (16/11).
+
+**Entrega 0 — revalidación (solo lectura, 16/11):**
+
+| Elemento | Estado | Clase |
+| --- | --- | --- |
+| Producción | Contenedor en `3949bd57` = main remoto (#391); `/api/health` ok | Comprobado |
+| Entradas de compra | Portada y producto: botón «Pedir ahora» → formulario. Carrito y drawer: «Confirmar pedido» → `/pages/pedido`. «Comprar ahora» oculto por CSS. Chat: Cesi. `/checkout` nativo sigue existiendo con contra entrega activa y nada lo enlaza | Comprobado en la tienda el 15/11 |
+| Barrera nativa | Ocultar botones no impide llegar a `/checkout` con un enlace directo; un pedido creado ahí entra a Dropi sin confirmación | Riesgo abierto (Entrega 4) |
+| Dropify | Las dos casillas de sincronización marcadas (visto el 15/11 20:40) | Histórico de ayer |
+| Dropi | Saldo y vigencia del token sin verificar: la sesión de app.dropi.gt estaba cerrada | Pendiente del propietario |
+| Aceptación del proveedor | Ningún pedido ha sido aceptado por Dropi (#1004–#1007 rechazados y cancelados) | Histórico |
+| Plantillas | 13 aprobadas; `confirmar_pedido_tarjeta` enviada a Meta el 15/11, pendiente | Comprobado |
+| Avisos | Propietario con 0 dispositivos push | Comprobado el 15/11 |
+| Catálogo | 41 productos activos y enlazados | Comprobado el 15/11 |
+
+Decisiones de arquitectura: la identidad de compra vive en `shopify_order_requests` (no se crea otro sistema); la cotización sigue saliendo del catálogo sincronizado del CRM en el servidor; del proveedor no hay API oficial de órdenes, así que su aceptación se observa por la etiqueta/nota que deja Dropify.
+
+**Entrega 1a — identidad, versiones e idempotencia de la compra del formulario** (este PR, migración `183_shopify_purchase_identity.sql`; se aplica **antes** de desplegar):
+
+- `purchase_id` (identidad estable), `revision` (versiones inmutables), `idempotency_key` y `ask_delivered_at`. La solicitud y su pregunta por WhatsApp se guardan en una sola transacción (`submit_shopify_order_request`).
+- Dos compras del mismo contacto conviven: se quitó el reemplazo por contacto. Una edición nombra la compra que cambia, cierra la versión anterior y crea la siguiente; una compra en creación o ya creada no se edita.
+- Un envío repetido (doble clic, reintento por red) devuelve la misma solicitud y no vuelve a preguntar. El formulario manda una clave por intento.
+- El servidor decide a qué compra corresponde un «sí»: solo un resumen entregado; con varias compras en espera, la respuesta debe nombrar una (`[[ACTION:confirm_shopify_order:CÓDIGO]]`); una respuesta que cita un mensaje anterior al resumen vigente no cuenta. Si no se puede vincular, no se crea ni cancela nada y se le pregunta al cliente.
+- La cola descarta la pregunta de una versión sustituida, cancelada o ya respondida, y anota cuándo se entregó.
+- El método de pago guardado con la compra prevalece sobre el marcador del modelo. Si el cliente cambia el pedido por chat y se crea ahí, la versión del formulario queda cerrada.
+- Pruebas: `scripts/test-shopify-purchase-identity.sh` ejecuta 15 casos de concurrencia contra un Postgres real (doble envío, dos pestañas, dos workers, edición, otra cuenta). Pruebas unitarias de vinculación, marcadores y cola.
+
+**Queda para 1b:** llevar la venta directa por chat al mismo contrato (identidad y condiciones durables) y sustituir el bloqueo por conversación por uno por compra. La edición de una compra desde la página web llega con la Entrega 4 (el servidor ya la admite).
+
+### 2026-11-16 — Claude Code: Entrega 3a, geografía canónica en el servidor
+
+PR apilado sobre el de la Entrega 1a. **Sin migración.**
+
+- `src/lib/shopify/gt-geo.ts`: lista canónica de los 22 departamentos y 340 municipios (división política oficial, al 16/11/2026) con `checkMunicipio`. Normaliza acentos, mayúsculas y espacios; no adivina lugares. Solo admite como alias las formas de escribir la capital y «Petapa».
+- El servidor ya no deja pasar un municipio desconocido «para que decida Dropi»: un error de tecleo («Guantemala», caso real #1004), una aldea o zona escrita como municipio, o un municipio en el departamento equivocado se rechazan **antes** de que exista el pedido. Aplica al formulario y al pedido que crea Cesi por chat (en chat queda detenido con el motivo para una persona).
+- Homónimos (San Pedro Sacatepéquez, La Libertad, San José…): válidos solo con su propio departamento; el error dice a cuáles pertenece el nombre.
+- A Shopify, y por tanto al proveedor, se envía el municipio con la grafía canónica.
+- Una prueba compara la lista del formulario público con la del servidor, para que no se separen.
+- Tres cosas distintas quedan separadas: geografía válida (esta lista), cobertura comercial (`shipping_coverage`) y localidad aceptada por la transportadora (solo se sabe cuando el proveedor toma el pedido; sin API oficial, no se afirma).
+
+Pendiente de la Entrega 3: sincronización programada y observable de catálogo/precio/existencias con umbral de antigüedad, variantes reales, y consolidar cantidades de líneas con la misma variante.
+
+### 2026-11-16 — Claude Code: Entrega 4a, «Continuar por WhatsApp» y recuperación
+
+#392 (Entrega 1a) y #393 (Entrega 3a) fusionados con el «sí» de Angel. **Este PR, sin migración:**
+
+- El botón del formulario dice **«Continuar por WhatsApp»** y una frase explica que falta aceptar el resumen ahí, sin volver a escribir los datos.
+- Al enviar, el cliente ve su **referencia**, el número al que se le escribe, un botón **«Abrir WhatsApp»** (con la referencia en el mensaje) y «¿No es su número? Cambiarlo». El tema pasa el número de la tienda con `data-whatsapp`.
+- **Recuperación:** si el resumen no pudo salir (sin plantilla aprobada fuera de la ventana de 24 h), sale en cuanto el cliente escribe; para eso sirve el botón.
+- **Tarjeta:** se quitó el respaldo a la plantilla de contra entrega. Una compra con tarjeta nunca se describe como pago contra entrega; mientras Meta aprueba `confirmar_pedido_tarjeta`, el resumen espera el primer mensaje del cliente y sale como texto.
+- **Cantidades:** una fracción se rechaza con su explicación (antes se redondeaba en silencio). Dos líneas del mismo producto se suman antes de revisar existencias y el límite.
+
+Pendiente de la Entrega 4: validación campo por campo, resumen con foto y edición inmediata, acceso seguro al pedido sin cuenta, y cerrar la ruta nativa `/checkout`.
+
+### 2026-11-16 — Claude Code: recordatorio de solicitudes sin respuesta y prompt de Cesi consolidado
+
+#394 (Entrega 4a) fusionado con el «sí» de Angel y desplegado (`ec51e3c4`).
+
+**Auditoría de compra y de prompt (16/11), hallazgos principales:** los recordatorios de carrito abandonado ya no se disparan (dependían del checkout de Shopify, al que ya no se llega); quien llenaba el formulario y no respondía no recibía nada (solo caducaba a las 72 h); `/checkout` nativo sigue abierto con contra entrega; el formulario valida solo al enviar; el prompt de Cesi tenía 23,208 caracteres con cuatro bloques de venta superpuestos y un párrafo desactualizado sobre pedidos web.
+
+**Este PR, sin migración:** un solo recordatorio por WhatsApp cuando el resumen de una compra del formulario lleva 3 h entregado sin respuesta. Lo encola `runShopifyBacklogCheck` (cron de follow-ups) y lo envía la cola existente, que no lo manda si el cliente ya escribió, si silenció a la IA o los mensajes comerciales, si la compra ya no está pendiente, o fuera de 8:00–20:00. Fuera de la ventana de 24 h usa la plantilla aprobada `recordatorio_confirmacion`, cuya promesa («no lo enviaremos hasta que lo confirme») es cierta para una solicitud: el pedido no existe hasta el «sí».
+
+**Prompt de Cesi (configuración de Casa Ceiba, con el «sí» de Angel):** consolidado de 23,208 a 12,006 caracteres en `docs/prompts/casa-ceiba-system-prompt-2026-11-16.md`; respaldo del anterior en `docs/prompts/casa-ceiba-prompt-backup-2026-11-16.md`. Un solo bloque de ventas (enganche antes del precio, cierre asumido, dos intentos ante objeción, un rescate ante «lo voy a pensar», un aumento de pedido), el párrafo de pedidos web corregido (un pedido de la página no existe hasta el «sí»), el municipio debe ser real, y ofrece la tienda cuando el cliente pide otra forma de comprar. Probado con 11 conversaciones simuladas en el playground: cierra con pregunta de avance, respeta el «no», deriva reclamos con el marcador y pregunta el municipio de una aldea.
+
+Pendiente: carritos abandonados en la página de pedido (no hay teléfono hasta que se envía el formulario) y agregar `data-whatsapp` al script del tema (el editor de Shopify se congeló en dos intentos).
+### 2026-11-16 (noche) — Claude Code: botón «Abrir WhatsApp» sin depender del tema
+
+El editor de código de Shopify congeló Chrome cuatro veces al intentar agregar `data-whatsapp` al script del tema. **Este PR, sin migración:** el endpoint del formulario devuelve el número público de WhatsApp de la tienda (`whatsapp_config.public_phone_number` del número principal) y el script lo usa para el botón «Abrir WhatsApp». `data-whatsapp` en el tema sigue funcionando como reemplazo si se agrega. Sin número configurado, el botón simplemente no aparece.
+### 2026-11-16 (noche) — Claude Code: Entrega 2a, links de pago con tarjeta conciliables
+
+Migración `184_shopify_card_checkouts.sql` (tabla nueva, aditiva) **aplicada a producción** vía Supabase MCP; RLS con lectura de miembros, escritura solo `service_role` (se revocó el `INSERT` que dejaban los privilegios por defecto a `authenticated`).
+
+- Cada link de Recurrente que emite el chat se registra al crearse (`shopify_card_checkouts`: id del cobro, borrador, conversación, importe, moneda, estado). Si no se puede registrar, alerta crítica: el link ya existe y puede pagarse.
+- `createRecurrenteCheckout` devuelve el id del cobro (del cuerpo o, si falta, de la URL `…/checkout-session/ch_…`).
+- El trabajo del webhook pasó a `processPaidCheckout` (`src/lib/shopify/card-payments.ts`) sin cambiar su lógica (estado leído de Recurrente, importe y moneda contra el borrador, compra abierta, existencias, pausa de ventas, retención con aviso). El webhook y la conciliación lo comparten y anotan el resultado.
+- **Conciliación independiente del webhook** en el cron de follow-ups: cada link abierto de los últimos 7 días se consulta en Recurrente cada ~30 min. Pagado → mismo camino que el webhook (idempotente: reutiliza el pedido completado y los avisos con clave). Vencido → se cierra. Error de Recurrente → cuenta y alerta, el link sigue abierto para la siguiente vuelta.
+- Límite conocido: los links emitidos antes de este cambio no están registrados; si alguno se pagó sin webhook, solo lo encuentra una revisión manual en Recurrente.
+
+Pendiente de la Entrega 2: cotización única (descuentos, envío e impuestos explícitos), condiciones durables para la venta directa por chat y recuperación de una creación de link con respuesta desconocida.
+
+### 2026-11-16 (noche) — Claude Code: Entrega 5a, avisos de la tienda que nadie lee llegan por correo
+
+#395, #396 y #397 fusionados con el «sí» de Angel y desplegados (`221e1d2e`, health 200).
+
+**Hallazgo:** los avisos de excepción de la tienda (pago retenido, Dropi rechazó, cliente cancela, solicitud vencida…) llegan solo al panel y por push; el propietario tiene cero dispositivos push, así que en la práctica nadie se entera si no abre el CRM.
+
+**Este PR, sin migración:** `src/lib/shopify/escalation.ts`, en el cron de follow-ups. Un aviso de la tienda sin leer 30 min después de enviarse se manda **por correo** (Gmail de soporte, ya configurado en producción) a cada persona a quien iba dirigido, **una sola vez** (reclamo atómico en `shopify_notification_jobs` con clave `…:email`). Un aviso ya leído en la app no se envía. Avisos de más de 24 h no se persiguen (los cubre la alerta de pendientes atascados). Un correo que no sale queda registrado y genera alerta de plataforma `store_notice_email`.
+
+Pendiente de la Entrega 5: que el propietario registre su teléfono para push (acción suya), responsable/sustituto por severidad y acuse humano del caso.
+
+### 2026-11-17 — Claude Code: Entrega 4b, validación del formulario campo por campo
+
+#398 (Entrega 5a) fusionado con el «sí» de Angel. **Este PR, sin migración:** el formulario de pedido valida cada campo al salir de él (cantidad entera de 1 a 20, nombre y apellido, WhatsApp de 8 dígitos con o sin +502, espacios o guiones, dirección, departamento y municipio). El error aparece debajo del campo, se retira en cuanto se corrige, y al enviar el foco va al primer campo con problema; lo válido se conserva. Antes había un único mensaje «Complete los campos obligatorios». Una prueba comprueba que las reglas del navegador aceptan los mismos teléfonos que el servidor.
+
+### 2026-11-17 — Claude Code: Entrega 1b, el pedido se bloquea por compra y no por chat
+
+#399 (Entrega 4b) fusionado y «Pago contra entrega» desactivado en el checkout de Shopify con el «sí» de Angel (comprobado: un enlace directo a `/checkout` muestra «Esta tienda no puede aceptar pagos»; la página `/pages/pedido` sigue funcionando).
+
+Migración `185_shopify_purchase_attempts.sql` **aplicada a producción** (tabla y función nuevas; el código actual sigue usando la anterior hasta el despliegue).
+
+- Antes: un solo pedido por chat cada 30 min (`claim_shopify_order_attempt`, tabla por conversación) más una revisión de `ai_action_log` con la misma ventana. Frenaba duplicados, pero también una segunda compra real en el mismo chat.
+- Ahora el bloqueo es **por compra**. La clave es el id de la solicitud del formulario, o en ventas por chat los productos exactos (resueltos a la variante del catálogo), cantidades, teléfono y forma de pago.
+  - La misma compra reenviada por el modelo (el «gracias» tras confirmar, o la dirección redactada distinto) se crea una sola vez en 24 h.
+  - Una compra distinta en el mismo chat sí se crea.
+  - Un intento con resultado desconocido sigue bloqueando todo el chat hasta que una persona revise Shopify.
+  - Transición: un pedido del bloqueo anterior de los últimos 30 min sigue frenando duplicados en ese chat.
+- Se quitó la revisión de 30 min en `ai_action_log` (la cubre el bloqueo por compra); el registro en `ai_action_log` se mantiene.
+- Pruebas: `scripts/test-shopify-purchase-identity.sh` suma 5 casos del bloqueo por compra contra Postgres real; pruebas unitarias de reenvío, segunda compra, cuarentena y clave del formulario.
+
+Pendiente de la 1b: guardar las condiciones (precios del catálogo) de una venta por chat en el mismo registro que el formulario.
+
+### 2026-11-17 — Claude Code: botón del formulario «Comprar ahora»
+
+#400 (Entrega 1b) fusionado y desplegado (`7c29acdc`). A pedido de Angel, el botón del formulario de pedido dice **«Comprar ahora»** (antes «Continuar por WhatsApp») y debajo una línea: «Le llegará un mensaje por WhatsApp para confirmar su pedido». Se quitó la frase previa que explicaba el paso. Sin migración.
+
+Primer pedido de prueba (17/11 01:10 UTC, referencia DB45, 1 × Luces Solares de Exterior, Q400, contra entrega, Villa Canales): solicitud guardada con clave de idempotencia, resumen enviado por la plantilla `confirmar_pedido` a las 01:11. Al revisar no había respuesta del cliente; el pedido se crea con su «SÍ».
+### 2026-11-17 — Claude Code: consultas ambiguas de conversación → cuenta
+
+#401 (botón «Comprar ahora») fusionado con el «sí» de Angel.
+
+Al revisar el pedido de prueba se vio en los logs `PGRST201 Could not embed because more than one relationship was found for 'conversations' and 'accounts'` cada 5 min en `conversations/cron`. PostgREST trata `shopify_order_attempts` (PK `account_id, conversation_id`, migración 179 del 14/11) como tabla puente entre conversaciones y cuentas, así que `accounts(...)` incrustado desde `conversations` dejó de ser único. Afectaba: la recuperación de respuestas perdidas de la IA (`src/lib/ai/inbound-recovery.ts`, vertical hotel) y el detalle del aviso push de asignación (`src/lib/push/assignment-details.ts`). **Este PR** usa la relación explícita `accounts!conversations_account_id_fkey(...)`; ambas consultas se probaron contra producción en solo lectura. Sin migración.
+
+Pedido de prueba (referencia DB45): Zernio muestra la plantilla `confirmar_pedido` en estado «sent» (Meta la aceptó pero no confirmó entrega al …2732) y ningún mensaje entrante en esa conversación; el «SÍ» del propietario no llegó a la API de WhatsApp. Pendiente aclarar en qué teléfono lo vio y respondió.
+
+### 2026-11-17 — Claude Code: aviso de rechazo de Dropi según el motivo + nota del CRM protegida
+
+Primer pedido real de punta a punta (#1008, Casa Ceiba): Dropi lo rechazó por saldo
+insuficiente en la wallet y el aviso al dueño decía «Corrija los datos en Shopify».
+Ahora `dropiFixHint` da el paso correcto según el motivo (recargar la wallet, renovar
+el token o corregir datos). Además Dropify reemplaza la nota del pedido con la suya al
+rechazarlo y borraba la del CRM (origen, NIT): esa nota se guarda también como
+atributo del pedido «Chat Sandía» (pedido y borrador). Validado: typecheck, eslint,
+build, 3 183 pruebas.
+
+### 2026-11-17 — Claude Code: interruptor «IA solo para contactos de prueba»
+
+Pedido del dueño de Casa Ceiba para probar el flujo real de WhatsApp sin que la IA
+atienda a los clientes. Nuevo flag por empresa `ai_test_contacts_only` (se activa en
+/admin, sin migración): con él encendido, la IA (respuesta automática, seguimientos y
+recuperación de entrantes perdidos) solo atiende a contactos con la etiqueta
+«Prueba IA»; las etiquetas de silencio («Sin IA», etc.) siguen ganando. Los avisos de
+pedidos (confirmación, envío) no cambian. Validado: typecheck, eslint, build, 3 185
+pruebas.
+
+### 2026-11-18 — Claude Code: casos de garantía para Dropi + nota de traspaso corregida
+
+Un reclamo por producto dañado, defectuoso o equivocado que la IA deriva abre el caso
+de servicio (tarea con dueño y vencimiento de 4 h, ya existente) como **garantía**:
+título «Atender chat: Garantía #1010 — …» y, en las notas, el texto listo para pegar en
+Dropi → Garantías (pedido y guía leídos de Shopify —solo los del propio cliente, por
+teléfono—, el problema en palabras del cliente, la evidencia en el chat y el paso de
+escalar a soporte si el proveedor no responde en 72 h). El trámite dentro de Dropi
+sigue siendo manual: Dropi no tiene API pública de garantías. Además, la nota interna
+del traspaso decía «sin responder» aunque el mismo turno sí le respondió al cliente;
+ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 190 pruebas.

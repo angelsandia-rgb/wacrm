@@ -17,7 +17,7 @@ import { loadAiConfig } from './config'
 import { buildConversationContext, recentExchangeNote } from './context'
 import { makeInboundImageResolver, providerSupportsVision } from './inbound-image'
 import { retrieveKnowledge } from './knowledge'
-import { loadCatalogContext } from './catalog-context'
+import { catalogQueryFromMessages, loadCatalogContext } from './catalog-context'
 import {
   CLOSE_AVAILABILITY_AND_TOTAL_LINE,
   CLOSE_AVAILABILITY_AND_TOTAL_LINE_EN,
@@ -38,13 +38,14 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { isClosingMessage } from './followups'
 import { contactMutesAi } from './muted-contact'
+import { detectCommercialOptOut, persistCommercialOptOut } from './commercial-preferences'
 import { hotelAvailabilityCommitment, withAvailabilityConfirmationTiming, conciseAvailabilityNotice, hasAvailabilityTiming, isAfterHours, withAttentionHours } from './attention-hours'
 import { earlierUserMessages, latestUserMessage, previousAssistantMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkSharedRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { moveDeal, MoveDealError } from '@/lib/pipelines/move-deal'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
-import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation } from '@/lib/products/send-catalog'
+import { sendCatalogToConversation, SendCatalogError, catalogUrlForConversation, shopifyStoreUrl } from '@/lib/products/send-catalog'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { sendRestaurantMenuToConversation, SendRestaurantMenuError } from '@/lib/products/send-restaurant-menu'
 import { checkFreeBusy, createEvent, APPOINTMENT_LOOKAHEAD_MS } from '@/lib/google-calendar/api'
@@ -52,7 +53,10 @@ import { formatWithOffset, describeNowInZone, describeUpcomingWeekdaysInZone, da
 import { createQuote, CreateQuoteError, type QuoteItemInput } from '@/lib/quotes/create-quote'
 import { sendQuoteByAccountPreference, SendQuoteError } from '@/lib/quotes/send-quote'
 import { createShopifyOrderFromChat } from '@/lib/shopify/chat-order'
-import { describeOrderStatuses, loadOrderStatuses } from '@/lib/shopify/api'
+import { loadPendingOrderConfirmation, resolveOrderConfirmation, type PendingOrder } from '@/lib/shopify/order-confirmation'
+import { finishOrderRequest, loadInboundContext, loadPendingOrderRequests, pendingRequestsPrompt, pickAnsweredRequest, settleOrderRequest, type PendingOrderRequest } from '@/lib/shopify/order-requests'
+import { runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
+import { describeOrderStatuses, isOrderStateStage, loadOrderStatuses } from '@/lib/shopify/api'
 import {
   buildReservationFollowUpMessage,
   missingReservationFields,
@@ -104,6 +108,7 @@ import { teammateRepliedRecently,
   trimTrailingAssistant,
 } from './human-reply'
 import { applySkillGates } from './skills'
+import { openServiceCase } from '@/lib/shopify/service-cases'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -188,7 +193,7 @@ export function claimsOrderRegistration(text: string): boolean {
  *  gustaría que le comparta nuestro catálogo?"), so whatever the customer
  *  answers next is a reply to that offer. A message that merely mentions
  *  the catalog (e.g. the sent link itself) doesn't count. */
-const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?/i
+const BOT_OFFERED_CATALOG_RE = /¿[^?]*\b(cat[aá]logo|catalog)\b[^?]*\?|\b(?:le|te)\s+(?:puedo|podemos)\s+(?:mostrar|enviar|compartir|mandar)\s+(?:el|nuestro)\s+cat[aá]logo\b/i
 
 /**
  * The full catalog only goes out when the customer asked for it — in
@@ -290,7 +295,7 @@ const MISSING_RECORD_MARKER_NOTE =
 /** Appended for the one retry when a store reply said "lo estoy registrando"
  *  without the order marker (Casa Ceiba 2026-11-07, gpt-5.4-mini, 3 times). */
 const MISSING_ORDER_MARKER_NOTE =
-  `SYSTEM CHECK (this turn only): the customer confirmed the order summary and your draft says you are registering it, but it did not include the ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}…]] marker, so NO order was created and no payment link will be sent. Write the reply again (one short line) and append that marker with every value from the confirmed summary: exact product name(s) from the catalog with quantity, full name, phone, address, departamento (use the municipio if that is all you have) and cod or tarjeta. Never ask again for anything already given.`
+  `SYSTEM CHECK (this turn only): the customer confirmed the order summary and your draft says you are registering it, but it did not include the ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}…]] marker, so NO order was created and no payment link will be sent. Write the reply again (one short line) and append that marker with every value from the confirmed summary: exact product name(s) from the catalog with quantity, full name, phone, address, departamento (use the municipio if that is all you have), cod or tarjeta, and the municipio last. Never ask again for anything already given.`
 
 const AI_PROVIDER_FALLBACK_TEXT =
   'Estoy teniendo una dificultad temporal para procesar su mensaje. Ya avisé al equipo para que le dé seguimiento por este chat.'
@@ -322,6 +327,8 @@ const TEAMMATE_PRESENT_NOTE =
 
 const HUMAN_HANDOFF_ACK_TEXT =
   'Con gusto, en un momento le comunico con alguien del equipo para que le ayude. 🙌'
+const ECOMMERCE_HANDOFF_ACK_TEXT =
+  'Un asesor revisará su solicitud y continuará por este chat.'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -585,7 +592,7 @@ export async function dispatchInboundToAiReply(
     if (!withinAiAttentionHours(config.autoReplySchedule)) return
     // Staff / personal / supplier contact (tag "Interno", "Personal",
     // "Proveedor" or "Sin IA") — never the bot's conversation.
-    if (await contactMutesAi(db, contactId)) return
+    if (await contactMutesAi(db, contactId, accountId)) return
 
     const conv = await loadConvEligibility(db, accountId, conversationId)
     if (!conv) return
@@ -593,7 +600,10 @@ export async function dispatchInboundToAiReply(
     // restrict the topic, while ordinary information can resume after the
     // staff quiet window without requiring a button press.
     // Other verticals: an assigned human owns the thread.
-    if (conv.assigned_agent_id && !neverSelfPause) return
+    // …except the assignment the bot itself made on a transient fault: it
+    // must still reach the recovery below (Casa Ceiba 2026-11-08: one empty
+    // reply silenced the store's bot for the rest of the day).
+    if (conv.assigned_agent_id && !neverSelfPause && !(conv.ai_autoreply_disabled && conv.ai_handoff_transient === true)) return
     if (conv.ai_autoreply_disabled) {
       // The bot is paused here. If it was paused by a TRANSIENT fault
       // (migration 115) and a grace period has passed with no human
@@ -616,6 +626,8 @@ export async function dispatchInboundToAiReply(
           db,
           conversationId,
           handoffAt: (conv.ai_handoff_at as string | null) ?? null,
+          // Outside the hotel the bot assigned the chat on that fault; give it back.
+          unassign: !neverSelfPause,
         })
         if (!recovered) return
         // Keep this in-memory eligibility snapshot aligned with the guarded
@@ -955,6 +967,11 @@ export async function dispatchInboundToAiReply(
     let hasRestaurantMenu = false
     let shopifyOrders = false
     let shopifyOrderStatus: string | null = null
+    let pendingOrder: PendingOrder | null = null
+    // Every purchase of this contact waiting for an answer, and — once the
+    // model has read the message — the single one that answer refers to.
+    let pendingRequests: PendingOrderRequest[] = []
+    let pendingRequest: PendingOrderRequest | null = null
     let businessTimeZone = 'UTC'
     let hotelStayEstimate: string | undefined
     let hotelCategoryBanners: { name: string; hasWeekendVariant: boolean }[] = []
@@ -979,7 +996,7 @@ export async function dispatchInboundToAiReply(
       const enrichment = await Promise.allSettled([
         retrieveKnowledge(db, accountId, config, latestUserMessage(messages)),
         loadDealStageOptions({ db, accountId, contactId, conversationId }),
-        loadCatalogContext(db, accountId),
+        loadCatalogContext(db, accountId, catalogQueryFromMessages(messages)),
         loadQuickReplyContext(db, accountId),
         loadKnownContactFacts(db, accountId, contactId),
         db.from('shopify_config').select('id').eq('account_id', accountId).maybeSingle(),
@@ -990,6 +1007,29 @@ export async function dispatchInboundToAiReply(
       if (enrichment[3].status === 'fulfilled') quickReplies = enrichment[3].value
       if (enrichment[4].status === 'fulfilled') knownContactFacts = enrichment[4].value
       if (enrichment[5].status === 'fulfilled') shopifyOrders = Boolean(enrichment[5].value.data)
+      if (shopifyOrders) {
+        try {
+          pendingOrder = await loadPendingOrderConfirmation(db, accountId, contactId)
+        } catch (err) {
+          console.error('[ai auto-reply] pending order confirmation lookup failed:', err)
+        }
+        // A web-form request (no Shopify order yet) waits only when no real order does.
+        if (!pendingOrder) {
+          try {
+            pendingRequests = await loadPendingOrderRequests(db, accountId, contactId)
+            // A summary still waiting to be delivered (no approved template
+            // outside the 24 h window): the customer just wrote, so it can go
+            // out now — this is what the form's WhatsApp button is for.
+            const unsent = pendingRequests.filter((r) => !r.askDeliveredAt)
+            if (unsent.length) {
+              for (const r of unsent) await runOrderNotificationSweep(db, accountId, `request:${r.id}:ask`)
+              pendingRequests = await loadPendingOrderRequests(db, accountId, contactId)
+            }
+          } catch (err) {
+            console.error('[ai auto-reply] pending order request lookup failed:', err)
+          }
+        }
+      }
       // Order-status questions only: one live Shopify read, never on ordinary turns.
       const latestText = latestUserMessage(messages)
       if (shopifyOrders && ORDER_STATUS_QUESTION_RE.test(latestText)) {
@@ -1135,6 +1175,30 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // A marketing preference is a real saved operation, not a model promise.
+    // Keep ordinary support and transactional order notices available.
+    if (shopifyOrders && detectCommercialOptOut(latestUserMessage(messages))) {
+      try {
+        await persistCommercialOptOut(db, accountId, contactId)
+      } catch (err) {
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: false,
+          summary: `El cliente solicitó dejar de recibir mensajes comerciales, pero no se pudo guardar la preferencia. Registre su baja antes de enviar promociones. Error: ${describeError(err).slice(0, 300)}`,
+        })
+        await sendMessageToConversation(db, accountId, {
+          conversationId, messageType: 'text', senderType: 'bot',
+          contentText: 'Recibí su solicitud. Un asesor revisará el registro de su preferencia; todavía no pude guardarla.',
+        })
+        return
+      }
+      await sendMessageToConversation(db, accountId, {
+        conversationId, messageType: 'text', senderType: 'bot',
+        contentText: 'Registré su preferencia para detener los seguimientos comerciales y recordatorios de carrito. Si tiene una compra en curso, puede seguir recibiendo los avisos necesarios de ese pedido.',
+      })
+      return
+    }
+
     const baseSystemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -1149,6 +1213,8 @@ export async function dispatchInboundToAiReply(
       hotelReservations: isHotel,
       shopifyOrders,
       shopifyOrderStatus,
+      pendingOrderConfirmation: pendingOrder?.orderName ?? null,
+      pendingOrderRequest: pendingRequestsPrompt(pendingRequests),
       restaurantMenu: hasRestaurantMenu,
       hotelCategoryBanners,
       hotelIsFirstReply,
@@ -1387,8 +1453,19 @@ For airport transport, record the guest's request in nota on the relevant existi
     }
 
     const {
-      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, quickReplyId, reservationProposals = [], appointmentAction, usage,
+      text, handoff, markDealWon, moveToStageName, sendCatalog: modelSendCatalog, sendPhotoProductName, sendCategoryBannerName, sendRestaurantMenu: modelSendRestaurantMenu, leadTemperature, contactName: modelContactName, appointmentProposal, sentinelLeakDetected, quoteProposal, shopifyOrderProposal, orderConfirmation, orderConfirmationRef, quickReplyId, reservationProposals = [], appointmentAction, usage,
     } = generation
+
+    // The server, not the model, decides which purchase a confirm/cancel
+    // answer is about: only a delivered summary, named when several wait.
+    // Null leaves every purchase untouched and the customer is asked.
+    if (orderConfirmation && pendingRequests.length && !pendingOrder) {
+      try {
+        pendingRequest = pickAnsweredRequest(pendingRequests, orderConfirmationRef, await loadInboundContext(db, conversationId))
+      } catch (err) {
+        console.error('[ai auto-reply] could not link the answer to a purchase:', err)
+      }
+    }
 
     // Self-heal a model-compliance gap, not a code bug: `buildSystemPrompt`
     // only teaches SEND_CATALOG_SENTINEL / SEND_RESTAURANT_MENU_SENTINEL
@@ -1406,10 +1483,12 @@ For airport transport, record the guest's request in nota on the relevant existi
     // didn't already send it, send it anyway.
     if (!withinAiAttentionHours(config.autoReplySchedule)) return
     const latestInbound = latestUserMessage(messages)
-    // Hotel: a guest who plainly asks for a person is transferred now, not
-    // asked "¿le gustaría que le conecte…?" (owner's rule; live test
-    // 2026-09-25 — the model asked instead of transferring).
-    const explicitHumanAsk = isHotel && !handoff && (isExplicitHumanRequest(latestInbound) || isGiftVoucherAsk(latestInbound))
+    // Hotel and connected stores: a clear request for a person already
+    // authorizes the handoff. Gift-voucher routing remains hotel-only.
+    const explicitHumanAsk = !handoff && (
+      ((isHotel || shopifyOrders) && isExplicitHumanRequest(latestInbound)) ||
+      (isHotel && isGiftVoucherAsk(latestInbound))
+    )
     const customerAskedForCatalog = CUSTOMER_ASKS_FOR_CATALOG_RE.test(latestInbound)
     const customerAskedForMenu = CUSTOMER_ASKS_FOR_MENU_RE.test(latestInbound)
     const catalogRequested = customerRequestedCatalog(messages)
@@ -1578,7 +1657,8 @@ For airport transport, record the guest's request in nota on the relevant existi
         try {
           outboundText = canonicalizeCatalogUrls(
             outboundText,
-            catalogUrlForConversation(accountId, catalogSlug, conversationId),
+            (catalogDeliveryMode === 'digital' ? await shopifyStoreUrl(db, accountId) : null)
+              ?? catalogUrlForConversation(accountId, catalogSlug, conversationId),
           )
         } catch {
           // NEXT_PUBLIC_SITE_URL missing → strip rather than crash the turn.
@@ -1685,24 +1765,58 @@ For airport transport, record the guest's request in nota on the relevant existi
         })
         return
       }
+      // A cancellation may legitimately carry both its decision marker and
+      // HANDOFF. Persist the decision before leaving this branch: otherwise
+      // the generic handoff would pause the chat but lose the cancellation.
+      // The decision transaction already routes the case and notifies staff,
+      // so a success must not perform the same handoff a second time. Never
+      // accept a confirmation or create another purchase from a service turn.
+      let cancellationRecorded = false
+      let cancellationFailure: string | null = null
+      const cancellingPendingOrder = shopifyOrders && orderConfirmation === 'cancel' && pendingOrder
+      if (cancellingPendingOrder) {
+        try {
+          await resolveOrderConfirmation({ db, accountId, conversationId, pending: cancellingPendingOrder, decision: 'cancel', handoffAgentId: config.handoffAgentId })
+          cancellationRecorded = true
+        } catch (err) {
+          if (err instanceof OutsideAiAttentionHours) throw err
+          console.error('[ai auto-reply] cancellation during handoff failed:', err)
+          cancellationFailure = `🤖 No se pudo completar la gestión de cancelación del pedido ${cancellingPendingOrder.orderName} (${cancellingPendingOrder.orderId}). La decisión puede haberse guardado antes del error; revise el estado y los avisos existentes en Shopify y CRM antes de continuar. No recree el pedido ni repita efectos ya realizados. Error: ${describeError(err).slice(0, 300)}`
+        }
+      }
+      // A refused form request has nothing to undo (no order exists): just close it.
+      if (shopifyOrders && orderConfirmation === 'cancel' && pendingRequest && !pendingOrder) {
+        try {
+          await settleOrderRequest(db, accountId, pendingRequest.id, 'cancelled')
+        } catch (err) {
+          console.error('[ai auto-reply] order request cancellation failed:', err)
+        }
+      }
       // Other verticals keep their existing customer acknowledgment, sticky
       // pause, routing and internal note. A failed acknowledgment must not
       // skip the handoff itself.
+      const handoffAckText = shopifyOrders ? ECOMMERCE_HANDOFF_ACK_TEXT : HUMAN_HANDOFF_ACK_TEXT
+      let ackSent = false
       try {
         await sendMessageToConversation(db, accountId, {
           conversationId,
           messageType: 'text',
           // An explicit ask skips the model's own (usually "¿le conecto?") text.
-          contentText: explicitHumanAsk ? HUMAN_HANDOFF_ACK_TEXT : outboundText || HUMAN_HANDOFF_ACK_TEXT,
+          contentText: cancellingPendingOrder
+            ? 'Recibimos su solicitud de cancelación. Un asesor revisará el pedido y continuará por este chat.'
+            : explicitHumanAsk ? handoffAckText : outboundText || handoffAckText,
         })
+        ackSent = true
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] handoff acknowledgment message failed:', describeError(err))
       }
+      if (cancellationRecorded) return
 
-      const summary = buildHandoffSummary({
+      const summary = cancellationFailure ?? buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
+        answered: ackSent,
       })
       await handOffToHuman({
         db,
@@ -2114,12 +2228,15 @@ For airport transport, record the guest's request in nota on the relevant existi
         const recommended = await loadRecommendedRoomEstimate({ db, accountId, conversationId,
           roomNames: hotelCategoryProductNames.get('habitaciones') ?? [], modelText: outboundText,
           todayISO: dateKeyInZone(new Date(), businessTimeZone), currency: hotelCurrency, english: isEnglishText(outboundText), messages })
-        const hasModelPrices = mentionedAmounts(outboundText).length > 0
-        if (recommended && (hasModelPrices || !messages.some(m => m.role === 'assistant' && m.content.includes(recommended.text)))) {
+        // Unselected room recommendations still need validation when the
+        // model already supplied an amount (e.g. a five-person reference for
+        // three adults). Reuse the same calculator; never select the room.
+        const conflicting = recommended && hasConflictingAmount(outboundText, recommended.total, estimateDeposit(recommended.total, hotelDepositPercent))
+        if (recommended && (conflicting || (!mentionedAmounts(outboundText).includes(recommended.total)
+          && !messages.some(m => m.role === 'assistant' && m.content.includes(recommended.text))))) {
           recommendedRoomEstimateAdded = true
-          // A recommendation's model-written amount/occupancy is not a quote.
-          // Replace the whole priced recommendation, not just its currency token.
-          outboundText = hasModelPrices ? recommended.text : [outboundText, recommended.text].join('\n\n')
+          if (conflicting) outboundText = withoutConflictingStayPrices(outboundText, recommended.total, estimateDeposit(recommended.total, hotelDepositPercent))
+          outboundText = [outboundText, recommended.text].join('\n\n')
           if (!/[?\u00bf]/.test(outboundText)) recommendedRoomQuestion = recommended.question
         }
       } catch (err) {
@@ -2312,7 +2429,11 @@ For airport transport, record the guest's request in nota on the relevant existi
     // so either can fire alongside any of the above.
     if (markDealWon) {
       try {
-        await flagDealClosing({ db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId, alreadyAssigned: Boolean(conv.assigned_agent_id), isHotel })
+        // A connected store closes the sale itself (create_shopify_order): no hand-off.
+        await flagDealClosing({
+          db, accountId, conversationId, configOwnerUserId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), keepChat: isHotel || Boolean(shopifyOrderProposal && shopifyOrders),
+        })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] flagDealClosing failed:', err)
@@ -2328,7 +2449,7 @@ For airport transport, record the guest's request in nota on the relevant existi
 
     if (sendCatalog) {
       try {
-        await sendCatalogToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
+        await sendCatalogToConversation(db, accountId, conversationId, 'bot')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         // Never rethrow: the customer already got their text reply above,
@@ -2372,7 +2493,7 @@ For airport transport, record the guest's request in nota on the relevant existi
     // a hallucination or an injection attempt must not fire a send.
     if (sendRestaurantMenu && hasRestaurantMenu) {
       try {
-        await sendRestaurantMenuToConversation(db, accountId, conversationId, neverSelfPause ? 'bot' : 'agent')
+        await sendRestaurantMenuToConversation(db, accountId, conversationId, 'bot')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         // Same reasoning as send_catalog above: never rethrow (it would
@@ -2450,7 +2571,7 @@ For airport transport, record the guest's request in nota on the relevant existi
           db, accountId, contactId, configOwnerUserId, conversationId, proposal: quoteProposal,
           handoffAgentId: config.handoffAgentId,
           alreadyAssigned: Boolean(conv.assigned_agent_id),
-          senderType: neverSelfPause ? 'bot' : 'agent',
+          senderType: 'bot',
         })
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
@@ -2458,11 +2579,105 @@ For airport transport, record the guest's request in nota on the relevant existi
       }
     }
 
+    // Only taught while a web COD order waits for this customer's answer.
+    if (orderConfirmation && pendingOrder) {
+      try {
+        // A real web order is already COD: a card answer still confirms it.
+        await resolveOrderConfirmation({ db, accountId, conversationId, pending: pendingOrder, decision: orderConfirmation === 'cancel' ? 'cancel' : 'confirm', handoffAgentId: config.handoffAgentId })
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] order confirmation failed:', err)
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: orderConfirmation !== 'cancel',
+          summary: `🤖 No se pudo completar la gestión de ${orderConfirmation === 'confirm' ? 'confirmación' : 'cancelación'} del pedido ${pendingOrder.orderName} (${pendingOrder.orderId}). La decisión puede haberse guardado antes del error; revise el estado y los avisos existentes en Shopify y CRM antes de continuar. No recree el pedido ni repita efectos ya realizados. Error: ${describeError(err).slice(0, 300)}`,
+        })
+      }
+    }
+
     // Same defense in depth: only an account with a connected store was
     // taught the marker; createShopifyOrderFromChat re-checks the config.
-    if (shopifyOrderProposal && shopifyOrders) {
+    // A form request is placed exactly as validated when it was submitted —
+    // never from the model's own reading of the chat.
+    let requestPlaced = false
+    if (orderConfirmation && shopifyOrders && !pendingOrder && pendingRequests.length && !pendingRequest) {
+      // The answer could not be tied to one delivered summary. Nothing is
+      // placed or cancelled on a guess: deliver any summary still unsent
+      // (the customer just wrote, so the window is open) and ask.
+      requestPlaced = true
       try {
-        await createShopifyOrderFromChat({
+        const unsent = pendingRequests.filter((r) => !r.askDeliveredAt)
+        for (const r of unsent) await runOrderNotificationSweep(db, accountId, `request:${r.id}:ask`)
+        if (unsent.length < pendingRequests.length) {
+          await sendMessageToConversation(db, accountId, {
+            conversationId, messageType: 'text', senderType: 'bot',
+            contentText: pendingRequests.length > 1
+              ? `Para no equivocarnos, tiene ${pendingRequests.length} pedidos por confirmar:\n${pendingRequests.map((r) => `• ${r.summary}`).join('\n')}\n¿Cuál desea confirmar?`
+              : `Para registrar su pedido sin errores, ¿me confirma con un *SÍ* este resumen?\n${pendingRequests[0].summary}`,
+          })
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] could not ask which purchase the answer is about:', err)
+      }
+    }
+    if (orderConfirmation && pendingRequest && shopifyOrders) {
+      requestPlaced = true
+      const request = pendingRequest
+      let claimed = false
+      try {
+        claimed = await settleOrderRequest(db, accountId, request.id, orderConfirmation === 'cancel' ? 'cancelled' : 'processing')
+        if (claimed && orderConfirmation !== 'cancel') {
+          // Every path without a known order ends 'held' with its reason, and
+          // a person is told: the request never returns to pending.
+          let heldReason: string | null = null
+          const handoff = (summary: string) => {
+            heldReason = summary
+            return handOffToHuman({
+              db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+              alreadyAssigned: Boolean(conv.assigned_agent_id), summary, transient: true,
+            })
+          }
+          const order = request.terms
+            ? await createShopifyOrderFromChat({
+                db, accountId, contactId, conversationId, configOwnerUserId, accepted: request.terms, requestId: request.id,
+                // The method saved with the purchase wins over a generic marker.
+                proposal: { ...request.proposal, payment: orderConfirmation === 'confirm_card' || request.proposal.payment === 'card' ? 'card' : 'cod' },
+                handoff,
+                sendText: async (contentText) => {
+                  await sendMessageToConversation(db, accountId, { conversationId, messageType: 'text', contentText, senderType: 'bot' })
+                },
+              })
+            : undefined
+          if (order) {
+            await finishOrderRequest(db, accountId, request.id, { status: 'confirmed', orderId: order.id, orderName: order.name })
+          } else {
+            // Another order in progress / just created for this chat returns
+            // silently: the purchase is still held for a person.
+            if (!heldReason) {
+              await handoff(`🛒 El cliente confirmó su solicitud del formulario web (${request.summary}), pero no se creó el pedido: ${request.terms ? 'hay otro pedido en proceso o recién creado en este chat' : 'la solicitud no guardó las condiciones aceptadas'}. Revise Shopify antes de crearlo.`)
+            }
+            await finishOrderRequest(db, accountId, request.id, { status: 'held', note: heldReason ?? 'No se creó el pedido.' })
+          }
+        }
+      } catch (err) {
+        if (err instanceof OutsideAiAttentionHours) throw err
+        console.error('[ai auto-reply] order request confirmation failed:', err)
+        if (claimed && orderConfirmation !== 'cancel') {
+          try { await finishOrderRequest(db, accountId, request.id, { status: 'held', note: `Resultado no verificado: ${describeError(err)}` }) }
+          catch (holdErr) { console.error('[ai auto-reply] order request hold failed:', holdErr) }
+        }
+        await handOffToHuman({
+          db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
+          alreadyAssigned: Boolean(conv.assigned_agent_id), transient: true,
+          summary: `🤖 El cliente respondió a su solicitud de pedido del formulario web (${request.summary}) pero no se pudo completar. Revise en Shopify si el pedido existe antes de crearlo. Error: ${describeError(err).slice(0, 300)}`,
+        })
+      }
+    }
+
+    if (shopifyOrderProposal && shopifyOrders && !(orderConfirmation && pendingOrder) && !requestPlaced) {
+      try {
+        const placed = await createShopifyOrderFromChat({
           db, accountId, contactId, conversationId, configOwnerUserId, proposal: shopifyOrderProposal,
           handoff: (summary) => handOffToHuman({
             db, accountId, conversationId, handoffAgentId: config.handoffAgentId,
@@ -2470,15 +2685,20 @@ For airport transport, record the guest's request in nota on the relevant existi
           }),
           sendText: async (contentText) => {
             await sendMessageToConversation(db, accountId, {
-              conversationId, messageType: 'text', contentText, senderType: neverSelfPause ? 'bot' : 'agent',
+              conversationId, messageType: 'text', contentText, senderType: 'bot',
             })
           },
         })
+        // The customer changed their form purchase in the chat and accepted
+        // the new summary: the form version it replaced must not stay
+        // acceptable, or a later "sí" would place it as a second order.
+        // ponytail: with several purchases waiting we cannot tell which one the chat replaced; they expire in 72 h. Link chat edits to purchase_id when chat sales move to this contract.
+        if (placed && pendingRequests.length === 1) await settleOrderRequest(db, accountId, pendingRequests[0].id, 'superseded')
       } catch (err) {
         if (err instanceof OutsideAiAttentionHours) throw err
         console.error('[ai auto-reply] autonomous create_shopify_order failed:', err)
       }
-    } else if (shopifyOrders && claimsOrderRegistration(outboundText)) {
+    } else if (shopifyOrders && !orderConfirmation && claimsOrderRegistration(outboundText)) {
       // Told the customer the order is being registered but sent no order
       // marker (Casa Ceiba 2026-11-07): nothing was created and nobody knew.
       console.warn(`[ai auto-reply] conversation ${conversationId}: order claimed without the create_shopify_order marker`)
@@ -2646,8 +2866,9 @@ async function tryRecoverTransientHandoff(args: {
   db: SupabaseClient
   conversationId: string
   handoffAt: string | null
+  unassign?: boolean
 }): Promise<boolean> {
-  const { db, conversationId, handoffAt } = args
+  const { db, conversationId, handoffAt, unassign } = args
   const since = handoffAt ? Date.parse(handoffAt) : NaN
   if (!Number.isFinite(since)) return false
   if (Date.now() - since < transientHandoffRecoveryMs()) return false
@@ -2674,6 +2895,7 @@ async function tryRecoverTransientHandoff(args: {
       ai_autoreply_disabled: false,
       ai_handoff_transient: null,
       ai_reply_count: 0,
+      ...(unassign ? { assigned_agent_id: null } : {}),
     })
     .eq('id', conversationId)
     .eq('ai_handoff_transient', true)
@@ -3103,6 +3325,11 @@ async function handOffToHuman(args: {
   if (hotelReceptionPending || (!willAssign && !alreadyAssigned)) {
     await notifyHandoffTeam(db, accountId, conversationId, fullSummary)
   }
+  // Stores: a real handoff becomes a SAC case with owner and due time.
+  // Transient faults auto-recover, so they open none. No-op elsewhere.
+  if (!transient && !hotelReceptionPending) {
+    await openServiceCase(db, { accountId, conversationId, summary: fullSummary, assigneeId: handoffAgentId })
+  }
 }
 
 /**
@@ -3431,16 +3658,19 @@ async function loadPreSaleStages(
   db: SupabaseClient,
   pipelineId: string,
 ): Promise<{ id: string; name: string }[]> {
-  const { data } = await db
-    .from('pipeline_stages')
-    .select('id, name, is_won')
-    .eq('pipeline_id', pipelineId)
-    .order('position')
+  const [{ data }, { data: pipeline }] = await Promise.all([
+    db.from('pipeline_stages').select('id, name, is_won').eq('pipeline_id', pipelineId).order('position'),
+    db.from('pipelines').select('name').eq('id', pipelineId).maybeSingle(),
+  ])
   const all = (data ?? []) as { id: string; name: string; is_won: boolean }[]
 
   const wonIndex = all.findIndex((s) => s.is_won)
   const preSale = wonIndex === -1 ? all.filter((s) => !s.is_won) : all.slice(0, wonIndex)
-  return preSale.map((s) => ({ id: s.id, name: s.name }))
+  // The orders board's order stages belong to the order code, never the
+  // model: offering them let a chat lead reach "Pago confirmado" unpaid.
+  return preSale
+    .filter((s) => !isOrderStateStage((pipeline as { name?: string } | null)?.name, s.name))
+    .map((s) => ({ id: s.id, name: s.name }))
 }
 
 /**
@@ -3464,11 +3694,12 @@ async function flagDealClosing(args: {
   configOwnerUserId: string
   handoffAgentId: string | null
   alreadyAssigned: boolean
-  isHotel?: boolean
+  /** Hotel or a store order: only the log, the bot keeps the chat. */
+  keepChat?: boolean
 }): Promise<void> {
-  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned, isHotel = false } = args
+  const { db, accountId, conversationId, configOwnerUserId, handoffAgentId, alreadyAssigned, keepChat = false } = args
 
-  if (!isHotel) {
+  if (!keepChat) {
     await handOffToHuman({
       db,
       accountId,
@@ -3486,7 +3717,7 @@ async function flagDealClosing(args: {
     action: 'flag_deal_closing',
     target_id: conversationId,
     input: { source: 'auto_reply_autonomous' },
-    result: { conversation_id: conversationId, handed_off_to: isHotel ? null : handoffAgentId },
+    result: { conversation_id: conversationId, handed_off_to: keepChat ? null : handoffAgentId },
   })
 }
 

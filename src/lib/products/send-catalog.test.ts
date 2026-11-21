@@ -6,7 +6,10 @@ vi.mock('@/lib/whatsapp/send-message', async (importOriginal) => {
   return { ...actual, sendMessageToConversation: vi.fn() }
 })
 
+vi.mock('@/lib/shopify/api', () => ({ loadShopifyConfig: vi.fn(async () => null), shopifyGraphql: vi.fn() }))
+
 import { sendMessageToConversation, SendMessageError } from '@/lib/whatsapp/send-message'
+import { loadShopifyConfig, shopifyGraphql } from '@/lib/shopify/api'
 import { sendCatalogToConversation, SendCatalogError } from './send-catalog'
 import { signCatalogConversation } from './catalog-link-token'
 
@@ -64,6 +67,18 @@ beforeEach(() => {
 const cParam = (conversationId: string) => signCatalogConversation(conversationId)
 afterEach(() => {
   delete process.env.NEXT_PUBLIC_SITE_URL
+})
+
+describe('sendCatalogToConversation — Shopify store', () => {
+  it('sends the storefront link instead of the internal catalog', async () => {
+    vi.mocked(loadShopifyConfig).mockResolvedValueOnce({ shop: 'x0.myshopify.com', token: 't' } as never)
+    vi.mocked(shopifyGraphql).mockResolvedValueOnce({ shop: { primaryDomain: { url: 'https://tienda.example.com/' } } })
+    const result = await sendCatalogToConversation(makeDb({ activeProductCount: 0 }), 'acct-1', 'conv-1')
+    expect(result).toEqual({ catalogUrl: 'https://tienda.example.com' })
+    expect(h.sendMessageToConversation).toHaveBeenCalledWith(expect.anything(), 'acct-1', expect.objectContaining({
+      contentText: expect.stringContaining('https://tienda.example.com'),
+    }))
+  })
 })
 
 describe('sendCatalogToConversation — digital mode (default)', () => {

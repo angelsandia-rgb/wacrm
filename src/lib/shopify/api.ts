@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto'
+import { checkMunicipio, departamentosOfMunicipio } from './gt-geo'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 
@@ -36,6 +37,8 @@ export interface ShopifyConfig {
   recurrenteSecretKey: string | null
   /** Svix signing secret (whsec_…) of the Recurrente webhook that completes paid card drafts. */
   recurrenteWebhookSecret: string | null
+  /** The store's commercial shipping coverage; null = no restriction. */
+  shippingCoverage: ShippingCoverage | null
   /** Dev Dashboard apps only: fetches a fresh token (and caches it), used on a 401. */
   refreshToken?: () => Promise<string>
 }
@@ -76,7 +79,7 @@ export async function fetchClientCredentialsToken(
 export async function loadShopifyConfig(db: SupabaseClient, accountId: string): Promise<ShopifyConfig | null> {
   const { data } = await db
     .from('shopify_config')
-    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key, recurrente_webhook_secret')
+    .select('shop_domain, access_token, access_token_expires_at, client_id, client_secret, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, recurrente_secret_key, recurrente_webhook_secret, shipping_coverage')
     .eq('account_id', accountId)
     .maybeSingle()
   if (!data) return null
@@ -89,6 +92,7 @@ export async function loadShopifyConfig(db: SupabaseClient, accountId: string): 
     templateLanguage: (data.confirmation_template_language as string | null) || 'es',
     recurrenteSecretKey: data.recurrente_secret_key ? decrypt(data.recurrente_secret_key as string) : null,
     recurrenteWebhookSecret: data.recurrente_webhook_secret ? decrypt(data.recurrente_webhook_secret as string) : null,
+    shippingCoverage: (data.shipping_coverage as ShippingCoverage | null) ?? null,
   }
   if (data.client_id && data.client_secret) {
     const clientId = data.client_id as string
@@ -243,6 +247,8 @@ export interface OrderRequest {
   phone: string
   address: string
   departamento: string
+  /** The real municipio: Dropi rejects a city that does not exist in the departamento. */
+  municipio?: string
   payment: PaymentMethod
   currency: string
   note?: string
@@ -270,17 +276,48 @@ const GT_DEPARTAMENTOS: Record<string, string> = {
   suchitepequez: 'SUC', totonicapan: 'TOT', zacapa: 'ZAC',
 }
 
-// The model often writes the municipio where the departamento goes ("Villa
-// Canales", Casa Ceiba 2026-11-07) — these all belong to Guatemala (GUA).
-const GUATEMALA_MUNICIPIOS = new Set([
-  'ciudad de guatemala', 'guatemala ciudad', 'capital', 'santa catarina pinula', 'san jose pinula', 'san jose del golfo',
-  'palencia', 'chinautla', 'san pedro ayampuc', 'mixco', 'san pedro sacatepequez', 'san juan sacatepequez',
-  'san raymundo', 'chuarrancho', 'fraijanes', 'amatitlan', 'villa nueva', 'villa canales', 'san miguel petapa', 'petapa',
-])
+/** Pure: the municipio exists in that departamento (canonical list of 340,
+ *  src/lib/shopify/gt-geo.ts). A misspelt or misplaced municipio is refused
+ *  here, before an order exists, instead of by the supplier afterwards. */
+export function municipioMatchesDepartamento(municipio: string, departamento: string): boolean {
+  return checkMunicipio(municipio, departamento).ok
+}
 
 export function departamentoCode(name: string): string | undefined {
   const key = name.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
-  return GT_DEPARTAMENTOS[key] ?? (GUATEMALA_MUNICIPIOS.has(key) ? 'GUA' : undefined)
+  if (GT_DEPARTAMENTOS[key]) return GT_DEPARTAMENTOS[key]
+  // The model often writes the municipio where the departamento goes ("Villa
+  // Canales", Casa Ceiba 2026-11-07). Only a name that exists in exactly one
+  // departamento settles it; a homonym does not.
+  const owners = departamentosOfMunicipio(name)
+  return owners.length === 1 ? departamentoCode(owners[0]) : undefined
+}
+
+/** Departamento → the municipios the store delivers to, or '*' for all of it. */
+export type ShippingCoverage = Record<string, string[] | '*'>
+
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').trim().toLowerCase()
+
+/** Pure: is the address inside the store's commercial coverage? Existing in
+ *  the carrier's list is not enough. 'ambiguous' when the municipio needed to
+ *  decide is missing or the departamento is unknown — never assumed covered. */
+export function coverageVerdict(coverage: ShippingCoverage | null | undefined, departamento: string, municipio?: string | null): 'ok' | 'outside' | 'ambiguous' {
+  if (!coverage) return 'ok'
+  const code = departamentoCode(departamento)
+  if (!code) return 'ambiguous'
+  const covered = Object.entries(coverage).find(([d]) => departamentoCode(d) === code && fold(d) in GT_DEPARTAMENTOS)?.[1]
+  if (!covered) return 'outside'
+  if (covered === '*') return 'ok'
+  if (!municipio?.trim()) return 'ambiguous'
+  return covered.some((m) => fold(m) === fold(municipio)) ? 'ok' : 'outside'
+}
+
+/** Pure: the city sent to Shopify (and so to the supplier): the municipio
+ *  spelt as in the canonical list when it is one, else what was given. */
+function canonicalCity(municipio: string | undefined, departamento: string): string {
+  if (!municipio?.trim()) return departamento
+  const check = checkMunicipio(municipio, departamento)
+  return check.ok ? check.municipio : municipio.trim()
 }
 
 /** Pure: the `orderCreate` input for a confirmed chat order. */
@@ -291,8 +328,8 @@ export function buildOrderInput(req: OrderRequest) {
   const address = {
     ...splitName(req.fullName),
     address1: req.address,
-    city: req.departamento,
-    provinceCode: departamentoCode(req.departamento),
+    city: canonicalCity(req.municipio, req.departamento),
+    provinceCode: departamentoCode(req.departamento) ?? (req.municipio ? departamentoCode(req.municipio) : undefined),
     countryCode: 'GT',
     phone,
   }
@@ -310,6 +347,7 @@ export function buildOrderInput(req: OrderRequest) {
     tags: req.payment === 'card' ? [ORDER_TAG, CARD_TAG] : [ORDER_TAG],
     sourceName: ORDER_TAG,
     note: req.note,
+    customAttributes: crmAttributes(req.note),
   }
 }
 
@@ -322,7 +360,7 @@ const ORDER_CREATE = `mutation($order: OrderCreateOrderInput!) {
 
 const DRAFT_ORDER_CREATE = `mutation($input: DraftOrderInput!) {
   draftOrderCreate(input: $input) {
-    draftOrder { id name }
+    draftOrder { id name totalPriceSet { shopMoney { amount currencyCode } } }
     userErrors { field message }
   }
 }`
@@ -342,9 +380,9 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
     )
     const r = data.orderCreate
     if (!r.order) throw new ShopifyError(r.userErrors.map((e) => e.message).join('; ') || 'orderCreate failed', 422)
-    return { id: r.order.id, name: r.order.name, draft: false, total }
+    return { id: r.order.id, name: r.order.name, draft: false, total, catalogTotal: total }
   }
-  const data = await shopifyGraphql<{ draftOrderCreate: { draftOrder: { id: string; name: string } | null; userErrors: { message: string }[] } }>(
+  const data = await shopifyGraphql<{ draftOrderCreate: { draftOrder: { id: string; name: string; totalPriceSet?: { shopMoney: { amount: string } } } | null; userErrors: { message: string }[] } }>(
     cfg, DRAFT_ORDER_CREATE, {
       input: {
         phone: input.phone,
@@ -354,12 +392,16 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
         shippingLine: { title: 'Envío gratis', priceWithCurrency: { amount: '0.00', currencyCode: req.currency } },
         tags: input.tags,
         note: [`Pago: ${PAYMENT_GATEWAYS[req.payment]}`, req.note].filter(Boolean).join('\n'),
+        customAttributes: input.customAttributes,
       },
     },
   )
   const r = data.draftOrderCreate
   if (!r.draftOrder) throw new ShopifyError(r.userErrors.map((e) => e.message).join('; ') || 'draftOrderCreate failed', 422)
-  return { id: r.draftOrder.id, name: r.draftOrder.name, draft: true, total }
+  // The draft prices each variant itself (Shopify's current price, discounts):
+  // that total — not the catalog sum — is what a payment link may charge.
+  const shopifyTotal = Number(r.draftOrder.totalPriceSet?.shopMoney.amount)
+  return { id: r.draftOrder.id, name: r.draftOrder.name, draft: true, total: Number.isFinite(shopifyTotal) ? shopifyTotal : total, catalogTotal: total }
 }
 
 // ------------------------------------------------------------------- deals
@@ -367,9 +409,33 @@ export async function createShopifyOrder(cfg: ShopifyConfig, req: OrderRequest) 
 /** The dropshipping kit's orders board (src/lib/verticals) and its order stage. */
 export const ORDERS_PIPELINE_NAME = 'Pedidos'
 export const ORDER_PLACED_STAGE_NAME = 'Pedido creado'
+/** Web cash-on-delivery orders wait here until the customer confirms them
+ *  by WhatsApp (src/lib/shopify/order-confirmation.ts). Optional stage. */
+export const CONFIRM_STAGE_NAME = 'Por confirmar'
+export const TO_CONFIRM_TAG = 'por-confirmar'
+export const CONFIRMED_TAG = 'confirmado-whatsapp'
+export const CANCEL_REQUESTED_TAG = 'cliente-cancela'
 export const PAYMENT_CONFIRMED_STAGE_NAME = 'Pago confirmado'
+export const SHIPPED_STAGE_NAME = 'Enviado'
+export const DELIVERED_STAGE_NAME = 'Entregado'
+/** Approved WhatsApp UTILITY template (Settings → Plantillas) used to tell a
+ *  customer outside the 24 h window that their order shipped. Params: name,
+ *  order number, tracking sentence. */
+// ponytail: fixed template name per convention; make it a shopify_config column when a second store needs another name.
 
 const sameName = (a: unknown, b: string) => String(a ?? '').trim().toLowerCase() === b.toLowerCase()
+
+/** Stages of the "Pedidos" board that only the order code sets (an order
+ *  exists, was paid, shipped…). The AI's move_deal marker never uses them:
+ *  a chat lead jumped to "Pago confirmado" before any order existed, and its
+ *  order card stayed there although cash on delivery was unpaid (Casa
+ *  Ceiba, 2026-11-14). */
+const ORDER_STATE_STAGE_NAMES = [
+  CONFIRM_STAGE_NAME, ORDER_PLACED_STAGE_NAME, PAYMENT_CONFIRMED_STAGE_NAME, SHIPPED_STAGE_NAME, DELIVERED_STAGE_NAME,
+]
+export function isOrderStateStage(pipelineName: unknown, stageName: unknown): boolean {
+  return sameName(pipelineName, ORDERS_PIPELINE_NAME) && ORDER_STATE_STAGE_NAMES.some((n) => sameName(stageName, n))
+}
 
 /** Pure: the "Pedidos" pipeline when the account has one, else its oldest
  *  (rows ordered oldest-first); within it the "Pedido creado" stage, else
@@ -385,53 +451,132 @@ export function pickOrderStage<T extends { name?: unknown }>(stages: T[]): T | n
 export function pickPaidStage<T extends { id: string; name?: unknown; position?: unknown }>(
   stages: T[], currentStageId: string | null,
 ): T | null {
-  const paid = stages.find((s) => sameName(s.name, PAYMENT_CONFIRMED_STAGE_NAME))
-  if (!paid || paid.id === currentStageId) return null
-  const current = stages.find((s) => s.id === currentStageId)
-  return current && Number(current.position) >= Number(paid.position) ? null : paid
+  return pickForwardStage(stages, currentStageId, PAYMENT_CONFIRMED_STAGE_NAME)
 }
 
-/** Point the contact's open deal at this order (or open one in the
+/** The stage named `name` when it is ahead of the deal's current stage; null
+ *  when missing, current, or behind (a late/duplicate webhook never moves a
+ *  deal backwards, and a null result means "nothing new to tell the customer"). */
+export function pickForwardStage<T extends { id: string; name?: unknown; position?: unknown }>(
+  stages: T[], currentStageId: string | null, name: string,
+): T | null {
+  const target = stages.find((s) => sameName(s.name, name))
+  if (!target || target.id === currentStageId) return null
+  const current = stages.find((s) => s.id === currentStageId)
+  return current && Number(current.position) >= Number(target.position) ? null : target
+}
+
+/** Pure: the tracking sentence of a shipped-order message. */
+export function trackingSentence(f: { tracking_company?: string | null; tracking_number?: string | null; tracking_url?: string | null }): string {
+  if (f.tracking_number) {
+    const via = f.tracking_company ? ` (${f.tracking_company})` : ''
+    return `Número de guía: ${f.tracking_number}${via}.${f.tracking_url ? ` Rastreo: ${f.tracking_url}` : ''}`
+  }
+  return 'El mensajero le contactará antes de la entrega.'
+}
+
+/** Reuse this order's deal or an unassigned open deal (or open one in the
  *  "Pedidos" pipeline — else the oldest — at "Pedido creado" — else the
  *  first stage). An open deal still sitting in the orders board's first
  *  stage ("Consulta") moves to "Pedido creado". */
 export async function attachOrderToDeal(args: {
   db: SupabaseClient; accountId: string; userId: string; contactId: string
   order: { id: string; name: string; total: number }; currency: string
-}): Promise<string | null> {
+}): Promise<string> {
   const { db, accountId, userId, contactId, order, currency } = args
+  const { data: existing, error: existingError } = await db.from('deals').select('id')
+    .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+  if (existingError) throw new ShopifyError(`Order lookup failed: ${existingError.message}`)
+  if (existing) return existing.id as string
+
   const fields: Record<string, unknown> = { title: `Pedido Shopify ${order.name}`, value: order.total, shopify_order_id: order.id }
-  const { data: pipelines } = await db
+  fields.shopify_confirmation_decision = null
+  const { data: pipelines, error: pipelinesError } = await db
     .from('pipelines').select('id, name').eq('account_id', accountId)
     .order('created_at', { ascending: true })
   const pipeline = pickOrderPipeline(pipelines ?? [])
-  const { data: stages } = pipeline
-    ? await db.from('pipeline_stages').select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
-    : { data: [] as { id: string; name: string }[] }
+  if (pipelinesError) throw new ShopifyError(`Pipeline lookup failed: ${pipelinesError.message}`)
+  if (!pipeline) throw new ShopifyError('No pipeline available for Shopify orders')
+  const { data: stages, error: stagesError } = await db.from('pipeline_stages')
+    .select('id, name').eq('pipeline_id', pipeline.id).order('position', { ascending: true })
   const stage = pickOrderStage(stages ?? [])
+  if (stagesError) throw new ShopifyError(`Order stage lookup failed: ${stagesError.message}`)
+  if (!stage) throw new ShopifyError('No stage available for Shopify orders')
 
-  const { data: open } = await db
+  const { data: open, error: openError } = await db
     .from('deals').select('id, stage_id')
     .eq('account_id', accountId).eq('contact_id', contactId).eq('status', 'open')
+    .is('shopify_order_id', null)
     .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+  if (openError) throw new ShopifyError(`Open deal lookup failed: ${openError.message}`)
   if (open) {
     if (stage && stages?.[0] && open.stage_id === stages[0].id && stage.id !== stages[0].id) fields.stage_id = stage.id
-    await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
-    return open.id as string
+    const { data: linked, error } = await db.from('deals').update(fields).eq('id', open.id).eq('account_id', accountId)
+      .is('shopify_order_id', null).select('id').maybeSingle()
+    if (error) throw new ShopifyError(`Cannot link order: ${error.message}`)
+    if (linked) return linked.id as string
   }
-  if (!pipeline || !stage) return null
   const { data: deal, error } = await db.from('deals').insert({
     ...fields, account_id: accountId, user_id: userId, pipeline_id: pipeline.id, stage_id: stage.id,
     contact_id: contactId, currency, status: 'open',
   }).select('id').single()
   if (error) {
-    console.error('[shopify] deal insert failed:', error.message)
-    return null
+    // Concurrent deliveries may both miss the first lookup. The unique index
+    // keeps one deal; only that conflict is recoverable without a webhook retry.
+    if (error.code === '23505') {
+      const { data: winner, error: winnerError } = await db.from('deals').select('id')
+        .eq('account_id', accountId).eq('shopify_order_id', order.id).maybeSingle()
+      if (!winnerError && winner) return winner.id as string
+    }
+    throw new ShopifyError(`Cannot create order deal: ${error.message}`)
   }
+  if (!deal) throw new ShopifyError('Order deal was not created')
   return deal.id as string
 }
 
 // ---------------------------------------------------------------- webhooks
+
+/** Pure: a web order is cash on delivery only when its payment gateway says
+ *  so. A pending card/transfer order is NOT COD — asking that buyer to
+ *  "confirm and pay on delivery" would promise a collection that won't happen. */
+export function isCashOnDelivery(gatewayNames: string[] | null | undefined): boolean {
+  return (gatewayNames ?? []).some((g) => /cash on delivery|contra ?entrega|\bcod\b/i.test(g))
+}
+
+/** Pure: every live package of the order delivered AND nothing left to
+ *  ship. One delivered package of a split order is not a delivered order. */
+export function orderFullyDelivered(
+  fulfillments: { status?: string | null; shipment_status?: string | null }[],
+  fulfillmentStatus: string | null | undefined,
+): boolean {
+  const live = fulfillments.filter((f) => f.status !== 'cancelled' && f.status !== 'failure')
+  return live.length > 0 && String(fulfillmentStatus ?? '').toLowerCase() === 'fulfilled'
+    && live.every((f) => f.shipment_status === 'delivered')
+}
+
+/** Pure: Dropify tagged the order after Dropi rejected it ("Dropi Sync Error"). */
+export function hasDropiSyncError(tags: string | null | undefined): boolean {
+  return (tags ?? '').split(',').some((t) => t.trim().toLowerCase() === 'dropi sync error')
+}
+
+/** Pure: Dropify's reason, from the order note ("- Nota Dropi: 3: La ciudad no existe…"). */
+export function dropiSyncReason(note: string | null | undefined): string {
+  const m = (note ?? '').match(/Nota Dropi:\s*(?:\d+:\s*)?([\s\S]*?)(?:\s*--\s*|$)/i)
+  return (m?.[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+/** Pure: the owner's next step for a Dropi rejection, by its reason. */
+export function dropiFixHint(reason: string): string {
+  if (/saldo|wallet|billetera/i.test(reason)) return 'Recargue la wallet de Dropi y reenvíe el pedido desde Dropify.'
+  if (/token|autoriz|credencial|sesi[oó]n/i.test(reason)) return 'Renueve el token de Dropi en Dropify y reenvíe el pedido.'
+  return 'Corrija los datos en Shopify y reenvíelo desde Dropify, o cancélelo si ya no procede.'
+}
+
+/** Pure: the CRM's note (origin, NIT) also as an order attribute — Dropify
+ *  overwrites the note with its own when Dropi rejects the order. */
+function crmAttributes(note: string | undefined) {
+  return note ? [{ key: 'Chat Sandía', value: note }] : []
+}
 
 /** Shopify signs webhooks with base64 HMAC-SHA256 of the raw body. */
 export function verifyShopifyHmac(rawBody: string, header: string | null, secret: string): boolean {
@@ -444,6 +589,7 @@ export function verifyShopifyHmac(rawBody: string, header: string | null, secret
 // ------------------------------------------------------------ order status
 
 export interface OrderStatus {
+  id?: string
   name: string
   createdAt: string
   cancelledAt: string | null
@@ -454,7 +600,7 @@ export interface OrderStatus {
   fulfillments: { displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[]
 }
 
-const ORDER_FIELDS = `name createdAt cancelledAt displayFinancialStatus displayFulfillmentStatus phone
+const ORDER_FIELDS = `id name createdAt cancelledAt displayFinancialStatus displayFulfillmentStatus phone
   shippingAddress { phone }
   fulfillments(first: 5) { displayStatus trackingInfo { company number url } }`
 
@@ -477,14 +623,23 @@ export async function loadOrderStatuses(args: {
     .from('deals').select('shopify_order_id')
     .eq('account_id', accountId).eq('contact_id', contactId).not('shopify_order_id', 'is', null)
     .order('updated_at', { ascending: false }).limit(3)
-  // Drafts (gid://shopify/DraftOrder/…) aren't orders yet; nothing to track.
-  const ids = (deals ?? []).map((d) => d.shopify_order_id as string).filter((id) => id.includes('/Order/'))
+  const ids = (deals ?? []).map((d) => d.shopify_order_id as string)
   const found: OrderStatus[] = []
   if (ids.length) {
-    const data = await shopifyGraphql<{ nodes: (OrderStatus | null)[] }>(
-      cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } } }`, { ids },
+    // A draft is a registered order still waiting (card payment, or "Crear
+    // pedidos reales" off): the customer must hear it exists, not be asked
+    // for a number they never got. A completed draft reports its order.
+    const data = await shopifyGraphql<{ nodes: ((OrderStatus & { status?: string; tags?: string[]; order?: OrderStatus | null }) | null)[] }>(
+      cfg,
+      `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } ... on DraftOrder { name createdAt status tags order { ${ORDER_FIELDS} } } } }`,
+      { ids },
     )
-    found.push(...data.nodes.filter((n): n is OrderStatus => Boolean(n?.name)))
+    for (const n of data.nodes) {
+      if (!n?.name) continue
+      if (n.status === undefined) found.push(n)
+      else if (n.order) found.push(n.order)
+      else found.push(draftStatus(n.createdAt, (n.tags ?? []).includes(CARD_TAG)))
+    }
   }
   const number = text.match(/#\s?(\d{3,})/)?.[1]
   if (number && !found.some((o) => o.name === `#${number}`)) {
@@ -496,6 +651,59 @@ export async function loadOrderStatuses(args: {
     if (order && mine && [order.phone, order.shippingAddress?.phone].some((p) => digitsTail(p) === mine)) found.push(order)
   }
   return found
+}
+
+/** A registered order that is still a draft — it has no order number yet. */
+function draftStatus(createdAt: string, card: boolean): OrderStatus {
+  return {
+    name: 'Pedido registrado (aún sin número de pedido)', createdAt, cancelledAt: null,
+    displayFinancialStatus: card
+      ? 'PENDIENTE con tarjeta: el número de pedido llega por WhatsApp en cuanto se pague con el link enviado'
+      : 'contra entrega, en confirmación: el número de pedido llega por WhatsApp al confirmarse',
+    displayFulfillmentStatus: card ? 'aún no se prepara (espera el pago)' : 'aún no se prepara (en confirmación)',
+    phone: null, shippingAddress: null, fulfillments: [],
+  }
+}
+
+export interface ContactOrder {
+  shopifyId: string
+  title: string
+  total: number
+  /** A card order still waiting for its Recurrente payment (a draft). */
+  awaitingPayment: boolean
+  status: OrderStatus | null
+}
+
+/** The contact's Shopify orders for the inbox card ("¿cómo va la compra?"):
+ *  every deal pointing at an order or a draft, newest first, with the live
+ *  payment/preparation/tracking state of the real orders. Null when the
+ *  account has no store connected. */
+export async function listContactOrders(db: SupabaseClient, accountId: string, contactId: string): Promise<ContactOrder[] | null> {
+  const cfg = await loadShopifyConfig(db, accountId)
+  if (!cfg) return null
+  const { data: deals } = await db
+    .from('deals').select('title, value, shopify_order_id')
+    .eq('account_id', accountId).eq('contact_id', contactId).not('shopify_order_id', 'is', null)
+    .order('updated_at', { ascending: false }).limit(5)
+  const rows = deals ?? []
+  const ids = rows.map((d) => d.shopify_order_id as string).filter((id) => id.includes('/Order/'))
+  const byId = new Map<string, OrderStatus>()
+  if (ids.length) {
+    const data = await shopifyGraphql<{ nodes: (OrderStatus | null)[] }>(
+      cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { ${ORDER_FIELDS} } } }`, { ids },
+    )
+    for (const n of data.nodes) if (n?.id) byId.set(n.id, n)
+  }
+  return rows.map((d) => {
+    const id = d.shopify_order_id as string
+    return {
+      shopifyId: id,
+      title: d.title as string,
+      total: Number(d.value) || 0,
+      awaitingPayment: id.includes('/DraftOrder/'),
+      status: byId.get(id) ?? null,
+    }
+  })
 }
 
 /** One prompt line per order — data for the model, not instructions. */
@@ -523,9 +731,12 @@ export async function createRecurrenteCheckout(secretKey: string, args: { title:
     }),
     signal: AbortSignal.timeout(15_000),
   })
-  const json = (await res.json().catch(() => null)) as { checkout_url?: string; message?: string } | null
+  const json = (await res.json().catch(() => null)) as { id?: string; checkout_url?: string; message?: string } | null
   if (!res.ok || !json?.checkout_url) throw new ShopifyError(`Recurrente: ${json?.message ?? `HTTP ${res.status}`}`, 502)
-  return json.checkout_url
+  // The id is what the checkout is read back by. Recurrente returns it; the
+  // checkout URL also carries it (…/checkout-session/ch_…) as a fallback.
+  const id = json.id ?? json.checkout_url.match(/\/(ch_[A-Za-z0-9]+)/)?.[1] ?? null
+  return { id, url: json.checkout_url }
 }
 
 // ------------------------------------------------- Recurrente paid → order
@@ -569,22 +780,44 @@ export async function getRecurrenteCheckout(secretKey: string, checkoutId: strin
   return json
 }
 
-/** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Returns
- *  null when the draft is already completed (webhook retries, the legacy and
- *  unified events both arriving) or its total doesn't match `expectedTotal`. */
+/** Complete a draft as a PAID order (it then reaches Dropify/Dropi). Reuses
+ *  the paid order on webhook retries. Anything else returns `held` with the
+ *  reason, and nothing is released: a missing draft, an amount or currency
+ *  mismatch (the same number in another currency is not a match), a draft no
+ *  longer tied to an open purchase in the CRM, or stock that ran out after
+ *  the payment link went out. */
 export async function completePaidDraftOrder(
   cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
   draftId: string,
   expectedTotal: number,
-): Promise<{ id: string; name: string } | null> {
+  expectedCurrency: string,
+  openPurchase: boolean,
+): Promise<{ order: { id: string; name: string } } | { held: string }> {
   const { draftOrder } = await shopifyGraphql<{
-    draftOrder: { status: string; totalPriceSet: { shopMoney: { amount: string } } } | null
-  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount } } } }`, { id: draftId })
-  if (!draftOrder || draftOrder.status === 'COMPLETED') return null
-  if (Math.abs(Number(draftOrder.totalPriceSet.shopMoney.amount) - expectedTotal) > 0.009) {
-    console.warn(`[recurrente] ${draftId} total ${draftOrder.totalPriceSet.shopMoney.amount} != paid ${expectedTotal}, not completed`)
-    return null
+    draftOrder: {
+      status: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }
+      order?: { id: string; name: string; displayFinancialStatus: string } | null
+      lineItems?: { nodes: { title: string; quantity: number; variant: { id: string } | null }[] }
+    } | null
+  }>(cfg, `query($id: ID!) { draftOrder(id: $id) { status totalPriceSet { shopMoney { amount currencyCode } } order { id name displayFinancialStatus }
+      lineItems(first: 50) { nodes { title quantity variant { id } } } } }`, { id: draftId })
+  const mismatch = { held: 'el borrador no existe o su importe/moneda no coincide con lo cobrado' }
+  if (!draftOrder) return mismatch
+  const money = draftOrder.totalPriceSet.shopMoney
+  if (money.currencyCode.toUpperCase() !== expectedCurrency.toUpperCase() || Math.abs(Number(money.amount) - expectedTotal) > 0.009) {
+    console.warn(`[recurrente] ${draftId} total ${money.amount} ${money.currencyCode} != paid ${expectedTotal} ${expectedCurrency}, not completed`)
+    return mismatch
   }
+  if (draftOrder.status === 'COMPLETED') {
+    if (!draftOrder.order || draftOrder.order.displayFinancialStatus !== 'PAID') return mismatch
+    return { order: { id: draftOrder.order.id, name: draftOrder.order.name } }
+  }
+  // Eligibility is checked now, at payment time, not when the link went out.
+  if (!openPurchase) return { held: 'la compra ya no está abierta en el CRM (cancelada, cerrada o desvinculada)' }
+  const lines = (draftOrder.lineItems?.nodes ?? []).filter((l) => l.variant)
+    .map((l) => ({ variantId: l.variant!.id, quantity: l.quantity, title: l.title }))
+  const missing = lines.length ? await outOfStockTitles(cfg, lines) : []
+  if (missing.length) return { held: `sin existencias al momento del pago: ${missing.join(', ')}` }
   // No paymentPending → Shopify records the order as paid.
   const data = await shopifyGraphql<{
     draftOrderComplete: { draftOrder: { order: { id: string; name: string } | null } | null; userErrors: { message: string }[] }
@@ -592,5 +825,43 @@ export async function completePaidDraftOrder(
       draftOrder { order { id name } } userErrors { message } } }`, { id: draftId })
   const order = data.draftOrderComplete.draftOrder?.order
   if (!order) throw new ShopifyError(data.draftOrderComplete.userErrors.map((e) => e.message).join('; ') || 'draftOrderComplete failed')
-  return order
+  return { order }
 }
+
+/** Lines the store can't cover right now. Shopify's inventory is Dropi's
+ *  stock (Dropify syncs it), so this is the provider check before a payment
+ *  link goes out. Untracked or "continue selling" variants never block. */
+export async function outOfStockTitles(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  lines: { variantId: string; quantity: number; title: string }[],
+): Promise<string[]> {
+  const ids = lines.map((l) => (l.variantId.startsWith('gid://') ? l.variantId : `gid://shopify/ProductVariant/${l.variantId}`))
+  const data = await shopifyGraphql<{ nodes: ({ id: string; inventoryQuantity: number | null; inventoryPolicy: string; inventoryItem: { tracked: boolean } } | null)[] }>(
+    cfg, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant { id inventoryQuantity inventoryPolicy inventoryItem { tracked } } } }`, { ids },
+  )
+  return lines.filter((l, i) => {
+    const v = data.nodes[i]
+    if (!v) throw new ShopifyError(`No se pudo verificar el inventario de ${l.title}`)
+    return v && v.inventoryItem.tracked && v.inventoryPolicy === 'DENY' && (v.inventoryQuantity ?? 0) < l.quantity
+  }).map((l) => l.title)
+}
+
+/** Add/remove order tags (staff filter on them in Shopify: por-confirmar,
+ *  confirmado-whatsapp, cliente-cancela). */
+export async function updateOrderTags(
+  cfg: Pick<ShopifyConfig, 'shop' | 'token' | 'refreshToken'>,
+  orderId: string,
+  add: string[],
+  remove: string[],
+): Promise<void> {
+  const m = `mutation($id: ID!, $add: [String!]!, $remove: [String!]!) {
+    a: tagsAdd(id: $id, tags: $add) { userErrors { message } }
+    r: tagsRemove(id: $id, tags: $remove) { userErrors { message } }
+  }`
+  const data = await shopifyGraphql<{ a: { userErrors: { message: string }[] }; r: { userErrors: { message: string }[] } }>(
+    cfg, m, { id: orderId, add, remove },
+  )
+  const errors = [...data.a.userErrors, ...data.r.userErrors].map((e) => e.message)
+  if (errors.length) throw new ShopifyError(errors.join('; '))
+}
+

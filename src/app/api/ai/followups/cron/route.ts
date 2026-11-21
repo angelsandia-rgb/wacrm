@@ -2,6 +2,13 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { runFollowupSweep } from '@/lib/ai/followups-sweep'
+import { runAbandonedCartSweep } from '@/lib/shopify/abandoned-carts'
+import { runConfirmationReminderSweep } from '@/lib/shopify/confirmation-reminders'
+import { runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
+import { runShopifyBacklogCheck } from '@/lib/shopify/backlog'
+import { runShopifyReconciliation } from '@/lib/shopify/reconcile'
+import { runCardCheckoutReconciliation } from '@/lib/shopify/card-payments'
+import { runNoticeEscalation } from '@/lib/shopify/escalation'
 import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { describeError } from '@/lib/observability/describe-error'
 
@@ -35,10 +42,50 @@ export async function GET(request: Request) {
 
   try {
     const result = await runFollowupSweep(supabaseAdmin())
-    await recordHeartbeat('followups_cron', {
-      detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}`,
+    // Abandoned Shopify carts ride the same schedule; never fails the follow-ups run.
+    const carts = await runAbandonedCartSweep(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] abandoned carts failed:', describeError(err))
+      return null
     })
-    return NextResponse.json(result)
+    const confirmations = await runConfirmationReminderSweep(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] confirmation reminders failed:', describeError(err))
+      return null
+    })
+    // Before the sweep, so an expiry notice goes out in this same tick.
+    const backlog = await runShopifyBacklogCheck(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] shopify backlog check failed:', describeError(err))
+      return null
+    })
+    const orderNotifications = await runOrderNotificationSweep(supabaseAdmin())
+    // Once an hour (the cron ticks every ~5 min): reads Shopify, so not every tick.
+    const reconcile = new Date().getUTCMinutes() < 5
+      ? await runShopifyReconciliation(supabaseAdmin()).catch((err) => {
+        console.error('[followups/cron] shopify reconciliation failed:', describeError(err))
+        return null
+      })
+      : null
+    // Card links read back from Recurrente: a paid link whose webhook never
+    // arrived is still completed or held. Each link is rechecked ~30 min apart.
+    const cards = await runCardCheckoutReconciliation(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] card checkout reconciliation failed:', describeError(err))
+      return null
+    })
+    // Store exception notices nobody read in 30 min also go out by email.
+    const escalation = await runNoticeEscalation(supabaseAdmin()).catch((err) => {
+      console.error('[followups/cron] notice escalation failed:', describeError(err))
+      return null
+    })
+    await recordHeartbeat('followups_cron', {
+      detail: `sent ${result.sent}, failed ${result.failed}, scanned ${result.scanned}` +
+        (carts ? `; carts sent ${carts.sent}, pending ${carts.pending}, failed ${carts.failed}` : '') +
+        (confirmations ? `; confirmations reminded ${confirmations.reminded}, escalated ${confirmations.escalated}` : '') +
+        `; order notifications sent ${orderNotifications.sent}, pending ${orderNotifications.pending}` +
+        (backlog ? `; requests expired ${backlog.expired}, stuck accounts ${backlog.stuckAccounts}` : '') +
+        (reconcile ? `; reconciled ${reconcile.accounts}, flagged ${reconcile.flagged}` : '') +
+        (cards ? `; card links checked ${cards.checked}, completed ${cards.completed}, held ${cards.held}, failed ${cards.failed}` : '') +
+        (escalation ? `; notices emailed ${escalation.emailed}, failed ${escalation.failed}` : ''),
+    })
+    return NextResponse.json({ ...result, carts, confirmations, orderNotifications, backlog, reconcile, cards, escalation })
   } catch (err) {
     const message = describeError(err)
     console.error('[followups/cron] sweep failed:', message)

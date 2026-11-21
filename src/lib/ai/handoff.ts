@@ -26,8 +26,10 @@ const MIN_SUBSTANTIVE_LEN = 12
 export function buildHandoffSummary(args: {
   messages: ChatMessage[]
   replyCount: number
+  /** The handoff turn itself sent the customer a reply (not counted in replyCount). */
+  answered?: boolean
 }): string {
-  const { messages, replyCount } = args
+  const { messages, replyCount, answered } = args
 
   const lastCustomer = [...messages]
     .reverse()
@@ -35,7 +37,7 @@ export function buildHandoffSummary(args: {
 
   const replies =
     replyCount === 0
-      ? 'sin responder'
+      ? (answered ? 'después de responderle' : 'sin responder')
       : `después de ${replyCount} ${replyCount === 1 ? 'respuesta' : 'respuestas'}`
 
   const base = `🤖 La IA transfirió la conversación ${replies}.`

@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     const dedupKey = `push_delivery:${n.account_id}:${n.user_id}`;
     if (result.sent === 0) {
       await dispatchSystemAlert({ severity: 'warning', source: 'push_delivery',
-        title: 'No se pudo entregar una alerta de atención al hotel',
+        title: 'No se pudo entregar por push un aviso de atención (queda solo en el panel)',
         accountId: n.account_id, dedupKey, throttleMinutes: 60,
         detail: { user_id: n.user_id, notification_id: n.id, conversation_id: n.conversation_id, pruned_devices: result.pruned,
           action: 'Revisar dispositivos registrados, permisos de notificaciones y conexión del servicio push. El aviso permanece en el panel.' } });

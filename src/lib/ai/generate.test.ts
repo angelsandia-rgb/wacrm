@@ -41,6 +41,25 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('parseGeneration', () => {
+  it('reads the web COD order confirmation markers and strips them', () => {
+    const ok = parseGeneration('¡Listo, su pedido queda confirmado! [[ACTION:confirm_shopify_order]]')
+    expect(ok.orderConfirmation).toBe('confirm')
+    expect(ok.text).toBe('¡Listo, su pedido queda confirmado!')
+    // Cancel wins if both slip in: shipping a refused order is the costly mistake.
+    expect(parseGeneration('Entendido. [[ACTION:confirm_shopify_order]] [[ACTION:cancel_shopify_order]]').orderConfirmation).toBe('cancel')
+    expect(parseGeneration('Hola').orderConfirmation).toBeUndefined()
+  })
+  it('reads the card confirmation of a web order request and strips it', () => {
+    const card = parseGeneration('Le preparo el link de pago seguro. [[ACTION:confirm_shopify_order_card]]')
+    expect(card.orderConfirmation).toBe('confirm_card')
+    expect(card.text).toBe('Le preparo el link de pago seguro.')
+    expect(parseGeneration('Ok [[ACTION:confirm_shopify_order_card]] [[ACTION:cancel_shopify_order]]').orderConfirmation).toBe('cancel')
+    // Several purchases waiting: the marker names one, and is still stripped.
+    const named = parseGeneration('Registro la freidora. [[ACTION:confirm_shopify_order:ab12]]')
+    expect(named).toMatchObject({ orderConfirmation: 'confirm', orderConfirmationRef: 'AB12', text: 'Registro la freidora.' })
+    expect(parseGeneration('Listo [[ACTION:confirm_shopify_order]]').orderConfirmationRef).toBeUndefined()
+  })
+
   it('returns text with no handoff', () => {
     expect(parseGeneration('Hello there')).toEqual({
       text: 'Hello there',

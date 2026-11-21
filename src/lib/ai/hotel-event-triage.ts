@@ -28,9 +28,10 @@ export function hotelEventTriage(messages: ChatMessage[]): EventTriage {
     const newQuote = /\b(?:quiero|quisiera|deseo|necesito|queremos|solicitar|solicito) (?:una |que me |que nos )?(?:cotiz\w*|presupuesto)\b|\bcotiz\w* nueva\b|\bnueva cotiz\w*\b/.test(text)
     const existing = !noQuote && (/\b(?:mi|nuestra) cotizacion\b|\b(?:tengo|tenemos|ya tengo|ya tenemos) (?:el |un |una )?(?:numero|cotizacion)\b|\b(?:cotizacion|tramite) (?:esta |sigue )?(?:en curso|en proceso|pendiente)\b|\bya (?:me |nos )?(?:cotizaron|enviaron la cotizacion)\b|\bno (?:me|nos) han enviado la cotizacion\b/.test(text)
       || /\b(?:en curso|en proceso|en tramite)\b|\b(?:numero|cotizacion|folio)\s*[:#-]?\s*[a-z]*[-/]?\d+\b/.test(text)
+      || /\b(?:no|aun no|todavia no) (?:me|nos) han? (?:enviado|mandado|entregado) (?:la|mi|nuestra) cotiz\w*\b|\bcotiz\w* (?:ya )?solicitada\b/.test(text)
       || (asked && /^(?:\s*\d{3,}\s*|pendiente)$/.test(text)))
     if (existing) state = 'existing'
-    else if (newQuote || (asked && /^(?:(?:si[,.]?\s+)?(?:una\s+)?nueva(?:\s+solicitud)?|cotizar|deseo cotizar)[.!\s]*$/.test(text.trim()))) state = 'new'
+    else if (newQuote || (asked && /^(?:(?:si[,.\s]+)?(?:una\s+)?nueva(?:\s+solicitud)?|cotizar|deseo cotizar)[.!\s]*$/.test(text.trim()))) state = 'new'
     else if (noQuote) state = 'ask'
   }
   // Route an ambiguous answer after the one status question to staff.

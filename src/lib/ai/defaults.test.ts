@@ -86,6 +86,54 @@ describe('buildSystemPrompt — set-contact-name marker gate', () => {
   })
 })
 
+describe('buildSystemPrompt — web order form request', () => {
+  it('teaches confirm, card and cancel markers, and says no order exists yet', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderRequest: '1 x Lámpara; total Q199' })
+    expect(p).toContain('ORDER REQUEST AWAITING CONFIRMATION')
+    expect(p).toContain('NO order exists yet')
+    for (const m of ['[[ACTION:confirm_shopify_order]]', '[[ACTION:confirm_shopify_order_card]]', '[[ACTION:cancel_shopify_order]]']) expect(p).toContain(m)
+    // A real pending order takes precedence over a request.
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderRequest: 'x', pendingOrderConfirmation: '#1002' })).not.toContain('ORDER REQUEST AWAITING')
+  })
+})
+
+describe('buildSystemPrompt — web COD order confirmation', () => {
+  it('teaches the confirm/cancel markers only while an order awaits confirmation', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderConfirmation: '#1002' })
+    expect(p).toContain('ORDER AWAITING CONFIRMATION')
+    expect(p).toContain('[[ACTION:confirm_shopify_order]]')
+    expect(p).toContain('[[ACTION:cancel_shopify_order]]')
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('confirm_shopify_order')
+  })
+
+  it('does not promise a shipping hold or a saved decision before execution', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply', pendingOrderConfirmation: '#1002' })
+    expect(p).not.toContain('It is NOT shipped until they confirm')
+    expect(p).not.toContain('tell them it is confirmed and will be delivered')
+    expect(p).toContain('acknowledge that you received their confirmation and are recording it')
+    expect(p).toContain('never during a complaint, cancellation, human request, refusal, opt-out, thanks or goodbye')
+  })
+})
+
+describe('buildSystemPrompt — ecommerce service priority', () => {
+  it('gives connected stores a final service priority over a pushy business prompt', () => {
+    const p = buildSystemPrompt({ userPrompt: 'End every reply with a sales question.', mode: 'auto_reply', shopifyOrders: true })
+    const boundary = p.indexOf('ECOMMERCE PRIORITY — SALES AND CUSTOMER SERVICE')
+    expect(boundary).toBeGreaterThan(p.indexOf('End every reply with a sales question.'))
+    expect(p.slice(boundary)).toContain('This overrides the generic two-step handoff rule')
+    expect(p.slice(boundary)).toContain('A closing question is optional')
+    expect(p.slice(boundary)).toContain('Receiving a request is not completing it')
+  })
+
+  it('keeps the ecommerce override out of other businesses and draft replies', () => {
+    for (const input of [
+      { mode: 'auto_reply' as const, shopifyOrders: false },
+      { mode: 'auto_reply' as const, hotelReservations: true },
+      { mode: 'draft' as const, shopifyOrders: true },
+    ]) expect(buildSystemPrompt({ userPrompt: null, ...input })).not.toContain('ECOMMERCE PRIORITY — SALES AND CUSTOMER SERVICE')
+  })
+})
+
 describe('buildSystemPrompt — send_catalog', () => {
   it('tells the model not to write the catalog link itself', () => {
     const p = buildSystemPrompt({

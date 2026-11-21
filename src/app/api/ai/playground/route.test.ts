@@ -28,7 +28,10 @@ vi.mock('@/lib/ai/config', () => ({
   loadAiConfig: async () => ({ systemPrompt: 'Eres el asistente.', askCustomerTaxInfo: false }),
 }))
 vi.mock('@/lib/ai/knowledge', () => ({ retrieveKnowledge: async () => [] }))
-vi.mock('@/lib/ai/catalog-context', () => ({ loadCatalogContext: async () => null }))
+vi.mock('@/lib/ai/catalog-context', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/ai/catalog-context')>(),
+  loadCatalogContext: async () => null,
+}))
 vi.mock('@/lib/ai/business-metrics', () => ({
   loadBusinessMetrics: async () => null,
   metricsGrounding: () => '',

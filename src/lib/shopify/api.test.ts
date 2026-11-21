@@ -1,8 +1,8 @@
 import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildOrderInput, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses,
-  completePaidDraftOrder, fetchClientCredentialsToken, pickOrderPipeline, pickOrderStage, pickPaidStage, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  buildOrderInput, CARD_TAG, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
+  completePaidDraftOrder, dropiFixHint, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -47,6 +47,9 @@ describe('buildOrderInput', () => {
       departamento: 'Sacatepéquez', payment: 'cod', currency: 'GTQ',
     })
     expect(input.financialStatus).toBe('PENDING')
+    expect(input.customAttributes).toEqual([])
+    expect(buildOrderInput({ lines: [], fullName: 'Ana', phone: '55551234', address: 'Z1', departamento: 'Guatemala', payment: 'cod', currency: 'GTQ', note: 'NIT: 123' }).customAttributes)
+      .toEqual([{ key: 'Chat Sandía', value: 'NIT: 123' }])
     expect(input.tags).toEqual(['chat-sandia'])
     expect(input.phone).toBe('+50255551234')
     expect(input.shippingAddress).toMatchObject({ firstName: 'Ana María', lastName: 'López', provinceCode: 'SAC', countryCode: 'GT' })
@@ -54,6 +57,13 @@ describe('buildOrderInput', () => {
       kind: 'SALE', status: 'PENDING', gateway: 'Pago contra entrega (COD)',
       amountSet: { shopMoney: { amount: '338.00', currencyCode: 'GTQ' } },
     }])
+  })
+  it('sends Dropi the real municipio as the city, not the departamento', () => {
+    const base = { lines: [{ variantId: 'gid://v/1', quantity: 1, price: 100, title: 'X' }], fullName: 'Ana', phone: '55551234', address: 'Zona 1', payment: 'cod' as const, currency: 'GTQ' }
+    expect(buildOrderInput({ ...base, departamento: 'Guatemala', municipio: 'Mixco' }).shippingAddress).toMatchObject({ city: 'Mixco', provinceCode: 'GUA' })
+    expect(buildOrderInput({ ...base, departamento: 'Alta Verapaz', municipio: 'Cobán' }).shippingAddress).toMatchObject({ city: 'Cobán', provinceCode: 'AVE' })
+    // Older markers without municipio keep the previous behaviour.
+    expect(buildOrderInput({ ...base, departamento: 'Mixco' }).shippingAddress).toMatchObject({ city: 'Mixco', provinceCode: 'GUA' })
   })
 })
 
@@ -67,6 +77,21 @@ describe('helpers', () => {
     expect(departamentoCode('Mixco')).toBe('GUA')
     expect(departamentoCode('Quetzaltenango')).toBe('QUE')
   })
+  it('accepts only a municipio that exists in that departamento', () => {
+    expect(municipioMatchesDepartamento('Mixco', 'Guatemala')).toBe(true)
+    expect(municipioMatchesDepartamento('Villa Nueva', 'Escuintla')).toBe(false)
+    expect(municipioMatchesDepartamento('Cobán', 'Alta Verapaz')).toBe(true)
+    // A typo is refused before the order exists, not by the supplier afterwards (#1004).
+    expect(municipioMatchesDepartamento('Guantemala', 'Guatemala')).toBe(false)
+  })
+  it('a municipio written where the departamento goes settles it only when it is not a homonym', () => {
+    expect(departamentoCode('Cobán')).toBe('AVE')
+    expect(departamentoCode('San Pedro Sacatepéquez')).toBeUndefined()
+  })
+  it('sends the supplier the municipio spelt as in the canonical list', () => {
+    const base = { lines: [{ variantId: 'gid://shopify/ProductVariant/1', quantity: 1, price: 100, title: 'X' }], fullName: 'Ana López', phone: '54852732', address: '4a calle', payment: 'cod' as const, currency: 'GTQ' }
+    expect(JSON.stringify(buildOrderInput({ ...base, departamento: 'alta verapaz', municipio: 'coban' }))).toContain('"city":"Cobán"')
+  })
   it('verifies the webhook HMAC', () => {
     const body = '{"id":1}'
     const sig = createHmac('sha256', 's3cret').update(body).digest('base64')
@@ -79,7 +104,7 @@ describe('helpers', () => {
 describe('card orders', () => {
   const cfg = {
     shop: 'x.myshopify.com', token: 't', ordersLive: true, webhookSecret: null,
-    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1', recurrenteWebhookSecret: null,
+    templateName: null, templateLanguage: 'es', recurrenteSecretKey: 'sk_test_1', recurrenteWebhookSecret: null, shippingCoverage: null,
   }
   const req = {
     lines: [{ variantId: 'gid://v/1', quantity: 1, price: 229, title: 'X' }],
@@ -90,11 +115,12 @@ describe('card orders', () => {
 
   it('stay drafts tagged pago-tarjeta even with real orders on (Dropi must not ship or collect cash)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9' }, userErrors: [] } },
+      data: { draftOrderCreate: { draftOrder: { id: 'gid://shopify/DraftOrder/9', name: '#D9', totalPriceSet: { shopMoney: { amount: '249.00' } } }, userErrors: [] } },
     })))
     vi.stubGlobal('fetch', fetchMock)
     const order = await createShopifyOrder(cfg, req)
-    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 229 })
+    // Shopify's own draft total is what may be charged; the catalog sum is kept to compare.
+    expect(order).toEqual({ id: 'gid://shopify/DraftOrder/9', name: '#D9', draft: true, total: 249, catalogTotal: 229 })
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(body.query).toContain('draftOrderCreate')
     expect(body.variables.input.tags).toEqual(['chat-sandia', 'pago-tarjeta'])
@@ -103,12 +129,16 @@ describe('card orders', () => {
   it('asks Recurrente for the exact total in cents', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'ch_1', checkout_url: 'https://app.recurrente.com/checkout/ch_1' }), { status: 201 }))
     vi.stubGlobal('fetch', fetchMock)
-    const url = await createRecurrenteCheckout('sk_test_1', { title: 'Pedido #D9', total: 458, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/9' })
-    expect(url).toBe('https://app.recurrente.com/checkout/ch_1')
+    const link = await createRecurrenteCheckout('sk_test_1', { title: 'Pedido #D9', total: 458, currency: 'GTQ', orderId: 'gid://shopify/DraftOrder/9' })
+    // The id is kept: the link is read back by it if its webhook never arrives.
+    expect(link).toEqual({ id: 'ch_1', url: 'https://app.recurrente.com/checkout/ch_1' })
     const [endpoint, init] = fetchMock.mock.calls[0]
     expect(endpoint).toBe('https://app.recurrente.com/api/checkouts')
     expect(init.headers['X-SECRET-KEY']).toBe('sk_test_1')
     expect(JSON.parse(init.body).items).toEqual([{ name: 'Pedido #D9', currency: 'GTQ', amount_in_cents: 45800, quantity: 1 }])
+    // Without an id in the body, the checkout URL still carries it.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ checkout_url: 'https://app.recurrente.com/checkout-session/ch_x9' }), { status: 201 }))
+    expect((await createRecurrenteCheckout('sk_test_1', { title: 'x', total: 1, currency: 'GTQ', orderId: 'd' })).id).toBe('ch_x9')
   })
 })
 
@@ -135,6 +165,8 @@ describe('parseShopifyOrderPayload', () => {
       fullName: 'Ana López', phone: '55551234', address: 'Zona 1, 6a calle', departamento: 'Guatemala', payment: 'cod',
     })
     expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta')?.payment).toBe('card')
+    expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta|Mixco')?.municipio).toBe('Mixco')
+    expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|tarjeta')).not.toHaveProperty('municipio')
   })
   it('rejects a marker with a missing field', () => {
     expect(parseShopifyOrderPayload('Cojín:1|Ana|55551234|Zona 1|Guatemala|')).toBeNull()
@@ -231,26 +263,95 @@ describe('Recurrente paid → Shopify order', () => {
   })
 
   const cfg = { shop: 'x.myshopify.com', token: 't' }
-  const draft = (status: string, amount: string) =>
-    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount } } } } }))
+  const draft = (status: string, amount: string, currencyCode = 'GTQ') =>
+    new Response(JSON.stringify({ data: { draftOrder: { status, totalPriceSet: { shopMoney: { amount, currencyCode } },
+      lineItems: { nodes: [{ title: 'Lámpara', quantity: 2, variant: { id: 'gid://shopify/ProductVariant/1' } }] } } } }))
+  const stock = (inventoryQuantity: number) => new Response(JSON.stringify({ data: { nodes: [
+    { id: 'gid://shopify/ProductVariant/1', inventoryQuantity, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } }] } }))
+  const MISMATCH = { held: expect.stringContaining('importe/moneda') }
 
-  it('completes an open draft as paid when the total matches', async () => {
+  it('completes an open draft as paid when the total matches and stock still covers it', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(draft('OPEN', '458.00'))
+      .mockResolvedValueOnce(stock(2))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         data: { draftOrderComplete: { draftOrder: { order: { id: 'gid://shopify/Order/5', name: '#1005' } }, userErrors: [] } },
       })))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toEqual({ id: 'gid://shopify/Order/5', name: '#1005' })
-    const mutation = JSON.parse(fetchMock.mock.calls[1][1].body).query as string
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual({ order: { id: 'gid://shopify/Order/5', name: '#1005' } })
+    const mutation = JSON.parse(fetchMock.mock.calls[2][1].body).query as string
     expect(mutation).toContain('draftOrderComplete')
     expect(mutation).not.toContain('paymentPending')
   })
 
   it('skips completed drafts and amount mismatches', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(draft('COMPLETED', '458.00')).mockResolvedValueOnce(draft('OPEN', '500.00')))
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
-    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458)).toBeNull()
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
+  })
+  it('never completes a draft paid in another currency, even when the number matches', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(draft('OPEN', '458.00', 'USD'))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual(MISMATCH)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('holds a late payment for a purchase no longer open in the CRM, without completing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(draft('OPEN', '458.00'))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', false)).toEqual({ held: expect.stringContaining('ya no está abierta') })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('holds a payment when stock ran out after the link went out, without completing', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(draft('OPEN', '458.00')).mockResolvedValueOnce(stock(1))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', true)).toEqual({ held: 'sin existencias al momento del pago: Lámpara' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+  it('recovers the paid order on a retry after completion without completing it again', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { draftOrder: {
+      status: 'COMPLETED', totalPriceSet: { shopMoney: { amount: '458.00', currencyCode: 'GTQ' } },
+      order: { id: 'gid://shopify/Order/5', name: '#1005', displayFinancialStatus: 'PAID' },
+    } } })))
+    vi.stubGlobal('fetch', fetchMock)
+    // A retry finds the draft completed and its deal already moved: not "open" any more, still recovered.
+    expect(await completePaidDraftOrder(cfg, 'gid://shopify/DraftOrder/9', 458, 'GTQ', false)).toEqual({ order: { id: 'gid://shopify/Order/5', name: '#1005' } })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Dropi rejections written by Dropify', () => {
+  it('recognises the tag regardless of spacing and case', () => {
+    expect(hasDropiSyncError('por-confirmar, Dropi Sync Error')).toBe(true)
+    expect(hasDropiSyncError('dropi sync error')).toBe(true)
+    expect(hasDropiSyncError('por-confirmar')).toBe(false)
+    expect(hasDropiSyncError(null)).toBe(false)
+  })
+  it('extracts the reason from the order note', () => {
+    expect(dropiSyncReason(' - Nota Dropi: 3: La ciudad no existe. CIUDAD: X -- ')).toBe('La ciudad no existe. CIUDAD: X')
+    expect(dropiSyncReason('Cliente pidió llamar antes')).toBe('')
+  })
+  it('gives the owner the fix that matches the reason', () => {
+    expect(dropiFixHint(dropiSyncReason(' - Nota Dropi: No posee saldo suficiente en la wallet, monto mínimo requerido: 39.68 -- '))).toMatch(/Recargue la wallet/)
+    expect(dropiFixHint('Token inválido')).toMatch(/Renueve el token/)
+    expect(dropiFixHint('La ciudad no existe')).toMatch(/Corrija los datos/)
+  })
+})
+
+describe('payment method and delivery state', () => {
+  it('treats only a cash-on-delivery gateway as COD', () => {
+    expect(isCashOnDelivery(['Cash on Delivery (COD)'])).toBe(true)
+    expect(isCashOnDelivery(['Pago contra entrega (COD)'])).toBe(true)
+    expect(isCashOnDelivery(['Depósito bancario'])).toBe(false)
+    expect(isCashOnDelivery(['Recurrente'])).toBe(false)
+    expect(isCashOnDelivery(null)).toBe(false)
+  })
+  it('calls an order delivered only when every live package is and nothing is left to ship', () => {
+    const delivered = { status: 'success', shipment_status: 'delivered' }
+    expect(orderFullyDelivered([delivered], 'fulfilled')).toBe(true)
+    expect(orderFullyDelivered([delivered], 'partial')).toBe(false)
+    expect(orderFullyDelivered([delivered, { status: 'success', shipment_status: 'in_transit' }], 'fulfilled')).toBe(false)
+    expect(orderFullyDelivered([delivered, { status: 'cancelled', shipment_status: null }], 'fulfilled')).toBe(true)
+    expect(orderFullyDelivered([], 'fulfilled')).toBe(false)
   })
 })
 
@@ -282,5 +383,97 @@ describe('paid card order stage', () => {
   })
   it('leaves pipelines without that stage alone', () => {
     expect(pickPaidStage(stages.filter((s) => s.id !== 's3'), 's2')).toBeNull()
+  })
+})
+
+describe('pickForwardStage (shipping updates)', () => {
+  const stages = [
+    { id: 's1', name: 'Consulta', position: 0 }, { id: 's2', name: 'Pedido creado', position: 1 },
+    { id: 's3', name: 'Pago confirmado', position: 2 }, { id: 's4', name: 'Enviado', position: 3 },
+    { id: 's5', name: 'Entregado', position: 4 },
+  ]
+  it('moves an order forward to Enviado / Entregado', () => {
+    expect(pickForwardStage(stages, 's2', 'Enviado')?.id).toBe('s4')
+    expect(pickForwardStage(stages, 's4', 'Entregado')?.id).toBe('s5')
+  })
+  it('returns null for a repeated or late update, so the customer is not told twice', () => {
+    expect(pickForwardStage(stages, 's4', 'Enviado')).toBeNull()
+    expect(pickForwardStage(stages, 's5', 'Enviado')).toBeNull()
+  })
+})
+
+describe('trackingSentence', () => {
+  it('gives the guide number, carrier and link when Dropi sent them', () => {
+    expect(trackingSentence({ tracking_number: 'GT123', tracking_company: 'Cargo Expreso', tracking_url: 'https://t/GT123' }))
+      .toBe('Número de guía: GT123 (Cargo Expreso). Rastreo: https://t/GT123')
+  })
+  it('never leaves the template parameter empty', () => {
+    expect(trackingSentence({ tracking_number: null })).toBe('El mensajero le contactará antes de la entrega.')
+  })
+})
+
+describe('loadOrderStatuses', () => {
+  it('reports a draft as a registered order without a number, and a completed draft as its order (Casa Ceiba 2026-11-12)', async () => {
+    const table = (t: string) => {
+      const c: Record<string, unknown> = {
+        select: () => c, eq: () => c, not: () => c, order: () => c, limit: () => c,
+        maybeSingle: async () => ({ data: { shop_domain: 'x.myshopify.com', access_token: 'tok' } }),
+        then: (ok: (v: unknown) => unknown) => ok({ data: t === 'deals' ? [{ shopify_order_id: 'gid://shopify/DraftOrder/3' }, { shopify_order_id: 'gid://shopify/DraftOrder/2' }] : [] }),
+      }
+      return c
+    }
+    const order = { id: 'gid://shopify/Order/9', name: '#1009', createdAt: '2026-11-12T00:00:00Z', cancelledAt: null, displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'UNFULFILLED', phone: null, shippingAddress: null, fulfillments: [] }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [
+      { name: '#D3', createdAt: '2026-11-12T06:05:00Z', status: 'OPEN', tags: ['chat-sandia', CARD_TAG], order: null },
+      { name: '#D2', createdAt: '2026-11-11T06:05:00Z', status: 'COMPLETED', order },
+    ] } }))))
+    const found = await loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone: '', text: '¿cómo va mi pedido?' })
+    expect(found.map((o) => o.name)).toEqual(['Pedido registrado (aún sin número de pedido)', '#1009'])
+    expect(describeOrderStatuses(found)).toContain('PENDIENTE con tarjeta')
+  })
+})
+
+describe('outOfStockTitles', () => {
+  it('refuses to treat a missing variant as available stock', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [null] } }))))
+    await expect(outOfStockTitles({ shop: 'x.myshopify.com', token: 't' }, [
+      { variantId: 'missing', quantity: 1, title: 'Producto' },
+    ])).rejects.toThrow('No se pudo verificar el inventario')
+  })
+  it('flags only tracked, deny-oversell variants short of the quantity (Dropi stock synced by Dropify)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { nodes: [
+      { id: 'a', inventoryQuantity: 0, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+      { id: 'b', inventoryQuantity: 5, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+      { id: 'c', inventoryQuantity: 0, inventoryPolicy: 'CONTINUE', inventoryItem: { tracked: true } },
+      { id: 'd', inventoryQuantity: 1, inventoryPolicy: 'DENY', inventoryItem: { tracked: true } },
+    ] } }))))
+    const lines = [
+      { variantId: '1', quantity: 1, title: 'Drone' }, { variantId: '2', quantity: 2, title: 'Freidora' },
+      { variantId: '3', quantity: 1, title: 'Luces' }, { variantId: '4', quantity: 2, title: 'Proyector' },
+    ]
+    expect(await outOfStockTitles({ shop: 'x.myshopify.com', token: 't' }, lines)).toEqual(['Drone', 'Proyector'])
+  })
+})
+
+describe('coverageVerdict', () => {
+  const coverage = { Guatemala: ['Guatemala', 'Mixco', 'Villa Canales'], Sacatepéquez: '*' as const }
+  it('no configured coverage keeps every store as it was', () => {
+    expect(coverageVerdict(null, 'Petén', 'Flores')).toBe('ok')
+  })
+  it('allows a listed municipio (accents and case ignored) and a fully covered departamento', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', 'villa canales')).toBe('ok')
+    expect(coverageVerdict(coverage, 'sacatepequez', 'Antigua Guatemala')).toBe('ok')
+  })
+  it('excludes an unlisted municipio or departamento, even if the carrier delivers there', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', 'San Raymundo')).toBe('outside')
+    expect(coverageVerdict(coverage, 'Petén', 'Flores')).toBe('outside')
+  })
+  it('a homonym in another departamento is not covered', () => {
+    // "Guatemala" the municipio is covered; nothing in Escuintla is.
+    expect(coverageVerdict(coverage, 'Escuintla', 'Guatemala')).toBe('outside')
+  })
+  it('missing municipio or unknown departamento is ambiguous, never assumed covered', () => {
+    expect(coverageVerdict(coverage, 'Guatemala', '')).toBe('ambiguous')
+    expect(coverageVerdict(coverage, 'Guatemal', 'Mixco')).toBe('ambiguous')
   })
 })

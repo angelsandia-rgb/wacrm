@@ -1,5 +1,6 @@
 import type { AiProvider } from './types'
 import { skillRulesSection, type AiSkillsConfig } from './skills'
+import { ECOMMERCE_CONVERSATION_POLICY } from './ecommerce-conversation-policy'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -173,12 +174,22 @@ export const CREATE_QUOTE_SENTINEL_SUFFIX = ']]'
 /**
  * Turns a confirmed chat order into a Shopify order (auto-reply mode,
  * only when the account connected a Shopify store — migration 173).
- * Payload: `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>`.
+ * Payload: `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>|<municipio>`.
  * Every item is re-resolved against real Shopify-synced `products`
  * before anything is created (src/lib/shopify/chat-order.ts).
  */
 export const CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX = '[[ACTION:create_shopify_order:'
 export const CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX = ']]'
+
+/** The customer answered the confirmation request of their web
+ *  cash-on-delivery order (taught only while one is pending —
+ *  src/lib/shopify/order-confirmation.ts). */
+export const CONFIRM_SHOPIFY_ORDER_SENTINEL = '[[ACTION:confirm_shopify_order]]'
+export const CANCEL_SHOPIFY_ORDER_SENTINEL = '[[ACTION:cancel_shopify_order]]'
+/** Confirms a pending web order REQUEST but pays by card (Recurrente link). */
+export const CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL = '[[ACTION:confirm_shopify_order_card]]'
+/** The same three markers naming one purchase: `[[ACTION:confirm_shopify_order:AB12]]`. */
+export const SHOPIFY_ORDER_ANSWER_RE = /\[\[ACTION:(confirm_shopify_order_card|confirm_shopify_order|cancel_shopify_order)(?::([A-Za-z0-9]{4}))?\]\]/g
 
 /**
  * Sentinel prefix/suffix the model is instructed to wrap a quick
@@ -411,6 +422,12 @@ export function buildSystemPrompt(args: {
    *  loaded only when their latest message asks about an order; '' when
    *  the lookup found nothing. Omit/null = not looked up this turn. */
   shopifyOrderStatus?: string | null
+  /** A web cash-on-delivery order (e.g. "#1002") waiting for this
+   *  customer's WhatsApp confirmation — teaches the confirm/cancel markers. */
+  pendingOrderConfirmation?: string | null
+  /** A web order REQUEST from the store's own form (no Shopify order yet)
+   *  waiting for this customer's WhatsApp answer: its summary line. */
+  pendingOrderRequest?: string | null
   /** The account has a restaurant menu PDF on file
    *  (`accounts.restaurant_menu_url`, migration 114) — auto-reply mode
    *  only. Turns on `SEND_RESTAURANT_MENU_SENTINEL` so the bot can send
@@ -497,7 +514,7 @@ export function buildSystemPrompt(args: {
   /** The account's AI skill rules (auto-reply mode, ./skills.ts). */
   skills?: AiSkillsConfig | null
 }): string {
-  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, shopifyOrders, shopifyOrderStatus, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
+  const { userPrompt, mode, knowledge, dealStageOptions, catalog, calendar, catalogDeliveryMode, quickReplies, askCustomerTaxInfo, hotelReservations, shopifyOrders, shopifyOrderStatus, pendingOrderConfirmation, pendingOrderRequest, restaurantMenu, hotelCategoryBanners, hotelIsFirstReply, hotelStayEstimate, currentDate, upcomingWeekdays, flowDirective, clinicGuardrails, clinicAppointment, knownContactFacts, activeReservations, staleReservations } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -644,10 +661,34 @@ export function buildSystemPrompt(args: {
 
     if (shopifyOrders && catalog && catalog.length > 0) {
       parts.push(
-        `You can take ORDERS for products in the catalog list below. Shipping coverage, shipping cost and which of the two payment methods apply — cash on delivery ("contra entrega") or card via a payment link sent by WhatsApp ("tarjeta") — come ONLY from the business instructions and knowledge base; never promise coverage or free shipping they don't state. When the customer wants to buy, collect, one or two at a time and never asking again for something already given earlier in the conversation: the product(s) and quantity, full name, phone number, delivery address (with zona/municipio and a reference), departamento, and payment method. The departamento is never a reason to ask again or to hold the order: if the customer gave only the municipio, use the municipio in that slot (the system resolves it). ` +
-          `Once you have ALL of them, send ONE summary (products, quantities, the catalog price and total, name, phone, address, departamento, payment method) and ask the customer to confirm it — with NO marker in that turn. ` +
+        `You can take ORDERS for products in the catalog list below. Shipping coverage, shipping cost and which of the two payment methods apply — cash on delivery ("contra entrega") or card via a payment link sent by WhatsApp ("tarjeta") — come ONLY from the business instructions and knowledge base; never promise coverage or free shipping they don't state. When the customer wants to buy, collect, one or two at a time and never asking again for something already given earlier in the conversation: the product(s) and quantity, full name, phone number, delivery address (with zona and a reference), municipio, departamento, and payment method. The courier needs the real municipio (e.g. Mixco, Villa Nueva, Cobán), not only the departamento: ask for it if the customer did not say it. The departamento is never a reason to ask again or to hold the order: if the customer gave only the municipio, use the municipio in that slot too (the system resolves it). ` +
+          `Once you have ALL of them, send ONE summary (products, quantities, the catalog price and total, name, phone, address, municipio, departamento, payment method) and ask the customer to confirm it — with NO marker in that turn. ` +
           `For card payment, the system itself sends the secure payment link for the exact total once the order is registered — never write a link, a card form or ask for card numbers yourself. ` +
-          `Only in a later turn where the customer clearly confirms that exact summary ("sí", "confirmo", "así está bien"), reply briefly that you are registering the order and append ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}<exact product name from the catalog below>:<quantity>,<exact product name>:<quantity>|<full name>|<phone>|<address>|<departamento>|<cod or tarjeta>${CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX} at the very end of your reply. The system sends the order number itself once the order exists — never invent an order number and never say the order is already registered. If the customer changes anything after the summary, send a new summary and wait for a new confirmation. Use this marker at most once per confirmed order, never for a product outside the list, and never mention it to the customer.`,
+          `Only in a later turn where the customer clearly confirms that exact summary ("sí", "confirmo", "así está bien"), reply briefly that you are registering the order and append ${CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX}<exact product name from the catalog below>:<quantity>,<exact product name>:<quantity>|<full name>|<phone>|<address>|<departamento>|<cod or tarjeta>|<municipio>${CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX} at the very end of your reply. The system sends the order number itself once the order exists — never invent an order number and never say the order is already registered. If the customer changes anything after the summary, send a new summary and wait for a new confirmation. Use this marker at most once per confirmed order, never for a product outside the list, and never mention it to the customer.`,
+      )
+    }
+
+    if (pendingOrderConfirmation) {
+      parts.push(
+        `ORDER AWAITING CONFIRMATION: this customer placed order ${pendingOrderConfirmation} in the web store (cash on delivery) and the system asked them by WhatsApp to confirm it (see that message above, with the products, total and address). This is a request to confirm their purchase details, NOT evidence that supplier import or shipping is held. Never promise that it cannot ship before confirmation. ` +
+          `If they clearly confirm it ("sí", "confirmo", "está bien"), thank them warmly, acknowledge that you received their confirmation and are recording it, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. Do not claim the decision is saved, an operation has completed, or delivery is guaranteed before the system records it. ` +
+          `If they clearly say they no longer want it or cancel, accept it kindly, tell them an advisor will take care of the cancellation, and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
+          `If they want to change something (address, phone, product, quantity), collect the correction and hand off (an advisor updates the order) — no confirm marker. If their message is about something else, answer that intent first; mention a pending confirmation only when it is relevant and welcome, never during a complaint, cancellation, human request, refusal, opt-out, thanks or goodbye. ` +
+          `Use each marker at most once, only for ${pendingOrderConfirmation}, and never mention it to the customer.`,
+      )
+    }
+
+    if (pendingOrderRequest && !pendingOrderConfirmation) {
+      parts.push(
+        `ORDER REQUEST AWAITING CONFIRMATION: this customer filled the web store's order form (${pendingOrderRequest}) and the system asked them by WhatsApp to confirm it. NO order exists yet and nothing has been sent to the supplier: the order and its number are created only when they confirm. ` +
+          `If they clearly confirm it paying cash on delivery ("sí", "confirmo", "está bien"), thank them warmly, say you are registering it and that the order number arrives in a moment, and append ${CONFIRM_SHOPIFY_ORDER_SENTINEL} at the very end. ` +
+          `If they confirm but want to pay by card, say you are preparing the secure payment link, and append ${CONFIRM_SHOPIFY_ORDER_CARD_SENTINEL} at the very end. ` +
+          `If the request says they chose to pay BY CARD in the form, a plain confirmation ("sí") means card: use the card marker, and use the cash marker only if they now ask to pay on delivery. ` +
+          `If they clearly say they no longer want it, accept it kindly (nothing was charged or shipped, no advisor is needed) and append ${CANCEL_SHOPIFY_ORDER_SENTINEL}. ` +
+          `If they want to change something (product, quantity, address, phone), collect the change, send a new full summary and, once they confirm that new summary, use the create_shopify_order marker instead of these markers. If their message is about something else, answer that first. ` +
+          `If SEVERAL purchases are listed, each has a reference code in brackets and they are independent: a bare "sí" does not say which one. Ask which purchase they mean (name the products, never the code) unless their message makes it unmistakable, and put that purchase's code inside the marker, e.g. ${CONFIRM_SHOPIFY_ORDER_SENTINEL.replace(']]', ':AB12]]')}. One purchase per message. ` +
+          `A "gracias", an address, an emoji or an answer to a different question is not a confirmation: no marker. ` +
+          `Never invent an order number. Use one of these markers at most once and never mention them to the customer.`,
       )
     }
 
@@ -802,5 +843,6 @@ export function buildSystemPrompt(args: {
     const skillRules = skillRulesSection(args.skills)
     if (skillRules) parts.push(skillRules)
   }
+  if (shopifyOrders && mode === 'auto_reply') parts.push(ECOMMERCE_CONVERSATION_POLICY)
   return parts.join('\n\n')
 }

@@ -66,12 +66,15 @@ export function formatCurrency(
   const code = (currency || DEFAULT_CURRENCY).trim();
   const amount = Number(value) || 0;
   try {
-    return new Intl.NumberFormat(undefined, {
+    // The server's default locale renders "GTQ 500"; customers read "Q500".
+    const out = new Intl.NumberFormat(code === "GTQ" ? "es-GT" : undefined, {
       style: "currency",
       currency: code,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
+    // Node's ICU writes "Q 1,199"; Guatemala writes "Q1,199".
+    return code === "GTQ" ? out.replace(/^(-?Q)\s/, "$1") : out;
   } catch {
     // Invalid ISO code — show the raw code + grouped number so the
     // value is still legible instead of throwing.

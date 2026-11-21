@@ -176,7 +176,16 @@ export interface GenerateResult {
     address: string
     departamento: string
     payment: 'cod' | 'card'
+    /** Municipio (Dropi needs city ≠ departamento). Optional: older markers omit it. */
+    municipio?: string
+    /** Tax id typed in the store's order form; goes to the order note. */
+    nit?: string
   } | null
+  /** The customer's answer to a pending web COD order confirmation
+   *  (see `CONFIRM_SHOPIFY_ORDER_SENTINEL`), or undefined. */
+  orderConfirmation?: 'confirm' | 'confirm_card' | 'cancel'
+  /** Reference code of the purchase the answer names, when several wait. */
+  orderConfirmationRef?: string
   /** The id of a saved quick reply the model picked to answer with
    *  verbatim (auto-reply mode only), or null — see
    *  `QUICK_REPLY_SENTINEL_PREFIX`. Unlike every other marker here, this

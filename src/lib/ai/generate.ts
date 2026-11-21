@@ -27,6 +27,7 @@ import {
   CREATE_QUOTE_SENTINEL_SUFFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_PREFIX,
   CREATE_SHOPIFY_ORDER_SENTINEL_SUFFIX,
+  SHOPIFY_ORDER_ANSWER_RE,
   QUICK_REPLY_SENTINEL_PREFIX,
   QUICK_REPLY_SENTINEL_SUFFIX,
   RECORD_RESERVATION_SENTINEL_PREFIX,
@@ -240,6 +241,16 @@ export function parseGeneration(
   // undefined (not null) when absent: the key stays optional on GenerateResult.
   const shopifyOrderProposal = (shopifyOrderMatch && parseShopifyOrderPayload(shopifyOrderMatch[1])) || undefined
 
+  // Cancel wins over confirm: shipping something the customer refused is the costly mistake.
+  const orderAnswers = [...raw.matchAll(SHOPIFY_ORDER_ANSWER_RE)]
+  const orderAnswer = (kind: string) => orderAnswers.find((m) => m[1] === kind)
+  const orderConfirmation: GenerateResult['orderConfirmation'] = orderAnswer('cancel_shopify_order')
+    ? 'cancel'
+    : orderAnswer('confirm_shopify_order_card') ? 'confirm_card'
+    : orderAnswer('confirm_shopify_order') ? 'confirm' : undefined
+  // The purchase the winning marker names (several can wait at once).
+  const orderConfirmationRef = (orderAnswer('cancel_shopify_order') ?? orderAnswer('confirm_shopify_order_card') ?? orderAnswer('confirm_shopify_order'))?.[2]?.toUpperCase()
+
   const quickReplyMatch = raw.match(
     new RegExp(
       `${escapeRegExp(QUICK_REPLY_SENTINEL_PREFIX)}(.+?)${escapeRegExp(QUICK_REPLY_SENTINEL_SUFFIX)}`,
@@ -335,6 +346,7 @@ export function parseGeneration(
     .replace(appointmentMatch ? appointmentMatch[0] : '', '')
     .replace(quoteMatch ? quoteMatch[0] : '', '')
     .replace(shopifyOrderMatch ? shopifyOrderMatch[0] : '', '')
+    .replace(SHOPIFY_ORDER_ANSWER_RE, '')
     .replace(quickReplyMatch ? quickReplyMatch[0] : '', '')
     .replace(RESERVATION_MARKER_RE, '') // strips EVERY record_reservation marker, not just the first
     .replace(apptActionMatch ? apptActionMatch[0] : '', '')
@@ -408,6 +420,8 @@ export function parseGeneration(
     sentinelLeakDetected,
     quoteProposal,
     shopifyOrderProposal,
+    orderConfirmation,
+    orderConfirmationRef,
     quickReplyId,
     reservationProposals,
     appointmentAction,
@@ -419,11 +433,11 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>`
+/** `<name>:<qty>,…|<full name>|<phone>|<address>|<departamento>|<cod|tarjeta>|<municipio>` (municipio optional)
  *  → proposal, or null when any field is missing (a half-filled order is
  *  never created; the unparsed marker is still stripped from the reply). */
 export function parseShopifyOrderPayload(payload: string): GenerateResult['shopifyOrderProposal'] {
-  const [itemsStr, fullName, phone, address, departamento, paymentRaw] = payload.split('|').map((s) => s.trim())
+  const [itemsStr, fullName, phone, address, departamento, paymentRaw, municipio] = payload.split('|').map((s) => s.trim())
   const items = (itemsStr ?? '')
     .split(',')
     .map((entry) => {
@@ -436,5 +450,5 @@ export function parseShopifyOrderPayload(payload: string): GenerateResult['shopi
   const pay = (paymentRaw ?? '').toLowerCase()
   const payment = /cod|contra|efectivo/.test(pay) ? 'cod' : /tarjeta|card|link/.test(pay) ? 'card' : null
   if (!items.length || !fullName || !phone || !address || !departamento || !payment) return null
-  return { items, fullName, phone, address, departamento, payment }
+  return { items, fullName, phone, address, departamento, payment, ...(municipio ? { municipio } : {}) }
 }
