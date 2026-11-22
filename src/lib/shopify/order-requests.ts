@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
-import { coverageVerdict, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles } from './api'
+import { catalogVariantsById, coverageVerdict, departamentoCode, loadShopifyConfig, normalizeGtPhone, outOfStockTitles } from './api'
 import { checkMunicipio } from './gt-geo'
 import { ORDER_TEMPLATES } from './notify'
 import { runOrderNotificationSweep, type OrderNotification } from './notification-jobs'
@@ -100,16 +100,18 @@ export async function submitOrderForm(db: SupabaseClient, accountId: string, inp
     return { error: `Por ahora no hacemos envíos a ${input.municipio}, ${input.departamento}. Escríbanos por WhatsApp y le ayudamos.`, status: 422 }
   }
 
-  const ids = [...new Set(input.items.map((i) => variantGid(i.variantId)))]
-  const { data: products, error: productsError } = await db.from('products').select('name, price, shopify_variant_id')
-    .eq('account_id', accountId).eq('is_active', true).in('shopify_variant_id', ids)
+  // A size/color the customer picked is a variant listed in variant_options,
+  // not only the product's first variant.
+  const { data: products, error: productsError } = await db.from('products').select('name, price, shopify_variant_id, variant_options')
+    .eq('account_id', accountId).eq('is_active', true).not('shopify_variant_id', 'is', null)
   if (productsError) throw productsError
-  const byVariant = new Map((products ?? []).map((p) => [p.shopify_variant_id as string, p]))
+  const byVariant = catalogVariantsById((products ?? []) as Parameters<typeof catalogVariantsById>[0])
   const lines = []
   for (const item of input.items) {
-    const p = byVariant.get(variantGid(item.variantId))
+    const variantId = variantGid(item.variantId)
+    const p = byVariant.get(variantId)
     if (!p) return { error: 'Uno de los productos ya no está disponible. Actualice la página.', status: 409 }
-    lines.push({ variantId: p.shopify_variant_id as string, quantity: item.quantity, title: p.name as string, price: Number(p.price) })
+    lines.push({ variantId, quantity: item.quantity, title: p.name, price: p.price })
   }
   const missing = await outOfStockTitles(cfg, lines)
   if (missing.length) return { error: `Sin existencias por ahora: ${missing.join(', ')}.`, status: 409 }

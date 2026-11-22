@@ -68,6 +68,7 @@ interface CatalogProductRow {
   name: string
   price: number
   description: string | null
+  variant_options?: { title: string; available: boolean }[] | null
 }
 
 interface RateRow {
@@ -87,7 +88,7 @@ export async function loadCatalogContext(
   const [{ data: products }, { data: account }] = await Promise.all([
     db
       .from('products')
-      .select('id, name, price, description')
+      .select('id, name, price, description, variant_options')
       .eq('account_id', accountId)
       .eq('is_active', true)
       .order('name')
@@ -115,7 +116,7 @@ export async function loadCatalogContext(
       const filters = tokens.map((token) => `name.ilike.%${token.replace(/[aeiou]/g, '_')}%`)
       const search = async (filter: string): Promise<CatalogProductRow[]> => {
         try {
-          const { data, error } = await db.from('products').select('id, name, price, description')
+          const { data, error } = await db.from('products').select('id, name, price, description, variant_options')
             .eq('account_id', accountId).eq('is_active', true).or(filter).order('name').limit(MAX_PRODUCTS_IN_PROMPT)
           return error ? [] : ((data ?? []) as CatalogProductRow[]).filter((p) => productRelevance(p, normalizedQuery, tokens) > 0)
         } catch {
@@ -171,6 +172,14 @@ export async function loadCatalogContext(
       const visibleRates = pending ? rates.filter(r => !r.date_from && !r.date_to) : rates
       const approvalNote = pending ? ' TEMPORADA ALTA: precio pendiente de confirmaci\u00f3n del hotel; no cotizar las tarifas de adulto de esas temporadas.' : ''
       return `- ${p.name}: ${formatRateSummary(visibleRates, currency)}${capNote}${desc}${approvalNote}`
+    }
+    if (p.variant_options?.length) {
+      // Clothing/shoes: the order must name the exact size/color.
+      const options = p.variant_options.filter((o) => o.available).map((o) => o.title)
+      const sizes = options.length
+        ? ` · tallas/colores disponibles: ${options.join(', ')}. Pregunta talla y color antes de confirmar; en el pedido escribe «${p.name} (${options[0]})» con la opción elegida`
+        : ''
+      return `- ${p.name} (${formatCurrency(p.price, currency)})${sizes}${desc}`
     }
     return `- ${p.name} (${formatCurrency(p.price, currency)})${desc}`
   })

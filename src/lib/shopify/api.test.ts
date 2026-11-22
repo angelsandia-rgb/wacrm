@@ -2,7 +2,7 @@ import { createHmac } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOrderInput, CARD_TAG, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, describeOrderStatuses, municipioMatchesDepartamento,
-  completePaidDraftOrder, dropiFixHint, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, shopifyGraphql, verifyShopifyHmac,
+  completePaidDraftOrder, dropiFixHint, dropiSyncReason, fetchClientCredentialsToken, hasDropiSyncError, isCashOnDelivery, orderFullyDelivered, loadOrderStatuses, outOfStockTitles, pickOrderPipeline, pickOrderStage, pickPaidStage, pickForwardStage, trackingSentence, getRecurrenteCheckout, loadShopifyConfig, verifySvixSignature, mapShopifyProduct, normalizeGtPhone, resolveCatalogVariant, catalogVariantsById, shopifyGraphql, verifyShopifyHmac,
 } from './api'
 import { parseShopifyOrderPayload } from '@/lib/ai/generate'
 import { ORDER_STATUS_QUESTION_RE } from '@/lib/ai/auto-reply'
@@ -29,13 +29,57 @@ describe('mapShopifyProduct', () => {
   it('maps price, image, plain description', () => {
     expect(mapShopifyProduct(product(variant()))).toEqual({
       shopify_variant_id: 'gid://shopify/ProductVariant/1', name: 'Lámpara Ceiba', price: 199,
-      description: 'Luz cálida para tu sala', image_url: 'https://cdn/x.jpg', is_active: true,
+      description: 'Luz cálida para tu sala', image_url: 'https://cdn/x.jpg', is_active: true, variant_options: null,
     })
+  })
+  it('lists sizes/colors of a multi-variant product; active while any is in stock', () => {
+    const p = product(variant({ inventoryQuantity: 0 }))
+    const nodes = [
+      { ...variant({ inventoryQuantity: 0 }), title: 'S / NEGRO' },
+      { ...variant(), id: 'gid://shopify/ProductVariant/2', title: 'M / NEGRO', price: '209.00' },
+    ]
+    const row = mapShopifyProduct({ ...p, variants: { nodes } })
+    expect(row?.is_active).toBe(true)
+    expect(row?.variant_options).toEqual([
+      { id: 'gid://shopify/ProductVariant/1', title: 'S / NEGRO', price: 199, available: false },
+      { id: 'gid://shopify/ProductVariant/2', title: 'M / NEGRO', price: 209, available: true },
+    ])
   })
   it('deactivates tracked zero-stock variants unless overselling is allowed', () => {
     expect(mapShopifyProduct(product(variant({ inventoryQuantity: 0 })))?.is_active).toBe(false)
     expect(mapShopifyProduct(product(variant({ inventoryQuantity: 0, inventoryPolicy: 'CONTINUE' })))?.is_active).toBe(true)
     expect(mapShopifyProduct(product(variant({ inventoryQuantity: 0, tracked: false })))?.is_active).toBe(true)
+  })
+})
+
+describe('resolveCatalogVariant', () => {
+  const catalog = [
+    { name: 'Licuadora', price: 249, shopify_variant_id: 'v-lic', variant_options: null },
+    { name: 'Cachetero Levanta Cola', price: 309, shopify_variant_id: 'v-s-negro', variant_options: [
+      { id: 'v-s-negro', title: 'S NEGRO', price: 309, available: true },
+      { id: 'v-m-negro', title: 'M NEGRO', price: 309, available: true },
+      { id: 'v-m-beige', title: 'M BEIGE', price: 309, available: false },
+    ] },
+  ]
+  it('needs the exact name for single-variant products', () => {
+    expect(resolveCatalogVariant(catalog, 'licuadora')).toMatchObject({ ok: true, variantId: 'v-lic' })
+    expect(resolveCatalogVariant(catalog, 'Licuadora grande')).toMatchObject({ ok: false, reason: 'unknown' })
+  })
+  it('picks the size/color written after the name, in any order or accents', () => {
+    expect(resolveCatalogVariant(catalog, 'Cachetero Levanta Cola (M / Negro)'))
+      .toEqual({ ok: true, variantId: 'v-m-negro', title: 'Cachetero Levanta Cola (M NEGRO)', price: 309 })
+    expect(resolveCatalogVariant(catalog, 'Cachetero levanta cola negro talla M')).toMatchObject({ variantId: 'v-m-negro' })
+  })
+  it('refuses a missing, ambiguous or sold-out option', () => {
+    expect(resolveCatalogVariant(catalog, 'Cachetero Levanta Cola')).toMatchObject({ ok: false, reason: 'missing_option' })
+    expect(resolveCatalogVariant(catalog, 'Cachetero Levanta Cola (M)')).toMatchObject({ ok: false, reason: 'missing_option' })
+    expect(resolveCatalogVariant(catalog, 'Cachetero Levanta Cola (M BEIGE)')).toMatchObject({ ok: false, reason: 'unavailable_option' })
+  })
+  it('maps web-form variant ids, available options only', () => {
+    const byId = catalogVariantsById(catalog)
+    expect(byId.get('v-m-negro')).toEqual({ name: 'Cachetero Levanta Cola (M NEGRO)', price: 309 })
+    expect(byId.has('v-m-beige')).toBe(false)
+    expect(byId.get('v-lic')).toEqual({ name: 'Licuadora', price: 249 })
   })
 })
 

@@ -3,10 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GenerateResult } from '@/lib/ai/types'
 import { formatCurrency } from '@/lib/currency'
 import {
-  attachOrderToDeal, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig,
+  attachOrderToDeal, catalogVariantsById, coverageVerdict, createRecurrenteCheckout, createShopifyOrder, departamentoCode, loadShopifyConfig,
   normalizeGtPhone, outOfStockTitles,
-  PAYMENT_GATEWAYS,
+  PAYMENT_GATEWAYS, resolveCatalogVariant, type VariantOption,
 } from './api'
+
+type CatalogRow = { name: string; price: number | string; shopify_variant_id: string; variant_options: VariantOption[] | null }
 import { recordCardCheckout } from './card-payments'
 import { checkMunicipio } from './gt-geo'
 import type { AcceptedTerms } from './order-requests'
@@ -83,19 +85,20 @@ async function createShopifyOrderLocked(args: {
 
   const { data: products } = await db
     .from('products')
-    .select('name, price, shopify_variant_id')
+    .select('name, price, shopify_variant_id, variant_options')
     .eq('account_id', accountId)
     .eq('is_active', true)
     .not('shopify_variant_id', 'is', null)
+  const catalog = (products ?? []) as CatalogRow[]
   const { data: account } = await db.from('accounts').select('default_currency').eq('id', accountId).maybeSingle()
   const currency = (account?.default_currency as string | undefined) ?? 'GTQ'
   const lines = []
   if (args.accepted) {
-    const byVariant = new Map((products ?? []).map((p) => [p.shopify_variant_id as string, p]))
+    const byVariant = catalogVariantsById(catalog)
     const changes = args.accepted.lines.flatMap((l) => {
       const p = byVariant.get(l.variantId)
       if (!p) return [`un producto ya no está disponible (${l.variantId.split('/').pop()})`]
-      lines.push({ variantId: l.variantId, quantity: l.quantity, price: l.price, title: p.name as string })
+      lines.push({ variantId: l.variantId, quantity: l.quantity, price: l.price, title: p.name })
       return Math.abs(Number(p.price) - l.price) > 0.009 ? [`${p.name}: aceptó ${formatCurrency(l.price, args.accepted!.currency)}, hoy cuesta ${formatCurrency(Number(p.price), currency)}`] : []
     })
     if (args.accepted.currency !== currency) changes.push(`moneda ${args.accepted.currency} → ${currency}`)
@@ -111,11 +114,16 @@ async function createShopifyOrderLocked(args: {
       return handoff(`🛒 Solicitud de pedido no creada (${label}): cambió lo que el cliente aceptó — ${changes.join('; ')}. No se creó pedido ni link de pago: envíe el resumen actualizado y espere su nueva confirmación.`)
     }
   } else {
-    const byName = new Map((products ?? []).map((p) => [String(p.name).trim().toLowerCase(), p]))
     for (const item of proposal.items) {
-      const p = byName.get(item.name.trim().toLowerCase())
-      if (!p) return fail(`"${item.name}" no coincide con un producto activo de Shopify`)
-      lines.push({ variantId: p.shopify_variant_id as string, quantity: item.qty, price: Number(p.price), title: p.name as string })
+      const r = resolveCatalogVariant(catalog, item.name)
+      if (!r.ok) {
+        return fail(r.reason === 'missing_option'
+          ? `"${item.name}": falta la talla/color exacta de ${r.product}; confírmela con el cliente`
+          : r.reason === 'unavailable_option'
+            ? `${r.product} está agotada; ofrezca otra talla/color`
+            : `"${item.name}" no coincide con un producto activo de Shopify`)
+      }
+      lines.push({ variantId: r.variantId, quantity: item.qty, price: r.price, title: r.title })
     }
   }
 
@@ -257,11 +265,14 @@ export function chatPurchaseKey(
 
 async function purchaseKeyFor(args: Parameters<typeof createShopifyOrderLocked>[0]): Promise<string> {
   if (args.requestId) return `request:${args.requestId}`
-  const { data: products, error } = await args.db.from('products').select('name, shopify_variant_id')
+  const { data: products, error } = await args.db.from('products').select('name, price, shopify_variant_id, variant_options')
     .eq('account_id', args.accountId).eq('is_active', true).not('shopify_variant_id', 'is', null)
   if (error) throw new Error(`Cannot read products: ${error.message}`)
-  const byName = new Map((products ?? []).map((p) => [String(p.name).trim().toLowerCase(), p.shopify_variant_id as string]))
-  return chatPurchaseKey(args.proposal, (name) => byName.get(name.trim().toLowerCase()))
+  const catalog = (products ?? []) as CatalogRow[]
+  return chatPurchaseKey(args.proposal, (name) => {
+    const r = resolveCatalogVariant(catalog, name)
+    return r.ok ? r.variantId : undefined
+  })
 }
 
 /** Serialize AI/manual creation across processes before contacting Shopify,
