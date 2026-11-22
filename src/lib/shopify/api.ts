@@ -146,12 +146,21 @@ interface ShopifyProductNode {
   variants: {
     nodes: {
       id: string
+      title?: string
       price: string
       inventoryQuantity: number | null
       inventoryPolicy: 'DENY' | 'CONTINUE'
       inventoryItem: { tracked: boolean } | null
     }[]
   }
+}
+
+/** One size/color of a multi-variant product (`products.variant_options`). */
+export interface VariantOption {
+  id: string
+  title: string
+  price: number
+  available: boolean
 }
 
 export interface SyncedProduct {
@@ -161,35 +170,93 @@ export interface SyncedProduct {
   description: string | null
   image_url: string | null
   is_active: boolean
+  variant_options: VariantOption[] | null
 }
 
-/** Pure mapping: one catalog row per Shopify product (its first variant).
- *  Out-of-stock tracked variants that don't allow overselling are inactive. */
+type VariantNode = ShopifyProductNode['variants']['nodes'][number]
+const variantInStock = (v: VariantNode) =>
+  !(v.inventoryItem?.tracked ?? false) || v.inventoryPolicy === 'CONTINUE' || (v.inventoryQuantity ?? 0) > 0
+
+/** Pure mapping: one catalog row per Shopify product, keyed by its first
+ *  variant. A product with several variants (sizes/colors) lists them all in
+ *  `variant_options` and is active while any of them is in stock. */
 export function mapShopifyProduct(p: ShopifyProductNode): SyncedProduct | null {
-  // ponytail: first variant only — the store sells single-variant products; one row per variant when that changes.
   const v = p.variants.nodes[0]
   if (!v) return null
-  const tracked = v.inventoryItem?.tracked ?? false
-  const inStock = !tracked || v.inventoryPolicy === 'CONTINUE' || (v.inventoryQuantity ?? 0) > 0
   const desc = p.description.replace(/\s+/g, ' ').trim()
+  const options = p.variants.nodes.length > 1
+    ? p.variants.nodes.map((n) => ({ id: n.id, title: (n.title ?? '').trim(), price: Number(n.price) || 0, available: variantInStock(n) }))
+    : null
   return {
     shopify_variant_id: v.id,
     name: p.title.trim(),
     price: Number(v.price) || 0,
     description: desc ? desc.slice(0, 300) : null,
     image_url: p.featuredMedia?.preview?.image?.url ?? null,
-    is_active: inStock,
+    is_active: options ? options.some((o) => o.available) : variantInStock(v),
+    variant_options: options,
   }
 }
 
+const optionTokens = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().match(/[a-z0-9]+/g) ?? []
+
+/** Pure: which catalog variant an order line means. `name` is the product
+ *  name, optionally followed by the size/color ("Cachetero (M / Negro)",
+ *  "Cachetero talla M negro"). Single-variant products need the exact name;
+ *  a product with options needs exactly one available option whose words all
+ *  appear after the name — otherwise `missing`/`unknown` so a person asks. */
+export function resolveCatalogVariant(
+  products: { name: string; price: number | string; shopify_variant_id: string; variant_options?: VariantOption[] | null }[],
+  name: string,
+): { ok: true; variantId: string; title: string; price: number } | { ok: false; reason: 'unknown' | 'missing_option' | 'unavailable_option'; product?: string } {
+  const wanted = name.trim().toLowerCase()
+  const product = products
+    .filter((p) => wanted === p.name.trim().toLowerCase() || wanted.startsWith(`${p.name.trim().toLowerCase()} `) || wanted.startsWith(`${p.name.trim().toLowerCase()}(`))
+    .sort((a, b) => b.name.length - a.name.length)[0]
+  if (!product) return { ok: false, reason: 'unknown' }
+  const options = product.variant_options ?? []
+  if (!options.length) {
+    return wanted === product.name.trim().toLowerCase()
+      ? { ok: true, variantId: product.shopify_variant_id, title: product.name, price: Number(product.price) }
+      : { ok: false, reason: 'unknown' }
+  }
+  const rest = new Set(optionTokens(wanted.slice(product.name.trim().length)))
+  const matches = options.filter((o) => {
+    const t = optionTokens(o.title)
+    return t.length > 0 && t.every((tok) => rest.has(tok))
+  })
+  // "M" also matches inside "M / NEGRO" only when every word is present, so
+  // prefer the most specific option ("XL NEGRO" over a hypothetical "NEGRO").
+  const best = matches.sort((a, b) => optionTokens(b.title).length - optionTokens(a.title).length)
+  const top = best.filter((o) => optionTokens(o.title).length === optionTokens(best[0]?.title ?? '').length)
+  if (top.length !== 1) return { ok: false, reason: 'missing_option', product: product.name }
+  if (!top[0].available) return { ok: false, reason: 'unavailable_option', product: `${product.name} (${top[0].title})` }
+  return { ok: true, variantId: top[0].id, title: `${product.name} (${top[0].title})`, price: top[0].price }
+}
+
+/** Pure: every orderable variant id → its catalog line (web-form carts send
+ *  the exact variant the customer picked). */
+export function catalogVariantsById(
+  products: { name: string; price: number | string; shopify_variant_id: string; variant_options?: VariantOption[] | null }[],
+): Map<string, { name: string; price: number }> {
+  const out = new Map<string, { name: string; price: number }>()
+  for (const p of products) {
+    const options = p.variant_options ?? []
+    if (!options.length) out.set(p.shopify_variant_id, { name: p.name, price: Number(p.price) })
+    for (const o of options) if (o.available) out.set(o.id, { name: `${p.name} (${o.title})`, price: o.price })
+  }
+  return out
+}
+
+// 20 products × 40 variants keeps the query under Shopify's 1000-point cost limit.
 const PRODUCTS_QUERY = `query($cursor: String) {
-  products(first: 100, after: $cursor, query: "status:active") {
+  products(first: 20, after: $cursor, query: "status:active") {
     pageInfo { hasNextPage endCursor }
     nodes {
       title
       description(truncateAt: 400)
       featuredMedia { preview { image { url } } }
-      variants(first: 1) { nodes { id price inventoryQuantity inventoryPolicy inventoryItem { tracked } } }
+      variants(first: 40) { nodes { id title price inventoryQuantity inventoryPolicy inventoryItem { tracked } } }
     }
   }
 }`

@@ -29,13 +29,19 @@ function db() {
   const chain = (table: string) => {
     let op = 'select'
     const c: Record<string, unknown> = {
-      select: () => c, eq: () => c, in: () => c, gte: () => c, order: () => c, limit: () => c,
+      select: () => c, eq: () => c, in: () => c, not: () => c, gte: () => c, order: () => c, limit: () => c,
       update: (row: Record<string, unknown>) => { op = 'update'; m.updates.push({ table, ...row }); return c },
       insert: (row: Record<string, unknown>) => { op = 'insert'; m.inserts.push({ table, ...row }); return c },
       single: async () => ({ data: { id: 'r1' }, error: null }),
       maybeSingle: async () => ({ data: table === 'accounts' ? { default_currency: 'GTQ' } : table === 'whatsapp_config' ? { public_phone_number: '+502 4288 3689' } : op === 'update' ? m.settled : null, error: null }),
       then: (ok: (v: unknown) => unknown) => ok({
-        data: table === 'products' ? [{ name: 'Lámpara', price: 199, shopify_variant_id: 'gid://shopify/ProductVariant/7' }] : null, error: null,
+        data: table === 'products' ? [
+          { name: 'Lámpara', price: 199, shopify_variant_id: 'gid://shopify/ProductVariant/7' },
+          { name: 'Cachetero', price: 309, shopify_variant_id: 'gid://shopify/ProductVariant/20', variant_options: [
+            { id: 'gid://shopify/ProductVariant/20', title: 'S NEGRO', price: 309, available: true },
+            { id: 'gid://shopify/ProductVariant/21', title: 'M NEGRO', price: 309, available: true },
+          ] },
+        ] : null, error: null,
       }),
     }
     return c
@@ -80,6 +86,14 @@ describe('parseOrderForm', () => {
 })
 
 describe('submitOrderForm', () => {
+  it('accepts the size/color variant the customer picked, named with its option', async () => {
+    const res = await submitOrderForm(db(), 'a1', parseOrderForm({ ...form, items: [{ variantId: '21', quantity: 1 }] }) as never)
+    expect(res).toMatchObject({ ok: true })
+    expect(m.rpcs[0]).toMatchObject({
+      p_terms: { lines: [{ variantId: 'gid://shopify/ProductVariant/21', quantity: 1, price: 309 }] },
+      p_proposal: { items: [{ name: 'Cachetero (M NEGRO)', qty: 1 }] },
+    })
+  })
   it('saves a validated request and asks on WhatsApp — no Shopify order is created', async () => {
     const res = await submitOrderForm(db(), 'a1', parseOrderForm(form) as never)
     expect(res).toEqual({ ok: true, ref: 'P1', whatsapp: '50242883689' })

@@ -6037,3 +6037,17 @@ ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 19
   catálogo por el bot sigue sin contar como oferta.
 - Validación: typecheck, eslint, 3210 pruebas, `package-lock.json` sin cambios.
   Sin migraciones.
+
+### 2026-11-22 — Claude Code (Casa Ceiba: ropa con tallas y colores)
+
+- **Problema:** el catálogo del CRM tomaba solo la primera variante de cada
+  producto de Shopify. Con ropa (cachetero, shorts, conjuntos) la IA no sabía
+  qué tallas había y el pedido salía siempre con la primera talla; el
+  formulario web rechazaba cualquier talla distinta a la primera.
+- **Cambio:** migración `186_product_variant_options.sql` (`products.variant_options`
+  jsonb). La sincronización guarda todas las tallas/colores con precio y
+  existencia; el contexto de catálogo las lista e indica a la IA preguntar
+  talla y color. El pedido por chat resuelve «Producto (M / NEGRO)» a la
+  variante exacta y, si falta la talla o está agotada, pasa a un asesor. El
+  formulario web acepta la variante elegida en la tienda.
+- Validación: typecheck (`src/`), eslint, 3216 pruebas, `package-lock.json` sin cambios.
