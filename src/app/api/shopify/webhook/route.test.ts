@@ -20,6 +20,8 @@ const m = vi.hoisted(() => ({
   staff: [] as { key: string; title: string; body: string; userIds: string[] }[],
   meta: {} as Record<string, unknown>,
   capi: vi.fn(async () => {}),
+  zernio: vi.fn(async () => true),
+  extra: {} as Record<string, unknown>,
 }))
 
 const STAGES = [
@@ -30,11 +32,11 @@ const STAGES = [
 function chain(table: string) {
   const rows: Record<string, unknown> = {
     shopify_config: { account_id: 'a1', user_id: 'u1', webhook_secret: 'k', client_secret: null, confirmation_template_name: 'pedido_recibido', confirmation_template_language: 'es', ...m.meta },
-    deals: m.deal, contacts: m.contact,
+    deals: m.deal, contacts: m.contact, ...m.extra,
   }
   let cols = ''
   const c: Record<string, unknown> = {
-    select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c,
+    select: (s: string) => { cols = s; return c }, eq: () => c, in: () => c, not: () => c, order: () => c, limit: () => c,
     maybeSingle: async () => ({ data: table === 'deals' && cols === 'id, stage_id, pipeline_id' ? m.seen : rows[table] ?? null }),
     update: (row: Record<string, unknown>) => { m.updates.push({ table, row }); return c },
     delete: () => c,
@@ -51,6 +53,8 @@ function chain(table: string) {
 }
 
 vi.mock('@/lib/webhooks/admin-client', () => ({ supabaseAdmin: () => ({ from: (t: string) => chain(t) }) }))
+vi.mock('@/lib/zernio/api', () => ({ sendZernioWhatsAppConversion: m.zernio }))
+vi.mock('@/lib/contacts/dedupe', () => ({ findExistingContact: async () => (m.contact ? { id: 'c1' } : null) }))
 vi.mock('@/lib/meta/capi', () => ({ sendMetaPurchase: m.capi }))
 vi.mock('@/lib/whatsapp/encryption', () => ({ decrypt: (v: string) => v }))
 vi.mock('@/lib/whatsapp/resolve-conversation', () => ({ resolveConversationByPhone: m.resolve }))
@@ -102,6 +106,9 @@ beforeEach(() => {
   m.staff = []
   m.meta = {}
   m.capi.mockClear()
+  m.zernio.mockClear().mockResolvedValue(true)
+  m.extra = {}
+  m.contact = { phone: '50254852732', name: 'Ángel Durán' }
 })
 
 describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)', () => {
@@ -112,6 +119,7 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
     expect(m.updates).toEqual([])
     expect(m.send).not.toHaveBeenCalled()
   })
+
   it('retains a failed shipping notification after moving the stage', async () => {
     m.send.mockRejectedValueOnce(new Error('WhatsApp unavailable'))
     await hook('fulfillments/create', { order_id: 77, name: '#1001.1' })
@@ -233,6 +241,22 @@ describe('Shopify webhook — web-store orders', () => {
   it('skips orders the chat created itself', async () => {
     await hook('orders/create', { admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '1', currency: 'GTQ', tags: 'chat-sandia' })
     expect(m.send).not.toHaveBeenCalled()
+    expect(m.capi).not.toHaveBeenCalled()
+  })
+
+  it('credits the exact ad through Zernio when the customer came from a click-to-WhatsApp ad', async () => {
+    m.meta = { meta_dataset_id: '1719305669536122', meta_capi_token: 'tok' }
+    m.contact = { phone: '50254852732', name: 'Ángel', referral: { source: 'ADS', ctwa_clid: 'clid1' } }
+    m.extra = {
+      conversations: { zernio_conversation_id: 'zc1', whatsapp_config_id: 'w1' },
+      whatsapp_config: { provider: 'zernio', zernio_api_key: 'zk', zernio_account_id: 'za1' },
+    }
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1015', total_price: '400.00', currency: 'GTQ', tags: 'chat-sandia', phone: '54852732',
+    })
+    expect(m.zernio).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'zk', accountId: 'za1', conversationId: 'zc1', eventId: 'chat-sandia-9', value: 400, currency: 'GTQ',
+    }))
     expect(m.capi).not.toHaveBeenCalled()
   })
 

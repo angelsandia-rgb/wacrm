@@ -40,6 +40,7 @@ import { SpendInputCard } from '@/components/kpis/spend-input-card'
 import { HotelKpis } from '@/components/kpis/hotel-kpis'
 import { ClinicKpis } from '@/components/kpis/clinic-kpis'
 import { TeamPerformance } from '@/components/kpis/team-performance'
+import { AdSales } from '@/components/kpis/ad-sales'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -398,6 +399,8 @@ export default function KpisPage() {
       </div>
 
       <TeamPerformance window={windowFor(range)} currency={defaultCurrency} />
+
+      <AdSales window={windowFor(range)} currency={defaultCurrency} />
 
       {/* Métricas operativas de la prueba */}
       <div className="space-y-3">

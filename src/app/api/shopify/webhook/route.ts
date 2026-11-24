@@ -13,6 +13,8 @@ import {
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
 import { sendMetaPurchase } from '@/lib/meta/capi'
+import { sendZernioWhatsAppConversion } from '@/lib/zernio/api'
+import { findExistingContact } from '@/lib/contacts/dedupe'
 import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 
 interface ShopifyAddress {
@@ -286,11 +288,14 @@ async function reportChatOrderToMeta(
   cfg: { meta_dataset_id?: unknown; meta_capi_token?: unknown },
   order: ShopifyOrderPayload,
 ) {
-  if (!cfg.meta_dataset_id || !cfg.meta_capi_token || order.cancelled_at) return
+  if (order.cancelled_at) return
   const a = order.shipping_address ?? order.billing_address
   const rawPhone = order.phone || a?.phone || order.customer?.phone
   if (!rawPhone) return
   try {
+    // From a click-to-WhatsApp ad: Zernio credits that exact ad (ctwa_clid).
+    if (await reportViaZernioCtwa(accountId, order, normalizeGtPhone(rawPhone))) return
+    if (!cfg.meta_dataset_id || !cfg.meta_capi_token) return
     await sendMetaPurchase(cfg.meta_dataset_id as string, decrypt(cfg.meta_capi_token as string), {
       id: order.admin_graphql_api_id, name: order.name, total: Number(order.total_price) || 0, currency: order.currency,
       phone: normalizeGtPhone(rawPhone), firstName: a?.first_name ?? order.customer?.first_name, lastName: a?.last_name,
@@ -305,6 +310,28 @@ async function reportChatOrderToMeta(
       detail: { order: order.name, error: message }, throttleMinutes: 360,
     })
   }
+}
+
+/** True when the order was reported through the customer's ad-click conversation. */
+async function reportViaZernioCtwa(accountId: string, order: ShopifyOrderPayload, phone: string): Promise<boolean> {
+  const db = supabaseAdmin()
+  const contact = await findExistingContact(db, accountId, phone)
+  if (!contact) return false
+  const { data: c } = await db.from('contacts').select('referral').eq('id', contact.id).eq('account_id', accountId).maybeSingle()
+  if (!(c?.referral as { ctwa_clid?: string } | null)?.ctwa_clid) return false
+  const { data: conv } = await db.from('conversations').select('zernio_conversation_id, whatsapp_config_id')
+    .eq('account_id', accountId).eq('contact_id', contact.id).not('zernio_conversation_id', 'is', null)
+    .order('last_message_at', { ascending: false, nullsFirst: false }).limit(1).maybeSingle()
+  if (!conv?.whatsapp_config_id) return false
+  const { data: wa } = await db.from('whatsapp_config').select('provider, zernio_api_key, zernio_account_id')
+    .eq('id', conv.whatsapp_config_id).eq('account_id', accountId).maybeSingle()
+  if (wa?.provider !== 'zernio' || !wa.zernio_api_key || !wa.zernio_account_id) return false
+  return sendZernioWhatsAppConversion({
+    apiKey: decrypt(wa.zernio_api_key as string), accountId: wa.zernio_account_id as string,
+    conversationId: conv.zernio_conversation_id as string,
+    eventId: `chat-sandia-${order.admin_graphql_api_id.split('/').pop()}`,
+    value: Number(order.total_price) || 0, currency: order.currency,
+  })
 }
 
 /** Pure: the WhatsApp message asking a web COD customer to confirm. */

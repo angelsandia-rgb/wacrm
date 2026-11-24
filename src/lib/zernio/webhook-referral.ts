@@ -41,3 +41,37 @@ export function extractZernioReferral(payload: unknown): DmReferral | null {
   }
   return null
 }
+
+/**
+ * Click-to-WhatsApp ad attribution from a Zernio `message.received`
+ * (https://docs.zernio.com/platforms/whatsapp/ctwa): the first inbound
+ * message after an ad click carries Meta's verbatim referral under
+ * `metadata.referral` (`ctwa_clid`, `source_id`, `headline`…) and Zernio's
+ * resolved ad under `metadata.ad` (ad / ad set / campaign names). Flattened
+ * into the `contacts.referral` shape so IG/FB and WhatsApp report together.
+ */
+export function extractWhatsAppAdReferral(metadata: unknown): DmReferral | null {
+  if (!metadata || typeof metadata !== 'object') return null
+  const md = metadata as Record<string, unknown>
+  const ref = (md.referral && typeof md.referral === 'object' ? md.referral : {}) as Record<string, unknown>
+  const ad = (md.ad && typeof md.ad === 'object' ? md.ad : {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+  const ctwaClid = str(ref.ctwa_clid) ?? str(md.ctwa_clid)
+  const adId = str(ad.adId) ?? str(ref.source_id) ?? str(md.ctwa_source_id)
+  if (!ctwaClid && !adId) return null
+  const out: DmReferral = {
+    source: 'ADS',
+    channel: 'whatsapp',
+    ad_id: adId,
+    ad_name: str(ad.name),
+    campaign_id: str(ad.campaignId),
+    campaign_name: str(ad.campaignName),
+    adset_id: str(ad.adSetId),
+    adset_name: str(ad.adSetName),
+    headline: str(ref.headline) ?? str(md.ctwa_headline),
+    source_url: str(ref.source_url) ?? str(md.ctwa_source_url),
+    ctwa_clid: ctwaClid,
+    captured_at: new Date().toISOString(),
+  }
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined)) as DmReferral
+}

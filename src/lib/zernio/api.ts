@@ -796,3 +796,42 @@ export async function downloadZernioWhatsAppMedia(
   const buffer = await response.arrayBuffer()
   return { buffer, contentType: response.headers.get('content-type') }
 }
+
+/**
+ * Click-to-WhatsApp conversion (https://docs.zernio.com/platforms/whatsapp/ctwa):
+ * Zernio resolves the conversation's captured `ctwa_clid` and sends the event
+ * to Meta with `action_source = business_messaging`, so Meta credits the exact
+ * ad. The account's CTWA dataset is created on first use (idempotent).
+ * Returns false when the conversation has no ad click (422) — the caller
+ * then falls back to the plain Conversions API.
+ */
+export async function sendZernioWhatsAppConversion(args: {
+  apiKey: string
+  accountId: string
+  conversationId: string
+  eventId: string
+  value: number
+  currency: string
+}): Promise<boolean> {
+  const headers = { Authorization: `Bearer ${args.apiKey}`, 'Content-Type': 'application/json' }
+  const send = () => zernioFetch(`${ZERNIO_API_BASE}/whatsapp/conversions`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      accountId: args.accountId, eventName: 'Purchase', eventId: args.eventId,
+      conversationId: args.conversationId, value: args.value, currency: args.currency,
+    }),
+  })
+  let res = await send()
+  let body = res.ok ? '' : await res.text().catch(() => '')
+  if (res.status === 422 && /dataset/i.test(body)) {
+    const ds = await zernioFetch(`${ZERNIO_API_BASE}/whatsapp/dataset`, {
+      method: 'POST', headers, body: JSON.stringify({ accountId: args.accountId }),
+    })
+    if (!ds.ok) throw new Error(`Zernio dataset ${ds.status}: ${(await ds.text().catch(() => '')).slice(0, 200)}`)
+    res = await send()
+    body = res.ok ? '' : await res.text().catch(() => '')
+  }
+  if (res.status === 422 && /ctwa_clid/i.test(body)) return false
+  if (!res.ok) throw new Error(`Zernio conversion ${res.status}: ${body.slice(0, 300)}`)
+  return true
+}
