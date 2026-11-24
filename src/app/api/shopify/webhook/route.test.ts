@@ -18,6 +18,8 @@ const m = vi.hoisted(() => ({
   /** Live order read back by the fulfillments/* delivery check. */
   liveOrder: null as Record<string, unknown> | null,
   staff: [] as { key: string; title: string; body: string; userIds: string[] }[],
+  meta: {} as Record<string, unknown>,
+  capi: vi.fn(async () => {}),
 }))
 
 const STAGES = [
@@ -27,7 +29,7 @@ const STAGES = [
 
 function chain(table: string) {
   const rows: Record<string, unknown> = {
-    shopify_config: { account_id: 'a1', user_id: 'u1', webhook_secret: 'k', client_secret: null, confirmation_template_name: 'pedido_recibido', confirmation_template_language: 'es' },
+    shopify_config: { account_id: 'a1', user_id: 'u1', webhook_secret: 'k', client_secret: null, confirmation_template_name: 'pedido_recibido', confirmation_template_language: 'es', ...m.meta },
     deals: m.deal, contacts: m.contact,
   }
   let cols = ''
@@ -49,6 +51,7 @@ function chain(table: string) {
 }
 
 vi.mock('@/lib/webhooks/admin-client', () => ({ supabaseAdmin: () => ({ from: (t: string) => chain(t) }) }))
+vi.mock('@/lib/meta/capi', () => ({ sendMetaPurchase: m.capi }))
 vi.mock('@/lib/whatsapp/encryption', () => ({ decrypt: (v: string) => v }))
 vi.mock('@/lib/whatsapp/resolve-conversation', () => ({ resolveConversationByPhone: m.resolve }))
 vi.mock('@/lib/whatsapp/send-message', () => ({ sendMessageToConversation: m.send }))
@@ -97,6 +100,8 @@ beforeEach(() => {
   m.queueError = false
   m.liveOrder = null
   m.staff = []
+  m.meta = {}
+  m.capi.mockClear()
 })
 
 describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)', () => {
@@ -227,6 +232,19 @@ describe('Shopify webhook — web-store orders', () => {
 
   it('skips orders the chat created itself', async () => {
     await hook('orders/create', { admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '1', currency: 'GTQ', tags: 'chat-sandia' })
+    expect(m.send).not.toHaveBeenCalled()
+    expect(m.capi).not.toHaveBeenCalled()
+  })
+
+  it('reports a chat order to Meta as a Purchase when the account set up the dataset', async () => {
+    m.meta = { meta_dataset_id: '1719305669536122', meta_capi_token: 'tok' }
+    await hook('orders/create', {
+      admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1015', total_price: '400.00', currency: 'GTQ', tags: 'chat-sandia',
+      phone: '54852732', shipping_address: { first_name: 'Angel', last_name: 'Duran', city: 'Villa Canales' }, line_items: [{ quantity: 1 }],
+    })
+    expect(m.capi).toHaveBeenCalledWith('1719305669536122', 'tok', expect.objectContaining({
+      name: '#1015', total: 400, phone: '+50254852732', firstName: 'Angel', city: 'Villa Canales', itemCount: 1,
+    }))
     expect(m.send).not.toHaveBeenCalled()
   })
 })

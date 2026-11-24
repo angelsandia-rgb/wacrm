@@ -24,6 +24,8 @@ interface ConfigPayload {
   has_webhook_secret?: boolean;
   has_recurrente_key?: boolean;
   has_recurrente_webhook_secret?: boolean;
+  meta_dataset_id?: string | null;
+  has_meta_capi_token?: boolean;
   orders_live?: boolean;
   confirmation_template_name?: string | null;
   confirmation_template_language?: string | null;
@@ -43,6 +45,8 @@ export function ShopifyConfig() {
   const [secret, setSecret] = useState('');
   const [recurrenteKey, setRecurrenteKey] = useState('');
   const [recurrenteWebhookSecret, setRecurrenteWebhookSecret] = useState('');
+  const [metaDatasetId, setMetaDatasetId] = useState('');
+  const [metaCapiToken, setMetaCapiToken] = useState('');
   const [ordersLive, setOrdersLive] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateLang, setTemplateLang] = useState('es');
@@ -56,6 +60,7 @@ export function ShopifyConfig() {
     setCfg(data);
     setShop(data.shop_domain ?? '');
     setClientId(data.client_id ?? '');
+    setMetaDatasetId(data.meta_dataset_id ?? '');
     setOrdersLive(Boolean(data.orders_live));
     setTemplateName(data.confirmation_template_name ?? '');
     setTemplateLang(data.confirmation_template_language ?? 'es');
@@ -84,6 +89,8 @@ export function ShopifyConfig() {
           webhook_secret: secret || undefined,
           recurrente_secret_key: recurrenteKey || undefined,
           recurrente_webhook_secret: recurrenteWebhookSecret || undefined,
+          meta_dataset_id: metaDatasetId,
+          meta_capi_token: metaCapiToken || undefined,
           orders_live: ordersLive,
           confirmation_template_name: templateName,
           confirmation_template_language: templateLang,
@@ -102,6 +109,7 @@ export function ShopifyConfig() {
       setSecret('');
       setRecurrenteKey('');
       setRecurrenteWebhookSecret('');
+      setMetaCapiToken('');
       await load();
     } finally {
       setSaving(false);
@@ -243,6 +251,28 @@ export function ShopifyConfig() {
               Con &quot;Crear pedidos reales&quot; encendido, al pagarse el link el borrador se completa como pagado, llega a Dropi y el cliente recibe la confirmación.
             </p>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="sh-meta-dataset">ID del conjunto de datos de Meta (píxel)</Label>
+              <Input
+                id="sh-meta-dataset" inputMode="numeric" autoComplete="off" value={metaDatasetId}
+                onChange={(e) => setMetaDatasetId(e.target.value)} placeholder="1719305669536122"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sh-meta-token">Token de la API de conversiones</Label>
+              <Input
+                id="sh-meta-token" type="password" autoComplete="new-password" value={metaCapiToken}
+                onChange={(e) => setMetaCapiToken(e.target.value)}
+                placeholder={cfg.has_meta_capi_token ? 'Guardado — escribe uno nuevo solo para reemplazarlo' : 'EAA…'}
+              />
+            </div>
+          </div>
+          <p className="text-muted-foreground -mt-2 text-xs">
+            Para que Meta cuente como compra los pedidos tomados por WhatsApp (los de la tienda web ya los envía la app de Facebook &amp; Instagram):
+            Administrador de eventos → tu conjunto de datos → Configuración → API de conversiones → Generar token de acceso. Se guarda cifrado.
+            Deja el ID vacío para dejar de enviarlos.
+          </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="sh-tpl">Plantilla de confirmación</Label>
