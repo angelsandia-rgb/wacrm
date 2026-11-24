@@ -107,7 +107,7 @@ import { teammateRepliedRecently,
   trailingCustomerTurns,
   trimTrailingAssistant,
 } from './human-reply'
-import { applySkillGates } from './skills'
+import { applySkillGates, isSkillEnabled } from './skills'
 import { openServiceCase } from '@/lib/shopify/service-cases'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -1588,6 +1588,26 @@ For airport transport, record the guest's request in nota on the relevant existi
       )
       // Guest intent takes precedence over an incorrect model media marker.
       if (asked || /\b(habitacion|habitaciones|suite|suites|cuarto|cuartos|room|rooms)\b/i.test(latestInbound.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) resolvedSendPhotoProductName = asked
+    }
+    // Other verticals: a plain "s\u00ed" to the bot's own photo offer must still
+    // send the photo. Real case (Casa Ceiba, 2026-11-23): "Si quiere, le
+    // mando la foto\u2026" \u2192 "Siisi" \u2192 model replied "Claro \ud83d\ude0a" with no marker.
+    if (
+      !quickReplyId && !isHotel && !resolvedSendPhotoProductName &&
+      isSkillEnabled(config.skills, 'send_photo') &&
+      acceptsPhotoOffer(latestInbound, previousBotReply)
+    ) {
+      const { data: activeProducts } = await db
+        .from('products')
+        .select('name')
+        .eq('account_id', accountId)
+        .eq('is_active', true)
+      resolvedSendPhotoProductName = productForPhotoRequest(
+        latestInbound,
+        previousBotReply,
+        earlierUserMessages(messages, 3),
+        ((activeProducts ?? []) as { name: string }[]).map((p) => p.name),
+      )
     }
     // Hotel item photos only when the guest asked to see something (owner,
     // 2026-09-24: "quiero 2 Suite Premium del 24 al 26" got four photos

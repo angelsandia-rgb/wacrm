@@ -204,9 +204,11 @@ export function guestAskedForPhotos(message: string | null | undefined): boolean
 
 /** A short yes: "si", "sí porfa", "claro", "dale", "ok", "me encantaría"… */
 const SHORT_YES_RE =
-  /^(si|sii+|claro|ok|okay|oki|dale|va|sale|bueno|porfa|por favor|me encantaria|yes|sure|please)\b/
-/** A bot question offering photos: "¿Le gustaría que le comparta una foto…?" */
-const PHOTO_OFFER_RE = /¿[^?]*\b(fotos?|fotograf[ií]as?|im[aá]gen(es)?)\b[^?]*\?/i
+  /^((si+)+|claro|ok|okay|oki|dale|va|sale|bueno|porfa|por favor|me encantaria|yes|sure|please)\b/
+/** A bot offer of photos: "¿Le gustaría que le comparta una foto…?" or
+ *  "Si quiere, le mando la foto…" (no question marks). */
+const PHOTO_OFFER_RE =
+  /¿[^?]*\b(fotos?|fotograf[ií]as?|im[aá]gen(es)?)\b[^?]*\?|\bsi\s+(gusta|quiere|desea|prefiere|le parece)\b[^.!?]*\b(fotos?|fotograf[ií]as?|im[aá]gen(es)?)\b/i
 
 /**
  * True when the guest's message is a plain yes to a photo offer the bot
