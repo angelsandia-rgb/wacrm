@@ -12,10 +12,11 @@ import {
   verifyShopifyHmac,
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
+import { sendMetaPurchase } from '@/lib/meta/capi'
 import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
 
 interface ShopifyAddress {
-  first_name?: string | null; name?: string | null; phone?: string | null
+  first_name?: string | null; last_name?: string | null; name?: string | null; phone?: string | null
   address1?: string | null; address2?: string | null; city?: string | null
 }
 interface ShopifyOrderPayload {
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
 
   const { data: cfg } = await db
     .from('shopify_config')
-    .select('account_id, user_id, webhook_secret, client_secret, confirmation_template_name, confirmation_template_language')
+    .select('account_id, user_id, webhook_secret, client_secret, confirmation_template_name, confirmation_template_language, meta_dataset_id, meta_capi_token')
     .eq('shop_domain', shop)
     .maybeSingle()
   // Admin → Notifications webhooks are signed with the store's key (webhook_secret);
@@ -208,11 +209,14 @@ async function handleCancelled(db: SupabaseClient, accountId: string, orderGid: 
 
 async function handleOrderCreated(
   db: SupabaseClient, accountId: string,
-  cfg: { user_id: unknown; confirmation_template_name: unknown; confirmation_template_language: unknown },
+  cfg: { user_id: unknown; confirmation_template_name: unknown; confirmation_template_language: unknown; meta_dataset_id?: unknown; meta_capi_token?: unknown },
   order: ShopifyOrderPayload,
 ) {
   const tags = (order.tags ?? '').split(',').map((t) => t.trim())
-  if (tags.includes(ORDER_TAG)) return NextResponse.json({ ok: true, skipped: 'chat-sandia order' })
+  if (tags.includes(ORDER_TAG)) {
+    await reportChatOrderToMeta(accountId, cfg, order)
+    return NextResponse.json({ ok: true, skipped: 'chat-sandia order' })
+  }
 
   // Reuse the deal on retries; notification delivery has its own durable key.
   const { data: seen, error: seenError } = await db
@@ -271,6 +275,36 @@ async function handleOrderCreated(
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
   }
   return NextResponse.json({ ok: true })
+}
+
+/** WhatsApp orders never pass the storefront checkout, so the Shopify ↔ Meta
+ *  pixel can't see them: report the Purchase via the Conversions API. Best
+ *  effort — a Meta failure must not make Shopify retry the whole webhook
+ *  (a retry would re-send with the same event_id, which Meta dedupes anyway). */
+async function reportChatOrderToMeta(
+  accountId: string,
+  cfg: { meta_dataset_id?: unknown; meta_capi_token?: unknown },
+  order: ShopifyOrderPayload,
+) {
+  if (!cfg.meta_dataset_id || !cfg.meta_capi_token || order.cancelled_at) return
+  const a = order.shipping_address ?? order.billing_address
+  const rawPhone = order.phone || a?.phone || order.customer?.phone
+  if (!rawPhone) return
+  try {
+    await sendMetaPurchase(cfg.meta_dataset_id as string, decrypt(cfg.meta_capi_token as string), {
+      id: order.admin_graphql_api_id, name: order.name, total: Number(order.total_price) || 0, currency: order.currency,
+      phone: normalizeGtPhone(rawPhone), firstName: a?.first_name ?? order.customer?.first_name, lastName: a?.last_name,
+      city: a?.city, itemCount: (order.line_items ?? []).reduce((s, i) => s + (i.quantity ?? 1), 0) || 1,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[shopify webhook] Meta purchase for ${order.name} (account ${accountId}) failed:`, message)
+    await dispatchSystemAlert({
+      severity: 'warning', source: 'meta_capi', accountId,
+      title: 'Meta no recibió una compra de WhatsApp', dedupKey: `meta_capi:${accountId}`,
+      detail: { order: order.name, error: message }, throttleMinutes: 360,
+    })
+  }
 }
 
 /** Pure: the WhatsApp message asking a web COD customer to confirm. */

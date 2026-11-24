@@ -9,7 +9,7 @@ export async function GET() {
     const { supabase, accountId } = await getCurrentAccount()
     const { data } = await supabase
       .from('shopify_config')
-      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key, recurrente_webhook_secret, client_id')
+      .select('shop_domain, webhook_secret, orders_live, confirmation_template_name, confirmation_template_language, last_sync_at, recurrente_secret_key, recurrente_webhook_secret, client_id, meta_dataset_id, meta_capi_token')
       .eq('account_id', accountId)
       .maybeSingle()
     if (!data) return NextResponse.json({ connected: false })
@@ -21,6 +21,8 @@ export async function GET() {
       has_webhook_secret: Boolean(data.webhook_secret),
       has_recurrente_key: Boolean(data.recurrente_secret_key),
       has_recurrente_webhook_secret: Boolean(data.recurrente_webhook_secret),
+      meta_dataset_id: data.meta_dataset_id,
+      has_meta_capi_token: Boolean(data.meta_capi_token),
       orders_live: data.orders_live,
       confirmation_template_name: data.confirmation_template_name,
       confirmation_template_language: data.confirmation_template_language,
@@ -58,6 +60,11 @@ export async function PUT(request: Request) {
     if (recurrenteWebhookSecret && !recurrenteWebhookSecret.startsWith('whsec_')) {
       return NextResponse.json({ error: 'La clave del webhook de Recurrente empieza con whsec_' }, { status: 400 })
     }
+    const metaDatasetId = typeof body.meta_dataset_id === 'string' ? body.meta_dataset_id.trim() : ''
+    if (metaDatasetId && !/^\d{6,25}$/.test(metaDatasetId)) {
+      return NextResponse.json({ error: 'El ID del conjunto de datos de Meta son solo números' }, { status: 400 })
+    }
+    const metaCapiToken = typeof body.meta_capi_token === 'string' ? body.meta_capi_token.trim() : ''
     const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : ''
     let clientSecret = typeof body.client_secret === 'string' ? body.client_secret.trim() : ''
 
@@ -115,6 +122,9 @@ export async function PUT(request: Request) {
     if (secret) row.webhook_secret = encrypt(secret)
     if (recurrenteKey) row.recurrente_secret_key = encrypt(recurrenteKey)
     if (recurrenteWebhookSecret) row.recurrente_webhook_secret = encrypt(recurrenteWebhookSecret)
+    // Empty dataset id = stop reporting to Meta; the token is kept unless replaced.
+    if ('meta_dataset_id' in body) row.meta_dataset_id = metaDatasetId || null
+    if (metaCapiToken) row.meta_capi_token = encrypt(metaCapiToken)
 
     const { error } = existing
       ? await supabase.from('shopify_config').update(row).eq('account_id', accountId)
