@@ -389,7 +389,7 @@ function dateOnly(d: Date): string {
  *  includes today) — Postgres range queries need an exclusive upper
  *  bound, so every `.lt(...)` call uses this: midnight the day AFTER
  *  `end`. */
-function endExclusive(end: Date): string {
+export function endExclusive(end: Date): string {
   const out = new Date(end)
   out.setHours(0, 0, 0, 0)
   out.setDate(out.getDate() + 1)

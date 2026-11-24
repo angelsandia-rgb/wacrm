@@ -14,6 +14,7 @@ import { handleStatusUpdate } from '@/app/api/whatsapp/webhook/route'
 import { handleTemplateWebhookChange } from '@/lib/whatsapp/template-webhook'
 import { handleOutboundEchoMessageForZernioConversation } from '@/lib/messaging/dm-inbound'
 import { inboundCreatedAt } from '@/lib/messaging/inbound-timestamp'
+import { extractWhatsAppAdReferral } from '@/lib/zernio/webhook-referral'
 
 // Same reasoning as the other Zernio webhook routes: after() can fan
 // out to several DB round-trips per inbound message.
@@ -86,6 +87,8 @@ interface ZernioWebhookMessage {
   source?: string
   /** Platform-side time of the message, when Zernio includes it. */
   createdAt?: string
+  /** Interactive taps and, on the first message after an ad click, `referral` / `ad`. */
+  metadata?: Record<string, unknown> | null
   timestamp?: string | number
 }
 
@@ -548,6 +551,17 @@ async function processInboundMessage(message: ZernioWebhookMessage, config: any,
       contact_id: contactRecord.id,
       channel: 'whatsapp',
     })
+  }
+
+  // Click-to-WhatsApp ad that brought this customer (first touch only, like
+  // IG/FB): feeds "Ventas por anuncio" in /kpis and the ad-linked Purchase.
+  // ponytail: first-touch only; a returning customer's new ad click keeps the old ad.
+  const adReferral = extractWhatsAppAdReferral(message.metadata)
+  if (adReferral) {
+    const { error } = await supabaseAdmin()
+      .from('contacts').update({ referral: adReferral })
+      .eq('id', contactRecord.id).eq('account_id', accountId).is('referral', null)
+    if (error) console.error('[whatsapp zernio webhook] saving ad referral failed:', error.message)
   }
 
   const attachment = message.attachments?.[0]
