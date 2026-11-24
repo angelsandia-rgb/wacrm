@@ -181,7 +181,7 @@ function looksLikeFakeAppointmentConfirmation(text: string): boolean {
  *  model to react to with `SEND_CATALOG_SENTINEL`. Used only to detect
  *  when the model failed to use a marker it was taught, never to decide
  *  whether to teach it in the first place. */
-const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]lo[gf]o\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
+const CUSTOMER_ASKS_FOR_CATALOG_RE = /(?<!\b(?:nuestro|mi)\s)\bcat[aá]lo[a-z]o\b|\bcatalog\b|\blista\s+de\s+precios\b|\bprice\s*list\b/i
 export const CATALOG_ONLY_REPLY_TEXT = '¡Claro! 😊 Aquí le comparto nuestro catálogo.'
 
 /** "Lo estoy registrando" / "registrando su pedido" / "su pedido quedó registrado". */

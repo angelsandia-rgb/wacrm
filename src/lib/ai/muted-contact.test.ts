@@ -22,6 +22,9 @@ describe('VSR review 2026-10-09', () => {
 describe('catalog requests (Casa Ceiba 2026-11-07)', () => {
   it('a typo like "catalofo" still asks for the catalog', () => {
     expect(customerRequestedCatalog([{ role: 'user', content: 'Si porta, el catalofo' }])).toBe(true)
+    // Casa Ceiba 2026-11-23: "O su catalovo" got "también se lo envío" and no catalog.
+    expect(customerRequestedCatalog([{ role: 'user', content: 'O su catalovo' }])).toBe(true)
+    expect(customerRequestedCatalog([{ role: 'user', content: 'Catalán' }])).toBe(false)
   })
   it('"Sí" to the bot offering the catalog counts as a request', () => {
     expect(customerRequestedCatalog([
