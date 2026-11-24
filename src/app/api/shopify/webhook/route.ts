@@ -13,6 +13,7 @@ import {
 } from '@/lib/shopify/api'
 import { ORDER_TEMPLATES } from '@/lib/shopify/notify'
 import { sendMetaPurchase } from '@/lib/meta/capi'
+import { queueCsatForOrder } from '@/lib/csat/dispatch'
 import { sendZernioWhatsAppConversion } from '@/lib/zernio/api'
 import { findExistingContact } from '@/lib/contacts/dedupe'
 import { enqueueOrderNotification, runOrderNotificationSweep } from '@/lib/shopify/notification-jobs'
@@ -217,6 +218,9 @@ async function handleOrderCreated(
   const tags = (order.tags ?? '').split(',').map((t) => t.trim())
   if (tags.includes(ORDER_TAG)) {
     await reportChatOrderToMeta(accountId, cfg, order)
+    const chatPhone = order.phone || order.shipping_address?.phone || order.customer?.phone
+    const chatContact = chatPhone ? await findExistingContact(db, accountId, normalizeGtPhone(chatPhone)) : null
+    await queueCsatForOrder(accountId, { moment: 'order_created', orderGid: order.admin_graphql_api_id, contactId: chatContact?.id ?? null })
     return NextResponse.json({ ok: true, skipped: 'chat-sandia order' })
   }
 
@@ -271,6 +275,7 @@ async function handleOrderCreated(
       ...(awaiting ? { confirmation: { orderId: order.admin_graphql_api_id, contactId, since: new Date().toISOString(), reminder: false } } : {}),
     })
     await runOrderNotificationSweep(db, accountId, eventKey)
+    await queueCsatForOrder(accountId, { moment: 'order_created', orderGid: order.admin_graphql_api_id, contactId })
   } catch (err) {
     // Retry persistence failures; existing deals and queued events are reused.
     console.error(`[shopify webhook] order ${order.name} (account ${accountId}) follow-up failed:`, err instanceof Error ? err.message : err)
@@ -407,6 +412,9 @@ async function handleShipping(
     const { error } = await db.from('deals').update({ stage_id: next.id }).eq('id', deal.id).eq('account_id', accountId)
     if (error) throw error
     await runOrderNotificationSweep(db, accountId, eventKey)
+    if (delivered) {
+      await queueCsatForOrder(accountId, { moment: 'order_delivered', orderGid: ship.orderGid, contactId: (deal.contact_id as string | null) ?? null })
+    }
   } catch (err) {
     console.error(`[shopify webhook] shipping update for ${orderName} (account ${accountId}) notify failed:`, err instanceof Error ? err.message : err)
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 })

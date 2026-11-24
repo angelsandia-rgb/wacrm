@@ -14,6 +14,10 @@ import type { MessageTemplate } from '@/types';
 import {
   CSAT_COOLDOWN_MAX_DAYS,
   CSAT_DELAY_MAX_MINUTES,
+  CSAT_MOMENTS,
+  CSAT_MOMENT_LABELS,
+  normalizeMoments,
+  type CsatMoments,
 } from '@/lib/csat/config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +55,7 @@ interface CsatState {
   scale: 3 | 5;
   delay_minutes: number;
   cooldown_days: number;
+  moments: CsatMoments;
 }
 
 const DEFAULTS: CsatState = {
@@ -60,6 +65,7 @@ const DEFAULTS: CsatState = {
   scale: 5,
   delay_minutes: 1440,
   cooldown_days: 30,
+  moments: {},
 };
 
 export function CsatConfig() {
@@ -93,6 +99,13 @@ export function CsatConfig() {
               typeof cfg.delay_minutes === 'number' ? cfg.delay_minutes : 1440,
             cooldown_days:
               typeof cfg.cooldown_days === 'number' ? cfg.cooldown_days : 30,
+            // An account saved before moments existed: its single template
+            // is the "deal won" moment.
+            moments: Object.keys(normalizeMoments(cfg.moments)).length
+              ? normalizeMoments(cfg.moments)
+              : cfg.template_name
+                ? { deal_won: { template_name: cfg.template_name, template_language: cfg.template_language ?? null } }
+                : {},
           });
         }
         setTemplates((tplRes.data as MessageTemplate[]) ?? []);
@@ -113,7 +126,12 @@ export function CsatConfig() {
       const res = await fetch('/api/csat/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
+        // template_name mirrors the deal-won moment (older readers use it).
+        body: JSON.stringify({
+          ...state,
+          template_name: state.moments.deal_won?.template_name ?? null,
+          template_language: state.moments.deal_won?.template_language ?? null,
+        }),
       });
       const data = await readResponseJson(res).catch(() => ({}));
       if (!res.ok) {
@@ -136,7 +154,7 @@ export function CsatConfig() {
     <section className="animate-in fade-in-50 max-w-2xl duration-200">
       <SettingsPanelHead
         title="Satisfacción del cliente (CSAT)"
-        description="Cuando se marca un negocio como ganado, SANDÍA envía al cliente una encuesta corta por WhatsApp (una plantilla con botones de calificación). La respuesta queda registrada por contacto y alimenta los KPIs, Google Sheets y los webhooks."
+        description="SANDÍA envía al cliente una encuesta corta por WhatsApp (una plantilla con botones de calificación) en los momentos que elijas. Una calificación baja crea una tarea para el dueño. Las respuestas alimentan los KPIs, Google Sheets y los webhooks."
       />
 
       <Card>
@@ -154,7 +172,7 @@ export function CsatConfig() {
             <div>
               <p className="text-foreground text-sm font-medium">Activar la encuesta</p>
               <p className="text-muted-foreground text-xs">
-                Se envía una sola vez por negocio ganado.
+                Se envía una sola vez por momento (y, salvo en pedidos, no se repite al mismo cliente dentro del plazo de abajo).
               </p>
             </div>
             <Switch
@@ -164,29 +182,37 @@ export function CsatConfig() {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="csat-template">Plantilla</Label>
-            <select
-              id="csat-template"
-              value={state.template_name ?? ''}
-              onChange={(e) => {
-                const tpl = templates.find((x) => x.name === e.target.value);
-                patch({
-                  template_name: e.target.value || null,
-                  template_language: tpl?.language ?? null,
-                });
-              }}
-              disabled={rowDisabled || templates.length === 0}
-              className={`${SELECT_CLASS} w-full`}
-            >
-              <option value="">Elige una plantilla…</option>
-              {templates.map((tpl) => (
-                <option key={tpl.id} value={tpl.name}>
-                  {tpl.name}
-                  {tpl.language ? ` (${tpl.language})` : ''}
-                </option>
-              ))}
-            </select>
+          <div className="space-y-2">
+            <Label>Cuándo enviarla</Label>
+            {CSAT_MOMENTS.map((m) => (
+              <div key={m} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm">{CSAT_MOMENT_LABELS[m]}</span>
+                <select
+                  aria-label={CSAT_MOMENT_LABELS[m]}
+                  value={state.moments[m]?.template_name ?? ''}
+                  onChange={(e) => {
+                    const tpl = templates.find((x) => x.name === e.target.value);
+                    const next = { ...state.moments };
+                    if (e.target.value) next[m] = { template_name: e.target.value, template_language: tpl?.language ?? null };
+                    else delete next[m];
+                    patch({ moments: next });
+                  }}
+                  disabled={rowDisabled || templates.length === 0}
+                  className={`${SELECT_CLASS} w-60 max-w-full`}
+                >
+                  <option value="">No enviar</option>
+                  {templates.map((tpl) => (
+                    <option key={tpl.id} value={tpl.name}>
+                      {tpl.name}
+                      {tpl.language ? ` (${tpl.language})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            <p className="text-muted-foreground text-xs">
+              Cerrar conversación: al momento. Compra: 1 hora después. Entrega: 3 horas después. Un pedido cancelado no recibe encuesta.
+            </p>
             {templates.length === 0 && (
               <p className="text-xs text-amber-600 dark:text-amber-500">
                 No hay plantillas aprobadas todavía. Crea una en Configuración →
@@ -213,7 +239,7 @@ export function CsatConfig() {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Enviar después de</Label>
+            <Label>Negocio ganado: enviar después de</Label>
             <div className="flex items-center gap-2 text-sm">
               <Input
                 type="number"

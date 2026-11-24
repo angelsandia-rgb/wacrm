@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { trySendSurvey } from './dispatch'
+import { templateForMoment, type CsatMoment } from './config'
 
 const MAX_ROWS_PER_RUN = 200
 /** Hard cap on provider sends per tick so a backlog drains over a few
@@ -29,6 +30,8 @@ interface PendingRow {
   account_id: string
   contact_id: string | null
   conversation_id: string | null
+  trigger: CsatMoment | null
+  source_key: string | null
 }
 
 interface CfgRow {
@@ -36,6 +39,7 @@ interface CfgRow {
   template_name: string | null
   template_language: string | null
   scale: number
+  moments: unknown
 }
 
 export async function runCsatSweep(
@@ -46,7 +50,7 @@ export async function runCsatSweep(
 
   const { data: pending, error } = await admin
     .from('csat_surveys')
-    .select('id, account_id, contact_id, conversation_id')
+    .select('id, account_id, contact_id, conversation_id, trigger, source_key')
     .eq('status', 'pending')
     .lte('send_after', now.toISOString())
     .order('send_after', { ascending: true })
@@ -66,20 +70,33 @@ export async function runCsatSweep(
     if (config === undefined) {
       const { data } = await admin
         .from('csat_config')
-        .select('enabled, template_name, template_language, scale')
+        .select('enabled, template_name, template_language, scale, moments')
         .eq('account_id', row.account_id)
         .maybeSingle<CfgRow>()
       config = data ?? null
       configByAccount.set(row.account_id, config)
     }
 
-    if (!config || !config.enabled || !config.template_name) {
+    const template = config?.enabled ? templateForMoment(config, row.trigger ?? 'deal_won') : null
+    if (!config || !template) {
       await admin
         .from('csat_surveys')
         .update({ status: 'skipped', skip_reason: 'disabled' })
         .eq('id', row.id)
       res.skipped++
       continue
+    }
+
+    // A Shopify order cancelled before the survey went out: don't ask.
+    if (row.trigger === 'order_created' || row.trigger === 'order_delivered') {
+      const orderGid = (row.source_key ?? '').slice(row.trigger.length + 1)
+      const { data: lost } = await admin.from('deals').select('id')
+        .eq('account_id', row.account_id).eq('shopify_order_id', orderGid).eq('status', 'lost').limit(1)
+      if (lost?.length) {
+        await admin.from('csat_surveys').update({ status: 'skipped', skip_reason: 'order_cancelled' }).eq('id', row.id)
+        res.skipped++
+        continue
+      }
     }
 
     let conversationId = row.conversation_id
@@ -108,7 +125,7 @@ export async function runCsatSweep(
     }
 
     sendsLeft--
-    const sent = await trySendSurvey(admin, row.account_id, conversationId, config)
+    const sent = await trySendSurvey(admin, row.account_id, conversationId, template)
     if (sent.ok) {
       await admin
         .from('csat_surveys')

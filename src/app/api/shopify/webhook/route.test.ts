@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   meta: {} as Record<string, unknown>,
   capi: vi.fn(async () => {}),
   zernio: vi.fn(async () => true),
+  csatQueue: vi.fn(async () => {}),
   extra: {} as Record<string, unknown>,
 }))
 
@@ -53,6 +54,7 @@ function chain(table: string) {
 }
 
 vi.mock('@/lib/webhooks/admin-client', () => ({ supabaseAdmin: () => ({ from: (t: string) => chain(t) }) }))
+vi.mock('@/lib/csat/dispatch', () => ({ queueCsatForOrder: m.csatQueue }))
 vi.mock('@/lib/zernio/api', () => ({ sendZernioWhatsAppConversion: m.zernio }))
 vi.mock('@/lib/contacts/dedupe', () => ({ findExistingContact: async () => (m.contact ? { id: 'c1' } : null) }))
 vi.mock('@/lib/meta/capi', () => ({ sendMetaPurchase: m.capi }))
@@ -107,6 +109,7 @@ beforeEach(() => {
   m.meta = {}
   m.capi.mockClear()
   m.zernio.mockClear().mockResolvedValue(true)
+  m.csatQueue.mockClear()
   m.extra = {}
   m.contact = { phone: '50254852732', name: 'Ángel Durán' }
 })
@@ -195,6 +198,7 @@ describe('Shopify webhook — web-store orders', () => {
     expect(m.send).toHaveBeenCalledWith(expect.anything(), 'a1', expect.objectContaining({
       messageType: 'template', templateName: 'pedido_recibido', templateParams: ['Ana', '#1002', expect.stringContaining('300')],
     }))
+    expect(m.csatQueue).toHaveBeenCalledWith('a1', { moment: 'order_created', orderGid: 'gid://shopify/Order/9', contactId: 'c1' })
   })
 
   it('asks a cash-on-delivery customer to confirm and parks the deal in "Por confirmar"', async () => {
@@ -239,9 +243,10 @@ describe('Shopify webhook — web-store orders', () => {
   })
 
   it('skips orders the chat created itself', async () => {
-    await hook('orders/create', { admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '1', currency: 'GTQ', tags: 'chat-sandia' })
+    await hook('orders/create', { admin_graphql_api_id: 'gid://shopify/Order/9', name: '#1002', total_price: '1', currency: 'GTQ', tags: 'chat-sandia', phone: '54852732' })
     expect(m.send).not.toHaveBeenCalled()
     expect(m.capi).not.toHaveBeenCalled()
+    expect(m.csatQueue).toHaveBeenCalledWith('a1', { moment: 'order_created', orderGid: 'gid://shopify/Order/9', contactId: 'c1' })
   })
 
   it('credits the exact ad through Zernio when the customer came from a click-to-WhatsApp ad', async () => {
@@ -301,6 +306,7 @@ describe('Shopify webhook — orders/updated (the admin "Actualización de pedid
       fulfillments: [{ status: 'success', tracking_number: 'GT9', shipment_status: 'delivered' }],
     })
     expect(m.updates).toContainEqual({ table: 'deals', row: { stage_id: 's5' } })
+    expect(m.csatQueue).toHaveBeenCalledWith('a1', { moment: 'order_delivered', orderGid: 'gid://shopify/Order/77', contactId: 'c1' })
   })
 
   it('keeps a split order at Enviado while only one of its packages is delivered', async () => {
