@@ -6051,3 +6051,39 @@ ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 19
   variante exacta y, si falta la talla o está agotada, pasa a un asesor. El
   formulario web acepta la variante elegida en la tienda.
 - Validación: typecheck (`src/`), eslint, 3216 pruebas, `package-lock.json` sin cambios.
+### 2026-11-23 — Claude Code (Casa Ceiba: foto tras un «sí» y catálogo con erratas, PR #408)
+
+- **Bug:** el bot ofreció «Si quiere, le mando la foto…», el cliente respondió
+  «Siisi» y el modelo contestó «Claro 😊» sin el marcador `send_photo`. El
+  respaldo que manda la foto ante un sí solo corría en hoteles, solo reconocía
+  ofertas con «¿…?» y no aceptaba «siisi». En el mismo chat, «O su catalovo»
+  no contó como pedido de catálogo.
+- **Fix:** el respaldo corre en todos los giros (respeta la habilidad
+  `send_photo` desactivada), reconoce ofertas condicionales sin «¿?» y el sí
+  repetido; `CUSTOMER_ASKS_FOR_CATALOG_RE` acepta erratas de una letra
+  (`cat[aá]lo[a-z]o`).
+- Validación: typecheck (`src/`), eslint, 3217 pruebas. Sin migraciones.
+
+### 2026-11-23 — Claude Code (pedidos de WhatsApp → compra en Meta, PR #409)
+
+- **Problema:** los pedidos que toma Chat Sandía se crean en Shopify por API, sin
+  checkout, así que el píxel de la app Facebook & Instagram no los reporta como
+  compra y Meta no puede optimizar anuncios hacia esas ventas.
+- **Cambio:** `src/lib/meta/capi.ts` manda `Purchase` a la API de conversiones
+  desde el webhook `orders/create` para pedidos `chat-sandia` (teléfono, nombre y
+  ciudad en SHA-256, `event_id` por pedido). Configuración → Shopify guarda el ID
+  del conjunto de datos y el token (cifrado). Migración
+  `187_shopify_meta_capi.sql` aplicada antes del deploy.
+- Validación: typecheck (`src/`), eslint, 3220 pruebas.
+
+### 2026-11-23 — Claude Code (ventas por anuncio, PR #410)
+
+- **Cambio:** el webhook de WhatsApp (Zernio) guarda en `contacts.referral` el
+  anuncio de clic a WhatsApp del primer mensaje (anuncio, conjunto, campaña,
+  `ctwa_clid`). `/kpis` muestra «Ventas por anuncio» (leads, ventas, conversión,
+  monto). Si el cliente vino de un anuncio, la compra se manda por Zernio
+  (`/v1/whatsapp/conversions`, `business_messaging`) ligada al anuncio exacto;
+  si no, por la API de conversiones del #409.
+- **Pendiente:** sin probar con un anuncio real (los campos salen de la
+  documentación de Zernio); verificar con el primer lead de anuncio.
+- Validación: typecheck (`src/`), eslint, 3224 pruebas. Sin migraciones.
