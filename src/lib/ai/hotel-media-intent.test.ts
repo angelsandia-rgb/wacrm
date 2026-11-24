@@ -161,6 +161,12 @@ describe('acceptsPhotoOffer', () => {
     expect(acceptsPhotoOffer('si, del 21 al 23 de octubre para dos personas por favor', OFFER)).toBe(false)
     expect(acceptsPhotoOffer('no gracias', OFFER)).toBe(false)
   })
+  it('an offer without question marks, and a doubled "siisi" (Casa Ceiba, 2026-11-23)', () => {
+    const offer = 'Están a Q400 con envío gratis. Si quiere, le mando la foto para que vea cómo se miran.'
+    expect(acceptsPhotoOffer('Siisi', offer)).toBe(true)
+    expect(acceptsPhotoOffer('sin foto', offer)).toBe(false)
+    expect(productForPhotoRequest('Siisi', 'Las Luces Solares de Exterior le ayudan. ' + offer, [], ['Luces Solares de Exterior', 'Serie de 30 Luces Solares 5 m'])).toBe('Luces Solares de Exterior')
+  })
 })
 
 describe('productForPhotoRequest', () => {
