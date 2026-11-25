@@ -26,7 +26,11 @@ import {
   SendMessageError,
 } from '@/lib/whatsapp/send-message'
 import { supabaseAdmin } from './admin-client'
-import { parseScoreFromReply } from './config'
+import {
+  CSAT_MOMENT_DELAY_MINUTES, CSAT_MOMENT_LABELS, isUnhappyScore, parseScoreFromReply, templateForMoment,
+  type CsatMoment, type CsatTemplateRef,
+} from './config'
+import { contactMutesAi } from '@/lib/ai/muted-contact'
 
 export interface CsatFollowUp {
   event: Extract<WebhookEvent, 'csat.received'>
@@ -40,6 +44,7 @@ interface CsatConfigRow {
   scale: number
   delay_minutes: number
   cooldown_days: number
+  moments: unknown
 }
 
 /** Entry point called from `dispatchWebhookEvent`. Returns a follow-up
@@ -64,6 +69,12 @@ export async function dispatchCsat(
       return await captureCsatResponse(db, accountId, d)
     }
 
+    if (event === 'conversation.closed') {
+      const conversationId = typeof d.conversation_id === 'string' ? d.conversation_id : null
+      if (conversationId) await queueCsatForClose(db, accountId, conversationId)
+      return null
+    }
+
     return null
   } catch (err) {
     console.error(
@@ -81,7 +92,7 @@ async function loadConfig(
 ): Promise<CsatConfigRow | null> {
   const { data } = await db
     .from('csat_config')
-    .select('enabled, template_name, template_language, scale, delay_minutes, cooldown_days')
+    .select('enabled, template_name, template_language, scale, delay_minutes, cooldown_days, moments')
     .eq('account_id', accountId)
     .maybeSingle<CsatConfigRow>()
   return data ?? null
@@ -124,15 +135,13 @@ async function queueCsatForDeal(
   accountId: string,
   dealId: string,
 ): Promise<void> {
-  const config = await loadConfig(db, accountId)
-  if (!config || !config.enabled || !config.template_name) return
-
   // Already queued for this deal? (the unique index is the real guard;
   // this just avoids a guaranteed-losing insert on the common path).
   const { data: dupe } = await db
     .from('csat_surveys')
     .select('id')
     .eq('deal_id', dealId)
+    .eq('trigger', 'deal_won')
     .maybeSingle()
   if (dupe) return
 
@@ -143,27 +152,87 @@ async function queueCsatForDeal(
     .eq('account_id', accountId)
     .maybeSingle()
   if (!deal) return
+  await queueCsat(db, {
+    accountId, moment: 'deal_won', dealId,
+    contactId: (deal.contact_id as string | null) ?? null,
+  })
+}
 
-  const contactId = (deal.contact_id as string | null) ?? null
+/** A closed WhatsApp conversation. Keyed by the close time, so a thread
+ *  reopened and closed again can be asked again (subject to the cooldown). */
+async function queueCsatForClose(db: SupabaseClient, accountId: string, conversationId: string): Promise<void> {
+  const { data: conv } = await db
+    .from('conversations')
+    .select('contact_id, channel, closed_at')
+    .eq('id', conversationId)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (!conv?.contact_id || conv.channel !== 'whatsapp') return
+  await queueCsat(db, {
+    accountId, moment: 'conversation_closed', contactId: conv.contact_id as string, conversationId,
+    sourceKey: `close:${conversationId}:${conv.closed_at ?? ''}`,
+  })
+}
+
+/** Shopify order moments: one survey per order and moment, never blocked
+ *  by the cooldown (buying and receiving are different questions).
+ *  The sweep skips it if the order was cancelled before it went out. */
+export async function queueCsatForOrder(
+  accountId: string,
+  input: { moment: 'order_created' | 'order_delivered'; orderGid: string; contactId: string | null },
+): Promise<void> {
+  try {
+    await queueCsat(supabaseAdmin(), {
+      accountId, moment: input.moment, contactId: input.contactId,
+      sourceKey: `${input.moment}:${input.orderGid}`, skipCooldown: true,
+    })
+  } catch (err) {
+    console.error('[csat] order survey queue failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+async function queueCsat(
+  db: SupabaseClient,
+  input: {
+    accountId: string
+    moment: CsatMoment
+    contactId: string | null
+    dealId?: string
+    conversationId?: string
+    sourceKey?: string
+    skipCooldown?: boolean
+  },
+): Promise<void> {
+  const config = await loadConfig(db, input.accountId)
+  if (!config || !config.enabled) return
+  const template = templateForMoment(config, input.moment)
+  if (!template) return
+
   const base = {
-    account_id: accountId,
-    deal_id: dealId,
-    contact_id: contactId,
+    account_id: input.accountId,
+    trigger: input.moment,
+    deal_id: input.dealId ?? null,
+    contact_id: input.contactId,
+    source_key: input.sourceKey ?? null,
     scale: config.scale,
   }
-
-  if (!contactId) {
+  if (!input.contactId) {
     await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'no_contact' })
     return
   }
+  // Internal / staff / supplier contacts (Interno, Personal, Proveedor, Sin IA).
+  if (await contactMutesAi(db, input.contactId, input.accountId)) {
+    await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'muted_contact' })
+    return
+  }
 
-  // Per-contact cooldown — don't survey a repeat buyer every purchase.
-  if (config.cooldown_days > 0) {
+  // Per-contact cooldown — don't survey a repeat customer every time.
+  if (!input.skipCooldown && config.cooldown_days > 0) {
     const since = new Date(Date.now() - config.cooldown_days * 86_400_000).toISOString()
     const { data: recent } = await db
       .from('csat_surveys')
       .select('id')
-      .eq('contact_id', contactId)
+      .eq('contact_id', input.contactId)
       .in('status', ['pending', 'sent', 'responded'])
       .gte('created_at', since)
       .limit(1)
@@ -173,19 +242,18 @@ async function queueCsatForDeal(
     }
   }
 
-  const conversationId = await resolveWhatsappConversation(db, accountId, contactId)
+  const conversationId = input.conversationId
+    ?? await resolveWhatsappConversation(db, input.accountId, input.contactId)
   if (!conversationId) {
-    await insertSurvey(db, {
-      ...base,
-      status: 'skipped',
-      skip_reason: 'no_whatsapp_conversation',
-    })
+    await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'no_whatsapp_conversation' })
     return
   }
 
-  // delay_minutes = 0 → send inline now; otherwise queue for the cron.
-  if (config.delay_minutes === 0) {
-    const sent = await trySendSurvey(db, accountId, conversationId, config)
+  const delay = input.moment === 'deal_won' ? config.delay_minutes : CSAT_MOMENT_DELAY_MINUTES[input.moment]
+  // deal_won with delay 0 keeps sending inline; the other moments always
+  // go through the cron (next tick) so the close/order webhook stays fast.
+  if (input.moment === 'deal_won' && delay === 0) {
+    const sent = await trySendSurvey(db, input.accountId, conversationId, template)
     await insertSurvey(db, {
       ...base,
       conversation_id: conversationId,
@@ -201,7 +269,7 @@ async function queueCsatForDeal(
     ...base,
     conversation_id: conversationId,
     status: 'pending',
-    send_after: new Date(Date.now() + config.delay_minutes * 60_000).toISOString(),
+    send_after: new Date(Date.now() + delay * 60_000).toISOString(),
   })
 }
 
@@ -211,7 +279,7 @@ export async function trySendSurvey(
   db: SupabaseClient,
   accountId: string,
   conversationId: string,
-  config: Pick<CsatConfigRow, 'template_name' | 'template_language'>,
+  config: CsatTemplateRef | Pick<CsatConfigRow, 'template_name' | 'template_language'>,
 ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
   try {
     const res = await sendMessageToConversation(db, accountId, {
@@ -256,7 +324,7 @@ async function captureCsatResponse(
 
   const { data: survey } = await db
     .from('csat_surveys')
-    .select('id, deal_id, contact_id, scale, sent_at')
+    .select('id, deal_id, contact_id, scale, sent_at, trigger')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
     .eq('status', 'sent')
@@ -290,6 +358,12 @@ async function captureCsatResponse(
     console.error('[csat] response update failed:', error.message)
     return null
   }
+  if (isUnhappyScore(score, survey.scale as number)) {
+    await createUnhappyTask(db, accountId, {
+      contactId, dealId: (survey.deal_id as string | null) ?? null, score, scale: survey.scale as number,
+      moment: ((survey.trigger as CsatMoment | null) ?? 'deal_won'), comment,
+    })
+  }
 
   return {
     event: 'csat.received',
@@ -300,6 +374,38 @@ async function captureCsatResponse(
       score,
       scale: survey.scale,
       comment,
+      trigger: survey.trigger ?? 'deal_won',
     },
+  }
+}
+
+/** An unhappy rating becomes a task for the account owner, due now, so the
+ *  task-reminder cron also pushes it to their phone. Best effort. */
+async function createUnhappyTask(
+  db: SupabaseClient,
+  accountId: string,
+  input: { contactId: string; dealId: string | null; score: number; scale: number; moment: CsatMoment; comment: string | null },
+): Promise<void> {
+  try {
+    const { data: owner } = await db.from('profiles').select('user_id')
+      .eq('account_id', accountId).eq('account_role', 'owner').limit(1).maybeSingle()
+    if (!owner?.user_id) return
+    const { data: contact } = await db.from('contacts').select('name, phone')
+      .eq('id', input.contactId).eq('account_id', accountId).maybeSingle()
+    const who = (contact?.name as string | null) || (contact?.phone as string | null) || 'Cliente'
+    const { error } = await db.from('tasks').insert({
+      account_id: accountId,
+      created_by: owner.user_id,
+      assigned_to: owner.user_id,
+      contact_id: input.contactId,
+      deal_id: input.dealId,
+      title: `Cliente insatisfecho (${input.score}/${input.scale}): ${who}`,
+      notes: `Encuesta «${CSAT_MOMENT_LABELS[input.moment] ?? input.moment}».` +
+        `${input.comment ? ` Respuesta: ${input.comment}.` : ''} Escríbale para saber qué pasó.`,
+      due_at: new Date().toISOString(),
+    })
+    if (error) console.error('[csat] unhappy task insert failed:', error.message)
+  } catch (err) {
+    console.error('[csat] unhappy task failed:', err instanceof Error ? err.message : err)
   }
 }

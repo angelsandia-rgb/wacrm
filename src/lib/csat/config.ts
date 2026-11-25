@@ -30,6 +30,7 @@ export function clampCooldownDays(v: unknown): number {
 }
 
 export interface NormalizedCsatConfig {
+  moments: CsatMoments
   enabled: boolean
   template_name: string | null
   template_language: string | null
@@ -56,13 +57,15 @@ export function normalizeCsatConfigInput(
       ? body.template_language.trim()
       : null
 
-  if (enabled && !template_name) {
+  const moments = normalizeMoments(body.moments)
+  if (enabled && !template_name && Object.keys(moments).length === 0) {
     return { ok: false, error: 'Elige una plantilla de WhatsApp antes de activar la encuesta.' }
   }
 
   return {
     ok: true,
     value: {
+      moments,
       enabled,
       template_name,
       template_language,
@@ -122,4 +125,60 @@ export function parseScoreFromReply(
   }
 
   return null
+}
+
+// ---------- Moments (migration 188) ----------------------------------
+
+export const CSAT_MOMENTS = ['deal_won', 'conversation_closed', 'order_created', 'order_delivered'] as const
+export type CsatMoment = (typeof CSAT_MOMENTS)[number]
+
+export const CSAT_MOMENT_LABELS: Record<CsatMoment, string> = {
+  deal_won: 'Al ganar un negocio',
+  conversation_closed: 'Al cerrar la conversación',
+  order_created: 'Después de la compra (Shopify)',
+  order_delivered: 'Cuando el pedido se entrega (Shopify)',
+}
+
+/** Fixed waits for the moments that aren't deal_won (that one keeps
+ *  delay_minutes): a close is asked right away; a purchase after an hour
+ *  (it reads as service, not spam); a delivery after 3 h of use. */
+export const CSAT_MOMENT_DELAY_MINUTES: Record<Exclude<CsatMoment, 'deal_won'>, number> = {
+  conversation_closed: 0,
+  order_created: 60,
+  order_delivered: 180,
+}
+
+export interface CsatTemplateRef { template_name: string; template_language: string | null }
+export type CsatMoments = Partial<Record<CsatMoment, CsatTemplateRef>>
+
+/** Keep only known moments that name a template. */
+export function normalizeMoments(raw: unknown): CsatMoments {
+  const out: CsatMoments = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const m of CSAT_MOMENTS) {
+    const v = (raw as Record<string, unknown>)[m] as Record<string, unknown> | undefined
+    const name = typeof v?.template_name === 'string' ? v.template_name.trim() : ''
+    if (!name) continue
+    const lang = typeof v?.template_language === 'string' && v.template_language.trim() ? v.template_language.trim() : null
+    out[m] = { template_name: name, template_language: lang }
+  }
+  return out
+}
+
+/** The template to send for `moment`, or null when that moment is off.
+ *  An account saved before moments existed keeps deal_won → template_name. */
+export function templateForMoment(
+  config: { template_name: string | null; template_language: string | null; moments?: unknown },
+  moment: CsatMoment,
+): CsatTemplateRef | null {
+  const moments = normalizeMoments(config.moments)
+  if (Object.keys(moments).length) return moments[moment] ?? null
+  return moment === 'deal_won' && config.template_name
+    ? { template_name: config.template_name, template_language: config.template_language }
+    : null
+}
+
+/** A low rating that deserves a follow-up task: 1–2 of 5, 1 of 3. */
+export function isUnhappyScore(score: number, scale: number): boolean {
+  return score <= Math.floor(scale * 0.4)
 }

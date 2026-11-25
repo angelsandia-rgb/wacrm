@@ -67,6 +67,7 @@ describe('normalizeCsatConfigInput', () => {
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(r.value).toEqual({
+        moments: {},
         enabled: true,
         template_name: 'csat_v1',
         template_language: 'es',
@@ -115,5 +116,35 @@ describe('parseScoreFromReply', () => {
 
   it('prefers the reply id over the text', () => {
     expect(parseScoreFromReply('csat_2', '5 stars', 5)).toBe(2)
+  })
+})
+
+describe('CSAT moments', () => {
+  it('keeps only known moments with a template', async () => {
+    const { normalizeMoments } = await import('./config')
+    expect(normalizeMoments({
+      order_created: { template_name: ' compra_facil ', template_language: 'es' },
+      order_delivered: { template_name: '' },
+      bogus: { template_name: 'x' },
+    })).toEqual({ order_created: { template_name: 'compra_facil', template_language: 'es' } })
+  })
+  it('falls back to the legacy template only for deal_won', async () => {
+    const { templateForMoment } = await import('./config')
+    const legacy = { template_name: 'csat', template_language: 'es', moments: {} }
+    expect(templateForMoment(legacy, 'deal_won')).toEqual({ template_name: 'csat', template_language: 'es' })
+    expect(templateForMoment(legacy, 'conversation_closed')).toBeNull()
+    const withMoments = { ...legacy, moments: { conversation_closed: { template_name: 'cierre', template_language: 'es' } } }
+    expect(templateForMoment(withMoments, 'deal_won')).toBeNull()
+    expect(templateForMoment(withMoments, 'conversation_closed')?.template_name).toBe('cierre')
+  })
+  it('flags 1–2 of 5 and 1 of 3 as unhappy', async () => {
+    const { isUnhappyScore } = await import('./config')
+    expect([1, 2, 3].map((s) => isUnhappyScore(s, 5))).toEqual([true, true, false])
+    expect([1, 2].map((s) => isUnhappyScore(s, 3))).toEqual([true, false])
+  })
+  it('saving with only moments is valid', async () => {
+    const { normalizeCsatConfigInput } = await import('./config')
+    const r = normalizeCsatConfigInput({ enabled: true, moments: { order_created: { template_name: 'compra_facil' } } })
+    expect(r.ok).toBe(true)
   })
 })

@@ -12,7 +12,7 @@ import {
 import { normalizeCsatConfigInput } from '@/lib/csat/config'
 
 const SELECT_COLS =
-  'enabled, template_name, template_language, scale, delay_minutes, cooldown_days, updated_at'
+  'enabled, template_name, template_language, scale, delay_minutes, cooldown_days, moments, updated_at'
 
 /**
  * GET /api/csat/config — the account's post-sale survey settings. Any
@@ -40,6 +40,7 @@ export async function GET() {
         scale: 5,
         delay_minutes: 1440,
         cooldown_days: 30,
+        moments: {},
       })
     }
     return NextResponse.json({ configured: true, ...data })
