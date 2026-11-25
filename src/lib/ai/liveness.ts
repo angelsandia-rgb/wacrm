@@ -10,6 +10,10 @@
 // flowing and NOT ONE `ai_usage_log` row appears for that account, the
 // bot is down for that account, full stop.
 //
+// Accounts outside their configured AI attention hours (see
+// auto-reply-schedule.ts) are excluded — the bot is quiet there on
+// purpose, not down.
+//
 // Called from the conversations cron (~every 5 min). Best-effort:
 // throwing here must never break the cron's real work.
 // ============================================================
@@ -17,6 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dispatchSystemAlert } from '@/lib/observability/alerts'
 import { TEAMMATE_QUIET_MS } from './human-reply'
+import { autoReplyScheduleForAccount, withinAiAttentionHours } from './auto-reply-schedule'
 
 /** Look-back window. Long enough that a healthy bot (30s debounce +
  *  seconds of generation) would definitely have logged usage for any
@@ -45,6 +50,16 @@ export async function checkAiLiveness(db: SupabaseClient): Promise<AiLivenessRes
     .eq('auto_reply_enabled', true)
   const accountIds = [...new Set((cfgRows ?? []).map((r) => r.account_id as string))]
   if (accountIds.length === 0) return { checkedAccounts: 0, deadAccounts: [] }
+
+  // Accounts with a configured AI attention-hours window (see
+  // auto-reply-schedule.ts) are intentionally quiet outside it — a
+  // `OutsideAiAttentionHours` stop, not an outage. Skip them if that's
+  // true right now, the same way the staff-quiet check below does.
+  const { data: accountRows } = await db
+    .from('accounts')
+    .select('id, feature_flags, timezone')
+    .in('id', accountIds)
+  const accountById = new Map((accountRows ?? []).map((a) => [a.id as string, a]))
 
   // AI provider calls per account in the window (any successful reply
   // logs one — see logAiUsage).
@@ -77,6 +92,14 @@ export async function checkAiLiveness(db: SupabaseClient): Promise<AiLivenessRes
 
   for (const accountId of accountIds) {
     if (calledAccounts.has(accountId)) continue // bot is alive here
+
+    try {
+      const schedule = autoReplyScheduleForAccount(accountById.get(accountId))
+      if (!withinAiAttentionHours(schedule)) continue // quiet on purpose right now
+    } catch {
+      // Conflicting/invalid schedule config — don't let that mask a real outage.
+    }
+
     let convIds = convByAccount.get(accountId) ?? []
     if (convIds.length < MIN_DISTINCT_CONVERSATIONS) continue
 
