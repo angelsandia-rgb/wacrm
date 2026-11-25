@@ -14,6 +14,8 @@ interface FakeState {
   msgCounts: Record<string, number>
   /** conversations a teammate answered within TEAMMATE_QUIET_MS */
   staffConvs?: string[]
+  /** account_id -> feature_flags, for the AI-attention-hours check */
+  accountFlags?: Record<string, string[]>
 }
 
 function fakeDb(s: FakeState): SupabaseClient {
@@ -22,6 +24,16 @@ function fakeDb(s: FakeState): SupabaseClient {
   })
   return {
     from(table: string) {
+      if (table === 'accounts') {
+        const c = {
+          select: () => c,
+          in: (_col: string, ids: string[]) => {
+            const data = ids.map((id) => ({ id, feature_flags: s.accountFlags?.[id] ?? [], timezone: 'America/Guatemala' }))
+            return { then: (f: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(f) }
+          },
+        }
+        return c
+      }
       if (table === 'ai_configs') {
         const c = {
           select: () => c,
@@ -175,6 +187,49 @@ describe('checkAiLiveness', () => {
     )
     expect(r.deadAccounts).toEqual([])
     expect(h.dispatchSystemAlert).not.toHaveBeenCalled()
+  })
+
+  it('does NOT alert when the account is outside its configured AI attention hours (quiet on purpose)', async () => {
+    // 2026-01-01T15:00:00Z = 09:00 America/Guatemala (UTC-6): inside the
+    // 8:00-20:00 daytime window the 'ai_attention_hours_20_8' (AI only
+    // overnight) flag keeps the bot quiet for.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T15:00:00Z'))
+    try {
+      const r = await checkAiLiveness(
+        fakeDb({
+          aiConfigAccounts: ['a1'],
+          usageAccounts: [],
+          eligibleConvs: [
+            { id: 'c1', account_id: 'a1' },
+            { id: 'c2', account_id: 'a1' },
+          ],
+          msgCounts: { c1: 5, c2: 5 },
+          accountFlags: { a1: ['ai_attention_hours_20_8'] },
+        }),
+      )
+      expect(r.deadAccounts).toEqual([])
+      expect(h.dispatchSystemAlert).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a conflicting attention-hours config does not mask a real outage', async () => {
+    const r = await checkAiLiveness(
+      fakeDb({
+        aiConfigAccounts: ['a1'],
+        usageAccounts: [],
+        eligibleConvs: [
+          { id: 'c1', account_id: 'a1' },
+          { id: 'c2', account_id: 'a1' },
+        ],
+        msgCounts: { c1: 5, c2: 5 },
+        accountFlags: { a1: ['ai_attention_hours_8_20', 'ai_attention_hours_20_8'] },
+      }),
+    )
+    expect(r.deadAccounts).toEqual([{ accountId: 'a1', eligibleInbound: 10, conversations: 2 }])
+    expect(h.dispatchSystemAlert).toHaveBeenCalledTimes(1)
   })
 
   it('flags only the dead account when another account is healthy', async () => {
