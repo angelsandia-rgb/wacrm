@@ -7,6 +7,7 @@ import { recordHeartbeat } from '@/lib/observability/heartbeat'
 import { checkAiLiveness } from '@/lib/ai/liveness'
 import { recoverUnansweredInbound } from '@/lib/ai/inbound-recovery'
 import { runAutoClose, runCloseInsights } from '@/lib/conversations/close-insights'
+import { runResponseSlaSweep } from '@/lib/sla/sweep'
 
 /**
  * Auto-assigns open conversations that have sat unclaimed past their
@@ -57,6 +58,14 @@ export async function GET(request: Request) {
   // mid-debounce) — re-dispatched after the response, since each can
   // take a full provider call. Best-effort; see inbound-recovery.ts.
   after(async () => {
+    // Response-time target (migration 189): notices, equitable
+    // reassignment and the bot's one acknowledgement. Off per account.
+    try {
+      const sla = await runResponseSlaSweep(supabaseAdmin())
+      if (sla.waiting > 0) console.info('[conversations/cron] response sla:', sla)
+    } catch (err) {
+      console.error('[conversations/cron] response sla failed:', err)
+    }
     try {
       const recovered = await recoverUnansweredInbound(supabaseAdmin())
       if (recovered.recovered > 0) console.warn('[conversations/cron] inbound recovery:', recovered)

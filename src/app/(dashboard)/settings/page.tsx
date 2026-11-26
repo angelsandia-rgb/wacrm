@@ -22,6 +22,7 @@ import { DealsSettings } from '@/components/settings/deals-settings';
 import { ClinicSettings } from '@/components/settings/clinic-settings';
 import { CsatConfig } from '@/components/settings/csat-config';
 import { CloseConfig } from '@/components/settings/close-config';
+import { SlaConfig } from '@/components/settings/sla-config';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { WebhooksSettings } from '@/components/settings/webhooks-settings';
@@ -104,7 +105,12 @@ function SettingsPageInner() {
     deals: <DealsSettings />,
     clinic: <ClinicSettings />,
     csat: <CsatConfig />,
-    conversations: <CloseConfig />,
+    conversations: (
+      <>
+        <CloseConfig />
+        <SlaConfig />
+      </>
+    ),
     members: <MembersTab />,
     api: <ApiKeysSettings />,
     webhooks: <WebhooksSettings />,
