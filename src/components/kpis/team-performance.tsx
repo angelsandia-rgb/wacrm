@@ -87,6 +87,8 @@ export function TeamPerformance({ window, currency }: { window: DateWindow; curr
               <th className="px-2 py-1 text-right font-medium">Cerrados</th>
               <th className="px-2 py-1 text-right font-medium">Respuestas</th>
               <th className="px-2 py-1 text-right font-medium">T. resp.</th>
+              <th className="px-2 py-1 text-right font-medium" title={`Respuestas en ${report?.sla.targetMinutes ?? 10} min o menos`}>A tiempo</th>
+              <th className="px-2 py-1 text-right font-medium" title="Veces que un cliente esperó más del plazo con este asesor">Avisos</th>
               <th className="py-1 pl-2 text-right font-medium">Ventas</th>
             </tr>
           </thead>
@@ -100,6 +102,8 @@ export function TeamPerformance({ window, currency }: { window: DateWindow; curr
                 <td className="px-2 py-2 text-right tabular-nums">{a.closed}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{a.replies}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{formatMinutesLabel(a.medianResponseMin)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{a.onTimePct == null ? '—' : `${a.onTimePct}%`}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{a.slaAlerts}</td>
                 <td className="py-2 pl-2 text-right tabular-nums">
                   {a.wonDeals}
                   {a.wonDeals > 0 && <span className="text-muted-foreground"> · {formatCurrency(a.wonValue, currency)}</span>}
@@ -108,8 +112,14 @@ export function TeamPerformance({ window, currency }: { window: DateWindow; curr
             ))}
           </tbody>
         </table>
+        {report?.sla.enabled && (
+          <p className="text-muted-foreground mt-3 text-xs">
+            Plazo de respuesta ({report.sla.targetMinutes} min): {report.sla.alerts} avisos · {report.sla.escalations} reasignaciones ·{' '}
+            {report.sla.aiAcks} acuses del bot en el periodo.
+          </p>
+        )}
         <p className="text-muted-foreground mt-3 text-[11px]">
-          Respuestas y tiempo de respuesta cuentan desde el 1 de noviembre de 2026, cuando empezamos a registrar quién envía
+          «A tiempo» = respuestas dentro de {report?.sla.targetMinutes ?? 10} min. Respuestas y tiempo de respuesta cuentan desde el 1 de noviembre de 2026, cuando empezamos a registrar quién envía
           cada mensaje.
         </p>
       </ChartSection>

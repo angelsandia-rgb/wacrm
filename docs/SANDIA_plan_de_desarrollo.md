@@ -6087,3 +6087,35 @@ ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 19
 - **Pendiente:** sin probar con un anuncio real (los campos salen de la
   documentación de Zernio); verificar con el primer lead de anuncio.
 - Validación: typecheck (`src/`), eslint, 3224 pruebas. Sin migraciones.
+
+### 2026-11-24 — Claude Code (encuesta en varios momentos, PR #412)
+
+- **Cambio:** la encuesta CSAT puede salir en varios momentos, cada uno con su
+  plantilla: negocio ganado (como antes), cierre de conversación, compra en
+  Shopify (1 h después) y entrega en Shopify (3 h después). Un pedido cancelado
+  no recibe encuesta; los contactos Interno/Personal/Proveedor/Sin IA tampoco.
+  Una calificación de 1–2 de 5 crea una tarea para el dueño. Migración
+  `188_csat_moments.sql` (aplicada antes del deploy).
+- **Activado:** Chat Sandía (negocio ganado + cierre, `encuesta_atencion`) y
+  Casa Ceiba (`encuesta_compra`, `encuesta_entrega`). Chat Sandía cierra solo
+  tras 3 días sin mensajes. Villa San Ricardo sin cambios.
+- Validación: typecheck (`src/`), eslint, 3233 pruebas.
+
+### 2026-11-25 — Claude Code (plazo de respuesta, PR #414)
+
+- **Problema:** clientes sin respuesta del equipo por horas o días (revisión de
+  Villa San Ricardo del 23/11).
+- **Cambio:** a los 10 min sin respuesta avisa al asesor (o asigna al compañero
+  en línea con menos carga); a los 30 min reasigna de forma equitativa al
+  compañero en línea con menos carga, o avisa a todo el equipo; a los 60 min el
+  bot manda un solo acuse, respetando etiquetas y la ventana de 24 h. Solo de
+  8:00 a 20:00 (hora de la cuenta). Corre dentro de `/api/conversations/cron`.
+  Migración `189_response_sla.sql` (aplicada antes del deploy).
+- **Activado:** Chat Sandía y Casa Ceiba. Villa San Ricardo sin cambios.
+- Validación: typecheck (`src/`), eslint, 3252 pruebas.
+
+### 2026-11-25 — Claude Code (plazo de respuesta en /kpis)
+
+- **Cambio:** el ranking del equipo en `/kpis` suma «A tiempo» (% de respuestas
+  dentro del plazo de la cuenta, 10 min por defecto) y «Avisos» por asesor, más
+  el total de avisos, reasignaciones y acuses del bot del periodo. Sin migración.
