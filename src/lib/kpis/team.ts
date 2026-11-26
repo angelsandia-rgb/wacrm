@@ -39,11 +39,32 @@ export interface AgentStat {
   medianResponseMin: number | null
   wonDeals: number
   wonValue: number
+  /** Share (0–100) of this agent's replies sent within the response-time
+   *  target (response_sla_config.alert_minutes, 10 when unset); null = no replies. */
+  onTimePct: number | null
+  /** Times a customer waited past the target while this agent had the chat. */
+  slaAlerts: number
+}
+
+/** Response-time target activity in the window (migration 189). */
+export interface SlaTotals {
+  targetMinutes: number
+  enabled: boolean
+  alerts: number
+  escalations: number
+  aiAcks: number
 }
 
 export interface TeamReport {
   funnels: PipelineFunnel[]
   agents: AgentStat[]
+  sla: SlaTotals
+}
+
+/** Percent of response times at or under `target` minutes, or null when none. */
+export function onTimePct(minutes: number[], target: number): number | null {
+  if (minutes.length === 0) return null
+  return Math.round((minutes.filter((m) => m <= target).length / minutes.length) * 100)
 }
 
 type Stage = { id: string; pipeline_id: string; name: string; position: number; color: string | null }
@@ -191,6 +212,21 @@ export async function loadTeamReport(db: SupabaseClient, window: DateWindow): Pr
   ).sort((a, b) => a.created_at.localeCompare(b.created_at))
   const responses = agentResponseMinutes(thread)
 
+  // Response-time target (migration 189); tolerates the tables missing.
+  const [slaCfg, slaEvents] = await Promise.all([
+    db.from('response_sla_config').select('enabled, alert_minutes').maybeSingle().then((r) => r.data, () => null),
+    fetchAllRows<{ id: string; stage: string; target_user_id: string | null; error: string | null }>(
+      () => db.from('response_sla_events').select('id, stage, target_user_id, error').gte('created_at', startIso).lt('created_at', endIso),
+      { label: 'team sla events' },
+    ).catch(() => []),
+  ])
+  const target = (slaCfg?.alert_minutes as number | undefined) ?? 10
+  const fired = slaEvents.filter((e) => !e.error)
+  const slaAlertsBy = new Map<string, number>()
+  for (const e of fired) {
+    if (e.stage === 'alert' && e.target_user_id) slaAlertsBy.set(e.target_user_id, (slaAlertsBy.get(e.target_user_id) ?? 0) + 1)
+  }
+
   // Tolerates the table not existing yet (code deployed before migration 172).
   const history = await fetchAllRowsIn<{ id: string; deal_id: string; to_stage_id: string | null }>(
     deals.map((d) => d.id),
@@ -231,8 +267,20 @@ export async function loadTeamReport(db: SupabaseClient, window: DateWindow): Pr
       medianResponseMin: median(responses.get(p.user_id) ?? []),
       wonDeals: won.get(p.user_id)?.n ?? 0,
       wonValue: won.get(p.user_id)?.value ?? 0,
+      onTimePct: onTimePct(responses.get(p.user_id) ?? [], target),
+      slaAlerts: slaAlertsBy.get(p.user_id) ?? 0,
     }))
     .sort((a, b) => b.closed - a.closed || b.replies - a.replies || a.name.localeCompare(b.name))
 
-  return { funnels: pipelineFunnels(pipelines, stages, deals, history), agents }
+  return {
+    funnels: pipelineFunnels(pipelines, stages, deals, history),
+    agents,
+    sla: {
+      targetMinutes: target,
+      enabled: Boolean(slaCfg?.enabled),
+      alerts: fired.filter((e) => e.stage === 'alert').length,
+      escalations: fired.filter((e) => e.stage === 'escalate').length,
+      aiAcks: fired.filter((e) => e.stage === 'ai_ack').length,
+    },
+  }
 }

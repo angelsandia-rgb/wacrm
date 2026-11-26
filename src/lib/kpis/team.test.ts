@@ -71,3 +71,11 @@ describe('median', () => {
     expect(median([1, 2, 3, 4])).toBe(2.5)
   })
 })
+
+describe('onTimePct', () => {
+  it('share of replies within the target, null with none', async () => {
+    const { onTimePct } = await import('./team')
+    expect(onTimePct([2, 8, 10, 25], 10)).toBe(75)
+    expect(onTimePct([], 10)).toBeNull()
+  })
+})
