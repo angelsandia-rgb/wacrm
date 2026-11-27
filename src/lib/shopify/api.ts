@@ -708,7 +708,7 @@ export async function loadOrderStatuses(args: {
       else found.push(draftStatus(n.createdAt, (n.tags ?? []).includes(CARD_TAG)))
     }
   }
-  const number = text.match(/#\s?(\d{3,})/)?.[1]
+  const number = text.match(/(?:#|\b(?:pedido|orden)\s*(?:n[uú]mero\s*|no\.?\s*)?)\s?#?(\d{3,})/i)?.[1]
   if (number && !found.some((o) => o.name === `#${number}`)) {
     const data = await shopifyGraphql<{ orders: { nodes: OrderStatus[] } }>(
       cfg, `query($q: String!) { orders(first: 1, query: $q) { nodes { ${ORDER_FIELDS} } } }`, { q: `name:#${number}` },
