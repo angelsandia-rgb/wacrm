@@ -30,7 +30,15 @@ import {
   CSAT_MOMENT_DELAY_MINUTES, CSAT_MOMENT_LABELS, isUnhappyScore, parseScoreFromReply, templateForMoment,
   type CsatMoment, type CsatTemplateRef,
 } from './config'
-import { contactMutesAi } from '@/lib/ai/muted-contact'
+import { isNonCustomerTag } from '@/lib/sla/clock'
+
+async function isNonCustomerContact(db: SupabaseClient, contactId: string): Promise<boolean> {
+  const { data } = await db.from('contact_tags').select('tags(name)').eq('contact_id', contactId)
+  return (data ?? []).some((row) => {
+    const tags = (row as { tags?: { name?: string } | { name?: string }[] | null }).tags
+    return (Array.isArray(tags) ? tags : [tags]).some((t) => isNonCustomerTag(t?.name))
+  })
+}
 
 export interface CsatFollowUp {
   event: Extract<WebhookEvent, 'csat.received'>
@@ -220,9 +228,12 @@ async function queueCsat(
     await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'no_contact' })
     return
   }
-  // Internal / staff / supplier contacts (Interno, Personal, Proveedor, Sin IA).
-  if (await contactMutesAi(db, input.contactId, input.accountId)) {
-    await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'muted_contact' })
+  // Only non-customers (Interno, Personal, Proveedor) are never surveyed.
+  // "Sin IA" contacts and the AI test-only switch silence the bot, not the
+  // survey: those are real customers (2026-11-26: every Chat Sandía close
+  // was skipped while its AI was in test-only mode).
+  if (await isNonCustomerContact(db, input.contactId)) {
+    await insertSurvey(db, { ...base, status: 'skipped', skip_reason: 'non_customer_contact' })
     return
   }
 
