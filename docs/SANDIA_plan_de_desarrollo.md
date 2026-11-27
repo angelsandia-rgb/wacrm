@@ -6119,3 +6119,9 @@ ahora dice «después de responderle». Validado: typecheck, eslint, build, 3 19
 - **Cambio:** el ranking del equipo en `/kpis` suma «A tiempo» (% de respuestas
   dentro del plazo de la cuenta, 10 min por defecto) y «Avisos» por asesor, más
   el total de avisos, reasignaciones y acuses del bot del periodo. Sin migración.
+
+### 2026-11-27 — Claude Code (estado del pedido sin «#» y pasado el límite, PR #417)
+
+- **Problema:** en Casa Ceiba (pedido #1015, 24/11) el cliente escribió «¿en cuánto tiempo viene?», «¿viene hoy?» y «Si pedido 1015». La consulta en vivo a Shopify no se activó porque solo reconocía «#1015» o «mi pedido». Además, el límite de 12 respuestas pasó la conversación a un asesor justo en esa pregunta.
+- **Cambio:** `ORDER_STATUS_QUESTION_RE` reconoce «pedido 1015», «viene/llega hoy/mañana» y «en cuánto tiempo». `loadOrderStatuses` lee el número sin «#» y sigue exigiendo que el teléfono del pedido sea el del cliente. Pasado el límite, una pregunta de estado se responde igual, solo en cuentas con Shopify.
+- **Validación:** tsc, eslint, `npm test` 3256/3256 y CI en verde. Sin migración.
