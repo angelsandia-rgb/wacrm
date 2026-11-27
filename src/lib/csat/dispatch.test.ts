@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   tables: {} as Record<string, Record<string, unknown> | Record<string, unknown>[] | null>,
   inserts: [] as { table: string; row: Record<string, unknown> }[],
-  muted: false,
 }))
 
 function chain(table: string) {
@@ -24,7 +23,6 @@ function chain(table: string) {
 }
 
 vi.mock('./admin-client', () => ({ supabaseAdmin: () => ({ from: (t: string) => chain(t) }) }))
-vi.mock('@/lib/ai/muted-contact', () => ({ contactMutesAi: async () => m.muted }))
 vi.mock('@/lib/whatsapp/send-message', () => ({
   sendMessageToConversation: vi.fn(async () => ({ messageId: 'msg1' })),
   SendMessageError: class extends Error {},
@@ -39,11 +37,11 @@ const CONFIG = {
 
 beforeEach(() => {
   m.inserts = []
-  m.muted = false
   m.tables = {
     csat_config: CONFIG,
     conversations: { contact_id: 'c1', channel: 'whatsapp', closed_at: '2026-11-24T00:00:00Z' },
     csat_surveys: null,
+    contact_tags: [],
   }
 })
 
@@ -57,10 +55,16 @@ describe('CSAT on conversation close', () => {
     })
   })
 
-  it('skips internal / muted contacts', async () => {
-    m.muted = true
+  it('skips non-customers (Proveedor / Interno / Personal)', async () => {
+    m.tables.contact_tags = [{ tags: { name: 'Proveedor' } }]
     await dispatchCsat({} as never, 'a1', 'conversation.closed', { conversation_id: 'conv1' })
-    expect(m.inserts.find((i) => i.table === 'csat_surveys')?.row).toMatchObject({ status: 'skipped', skip_reason: 'muted_contact' })
+    expect(m.inserts.find((i) => i.table === 'csat_surveys')?.row).toMatchObject({ status: 'skipped', skip_reason: 'non_customer_contact' })
+  })
+
+  it('still surveys a "Sin IA" customer (that tag only silences the bot)', async () => {
+    m.tables.contact_tags = [{ tags: { name: 'Sin IA' } }]
+    await dispatchCsat({} as never, 'a1', 'conversation.closed', { conversation_id: 'conv1' })
+    expect(m.inserts.find((i) => i.table === 'csat_surveys')?.row).toMatchObject({ status: 'pending', trigger: 'conversation_closed' })
   })
 
   it('does nothing when the account did not choose that moment', async () => {
