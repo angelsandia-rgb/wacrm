@@ -682,6 +682,9 @@ export async function dispatchInboundToAiReply(
     // exactly the "AI never handed off" symptom this fixes: treat running
     // out of auto-reply budget the same as the bot being unable to help,
     // and hand off instead of going quiet.
+    // A customer asking how their order is going gets the answer even past
+    // the cap (Casa Ceiba #1015, 2026-11-24: handed off instead).
+    let capExempt = false
     if (neverSelfPause) {
       if ((conv.ai_reply_count ?? 0) === config.autoReplyMaxPerConversation) {
         await notifyTeamRequestReady(
@@ -692,6 +695,9 @@ export async function dispatchInboundToAiReply(
         )
       }
     } else if ((conv.ai_reply_count ?? 0) >= config.autoReplyMaxPerConversation) {
+      capExempt = await isOrderStatusAskOnStore(db, accountId, conversationId).catch(() => false)
+    }
+    if (!neverSelfPause && !capExempt && (conv.ai_reply_count ?? 0) >= config.autoReplyMaxPerConversation) {
       await sendAiContinuityFallback({ accountId, conversationId, contactId, configOwnerUserId })
       await handOffToHuman({
         db,
@@ -1714,7 +1720,7 @@ For airport transport, record the guest's request in nota on the relevant existi
       )
       const { data: claimed, error: claimErr } = await db.rpc('claim_ai_reply_slot', {
         conversation_id: conversationId,
-        max_replies: neverSelfPause ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
+        max_replies: neverSelfPause || capExempt ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
       })
       // A real RPC error (not "lost the cap race") is a deploy problem —
       // fail OPEN so the customer still gets the safe holding message
@@ -1861,7 +1867,7 @@ For airport transport, record the guest's request in nota on the relevant existi
       'claim_ai_reply_slot',
       {
         conversation_id: conversationId,
-        max_replies: neverSelfPause ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
+        max_replies: neverSelfPause || capExempt ? UNBOUNDED_REPLY_SLOTS : config.autoReplyMaxPerConversation,
       },
     )
     if (claimErr) {
@@ -3248,8 +3254,18 @@ async function notifyAiKeyInvalid(db: SupabaseClient, accountId: string): Promis
  * never stomps an existing human assignment. Assigning fires the
  * `on_conversation_assigned` trigger, which notifies the agent.
  */
-/** "¿dónde va mi pedido?", "mi guía", "#1042", "ya lo enviaron?" — gates the live Shopify order lookup. */
-export const ORDER_STATUS_QUESTION_RE = /#\s?\d{3,}|\bgu[ií]a\b|rastre|tracking|\b(?:mi|el|del|su) (?:pedido|orden|paquete|env[ií]o)\b|(?:ya )?(?:lo |la )?(?:enviaron|mandaron|despacharon)|cu[aá]ndo (?:me )?llega/i
+/** "¿dónde va mi pedido?", "mi guía", "#1042", "pedido 1015", "¿viene hoy?" — gates the live Shopify order lookup. */
+export const ORDER_STATUS_QUESTION_RE = /#\s?\d{3,}|\b(?:pedido|orden)\s*(?:n[uú]mero\s*|no\.?\s*)?\d{3,}|\b(?:viene|vienen|llega|llegan|entregan?)\s+(?:hoy|mañana)(?![a-zñ])|cu[aá]nto (?:tiempo )?(?:tarda|viene|llega)|en cu[aá]nto tiempo|\bgu[ií]a\b|rastre|tracking|\b(?:mi|el|del|su) (?:pedido|orden|paquete|env[ií]o)\b|(?:ya )?(?:lo |la )?(?:enviaron|mandaron|despacharon)|cu[aá]ndo (?:me )?llega/i
+
+/** Latest customer message asks about an order, on an account with a store. */
+async function isOrderStatusAskOnStore(db: SupabaseClient, accountId: string, conversationId: string): Promise<boolean> {
+  const [{ data: msg }, { data: store }] = await Promise.all([
+    db.from('messages').select('content_text').eq('conversation_id', conversationId).eq('sender_type', 'customer')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    db.from('shopify_config').select('id').eq('account_id', accountId).maybeSingle(),
+  ])
+  return Boolean(store) && ORDER_STATUS_QUESTION_RE.test((msg?.content_text as string | null) ?? '')
+}
 
 async function handOffToHuman(args: {
   db: SupabaseClient

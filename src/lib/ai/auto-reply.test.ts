@@ -948,6 +948,16 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('límite de')
   })
 
+  it('past the cap, still answers an order-status question on a store account (Casa Ceiba #1015)', async () => {
+    h.state.conv = { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }
+    h.state.shopifyConnected = true
+    h.state.humanMsgAfterHandoff = { content_text: 'Si pedido 1015' } as never
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.state.rpcCalls).toContainEqual({ name: 'claim_ai_reply_slot', args: { conversation_id: 'conv-1', max_replies: 2147483647 } })
+    expect(h.state.updatePayload?.ai_handoff_summary ?? '').not.toContain('límite de')
+  })
+
   it('alerts (critical) when even the continuity fallback message itself fails to send', async () => {
     h.state.conv = {
       assigned_agent_id: null,

@@ -195,10 +195,10 @@ describe('order status', () => {
     }])).toBe('- #1042 (creado 2026-10-30): pago PENDING, preparación FULFILLED, entrega IN_TRANSIT, guía Cargo Expreso CE123')
   })
   it('gates the lookup on order-status questions only', () => {
-    for (const q of ['¿dónde va mi pedido?', 'me pasa la guía', 'ya lo enviaron?', 'pedido #1042', '¿cuándo llega?']) {
+    for (const q of ['¿dónde va mi pedido?', 'me pasa la guía', 'ya lo enviaron?', 'pedido #1042', '¿cuándo llega?', 'Si pedido 1015', 'Tendrán alguna información de si viene hoy?', 'Gracias, en cuanto tiempo viene?']) {
       expect(ORDER_STATUS_QUESTION_RE.test(q)).toBe(true)
     }
-    for (const q of ['hola, precio de la lámpara', 'quiero comprar dos']) expect(ORDER_STATUS_QUESTION_RE.test(q)).toBe(false)
+    for (const q of ['hola, precio de la lámpara', 'quiero comprar dos', 'quiero hacer un pedido']) expect(ORDER_STATUS_QUESTION_RE.test(q)).toBe(false)
   })
 })
 
@@ -474,6 +474,21 @@ describe('loadOrderStatuses', () => {
     const found = await loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone: '', text: '¿cómo va mi pedido?' })
     expect(found.map((o) => o.name)).toEqual(['Pedido registrado (aún sin número de pedido)', '#1009'])
     expect(describeOrderStatuses(found)).toContain('PENDIENTE con tarjeta')
+  })
+  it('finds "pedido 1015" typed without # when the order phone is theirs (Casa Ceiba 2026-11-24)', async () => {
+    const table = () => {
+      const c: Record<string, unknown> = {
+        select: () => c, eq: () => c, not: () => c, order: () => c, limit: () => c,
+        maybeSingle: async () => ({ data: { shop_domain: 'x.myshopify.com', access_token: 'tok' } }),
+        then: (ok: (v: unknown) => unknown) => ok({ data: [] }),
+      }
+      return c
+    }
+    const order = { id: 'gid://shopify/Order/15', name: '#1015', createdAt: '2026-11-24T02:13:14Z', cancelledAt: null, displayFinancialStatus: 'PENDING', displayFulfillmentStatus: 'UNFULFILLED', phone: '+50255551234', shippingAddress: null, fulfillments: [] }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: { orders: { nodes: [order] } } }))))
+    const ask = (contactPhone: string) => loadOrderStatuses({ db: { from: table } as never, accountId: 'a', contactId: 'c', contactPhone, text: 'Si pedido 1015' })
+    expect((await ask('55551234')).map((o) => o.name)).toEqual(['#1015'])
+    expect(await ask('59990000')).toEqual([])
   })
 })
 
