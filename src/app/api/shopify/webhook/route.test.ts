@@ -47,7 +47,8 @@ function chain(table: string) {
     },
     then: (ok: (v: unknown) => unknown) => ok({
       data: table === 'pipeline_stages' ? m.stages : table === 'message_templates' ? m.approved
-        : table === 'profiles' ? [{ user_id: 'owner1' }] : null, error: null,
+        : table === 'profiles' ? [{ user_id: 'owner1' }]
+        : table === 'shopify_notification_jobs' ? [...m.jobs].map(([event_key, j]) => ({ event_key, payload: j.payload })) : null, error: null,
     }),
   }
   return c
@@ -164,6 +165,26 @@ describe('Shopify webhook — fulfillments (Dropify writes Dropi shipments back)
     await hook('fulfillments/create', { order_id: 77, name: '#1001.1' })
     expect(m.send).not.toHaveBeenCalled()
     expect(m.updates).toEqual([])
+  })
+
+  it('sends the guía once when it reaches Shopify after a notice without it (Casa Ceiba #1015)', async () => {
+    m.inWindow = true
+    await hook('fulfillments/create', { order_id: 77, name: '#1001.1' })
+    m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's4' }
+    await hook('fulfillments/update', { order_id: 77, name: '#1001.1', tracking_number: 'DGT1', tracking_company: 'Gintracom' })
+    await hook('fulfillments/update', { order_id: 77, name: '#1001.1', tracking_number: 'DGT1', tracking_company: 'Gintracom' })
+    expect(m.send).toHaveBeenCalledTimes(2)
+    expect(m.send).toHaveBeenLastCalledWith(expect.anything(), 'a1', expect.objectContaining({
+      contentText: '🚚 Su pedido #1001 ya va en camino. Número de guía: DGT1 (Gintracom).',
+    }))
+  })
+
+  it('does not resend the guía the first notice already carried', async () => {
+    m.inWindow = true
+    await hook('fulfillments/create', { order_id: 77, name: '#1001.1', tracking_number: 'GT9' })
+    m.deal = { id: 'd1', contact_id: 'c1', pipeline_id: 'p1', stage_id: 's4' }
+    await hook('fulfillments/update', { order_id: 77, name: '#1001.1', tracking_number: 'GT9' })
+    expect(m.send).toHaveBeenCalledTimes(1)
   })
 
   it('marks it delivered only when the carrier says so', async () => {

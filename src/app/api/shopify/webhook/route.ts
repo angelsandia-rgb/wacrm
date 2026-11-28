@@ -122,8 +122,9 @@ export async function POST(request: Request) {
   // One package's delivery says nothing about its siblings: the order itself
   // must be fully delivered. Unverifiable → keep it at "Enviado".
   const delivered = f.shipment_status === 'delivered' && await orderVerifiedDelivered(db, accountId, orderGid)
-  // A fulfillments/update only matters once the carrier marks it delivered.
-  if (!f.order_id || (!delivered && topic !== 'fulfillments/create')) return NextResponse.json({ ok: true, skipped: 'no stage change' })
+  // A fulfillments/update matters once the carrier marks it delivered, or
+  // when it brings the guía the first notice didn't have.
+  if (!f.order_id || (!delivered && topic !== 'fulfillments/create' && !f.tracking_number)) return NextResponse.json({ ok: true, skipped: 'no stage change' })
   return handleShipping(db, accountId, {
     // "#1001.1" is the fulfillment; the customer knows the order as "#1001".
     orderGid, orderName: (f.name ?? '').split('.')[0] || 'tu pedido',
@@ -368,6 +369,43 @@ async function markAwaitingConfirmation(db: SupabaseClient, accountId: string, d
   return true
 }
 
+/** The guía reached Shopify after the "ya va en camino" notice went out
+ *  without it (Dropify fulfills first, the carrier number comes later —
+ *  Casa Ceiba #1015, 2026-11-27): send it once, unless that notice or a
+ *  delivery already covered it. */
+async function sendLateTracking(
+  db: SupabaseClient, accountId: string,
+  deal: { contact_id: unknown },
+  ship: { orderGid: string; orderName: string; tracking: ShopifyFulfillmentPayload },
+) {
+  const number = ship.tracking.tracking_number as string
+  const { data: jobs, error: jobsError } = await db.from('shopify_notification_jobs').select('event_key, payload')
+    .eq('account_id', accountId).in('event_key', [`${ship.orderGid}:shipped`, `${ship.orderGid}:delivered`])
+  if (jobsError) return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
+  const covered = (jobs ?? []).some((j) => j.event_key.endsWith(':delivered') || JSON.stringify(j.payload).includes(number))
+  if (covered || !jobs?.length) return NextResponse.json({ ok: true, skipped: 'tracking already sent' })
+  try {
+    const { data: contact } = await db
+      .from('contacts').select('phone, name').eq('id', deal.contact_id).eq('account_id', accountId).maybeSingle()
+    if (!contact?.phone) return NextResponse.json({ ok: true, skipped: 'no phone' })
+    const { conversationId } = await resolveConversationByPhone(
+      db, accountId, normalizeGtPhone(contact.phone as string), (contact.name as string | null) ?? null,
+    )
+    const firstName = String(contact.name ?? '').trim().split(/\s+/)[0] || 'cliente'
+    const eventKey = `${ship.orderGid}:tracking:${number}`
+    await enqueueOrderNotification(db, accountId, eventKey, {
+      conversationId,
+      text: `🚚 Su pedido ${ship.orderName} ya va en camino. ${trackingSentence(ship.tracking)}`,
+      template: { names: ORDER_TEMPLATES.shipped, params: [firstName, ship.orderName, trackingSentence(ship.tracking)] },
+    })
+    await runOrderNotificationSweep(db, accountId, eventKey)
+  } catch (err) {
+    console.error(`[shopify webhook] late tracking for ${ship.orderName} (account ${accountId}) failed:`, err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Processing failed' }, { status: 500 })
+  }
+  return NextResponse.json({ ok: true })
+}
+
 async function handleShipping(
   db: SupabaseClient, accountId: string,
   ship: { orderGid: string; orderName: string; delivered: boolean; tracking: ShopifyFulfillmentPayload },
@@ -383,6 +421,7 @@ async function handleShipping(
 
   const { data: stages } = await db.from('pipeline_stages').select('id, name, position').eq('pipeline_id', deal.pipeline_id)
   const next = pickForwardStage(stages ?? [], (deal.stage_id as string | null) ?? null, stageName)
+  if (!next && !delivered && f.tracking_number) return sendLateTracking(db, accountId, deal, ship)
   if (!next) return NextResponse.json({ ok: true, skipped: 'already there' })
 
   try {
